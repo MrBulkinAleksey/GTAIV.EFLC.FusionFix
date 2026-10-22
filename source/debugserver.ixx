@@ -4,9 +4,12 @@ module;
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <tlhelp32.h>
+#include <d3dx9.h>
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <condition_variable>
+#include <mutex>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -21,6 +24,8 @@ module;
 export module debugserver;
 
 import common;
+import comvars;
+import d3dx9_43;
 import inireload;
 
 // [DEBUG] DebugServerPort: a server on 127.0.0.1 that a tool (tools/gta4-live-mcp in the recomp's repository) reaches
@@ -301,6 +306,124 @@ namespace DebugServer
         }
     }
 
+    std::string Base64(const uint8_t* bytes, size_t size)
+    {
+        static constexpr char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string out;
+        out.reserve((size + 2) / 3 * 4);
+        for (size_t i = 0; i < size; i += 3)
+        {
+            const uint32_t chunk = uint32_t(bytes[i]) << 16 | (i + 1 < size ? uint32_t(bytes[i + 1]) << 8 : 0) |
+                (i + 2 < size ? uint32_t(bytes[i + 2]) : 0);
+            out += table[chunk >> 18 & 63];
+            out += table[chunk >> 12 & 63];
+            out += i + 1 < size ? table[chunk >> 6 & 63] : '=';
+            out += i + 2 < size ? table[chunk & 63] : '=';
+        }
+        return out;
+    }
+
+    // ---- screenshots: asked for by the server's thread, taken on the render thread before the frame is presented
+
+    struct Capture
+    {
+        std::mutex mutex;
+        std::condition_variable done;
+        std::atomic<bool> pending{false};
+        bool finished = false;
+        uint32_t maxWidth = 0;
+        std::vector<uint8_t> png;
+        uint32_t width = 0, height = 0;
+        std::string error;
+    };
+    static Capture capture;
+
+    // The back buffer, scaled to at most maxWidth wide (which also resolves MSAA), into system memory, as PNG.
+    void TakeScreenshot()
+    {
+        if (!capture.pending)
+            return;
+        std::string error;
+        std::vector<uint8_t> png;
+        UINT width = 0, height = 0;
+        IDirect3DSurface9* backBuffer = nullptr;
+        IDirect3DSurface9* target = nullptr;
+        IDirect3DSurface9* memory = nullptr;
+        ID3DXBuffer* file = nullptr;
+        auto* device = RageDirect3DDevice9::GetRuntimeDevice();
+        using SaveFn = decltype(&D3DXSaveSurfaceToFileInMemory);
+        auto save = reinterpret_cast<SaveFn>(GetProcAddress(GetD3DX9_43DLL(), "D3DXSaveSurfaceToFileInMemory"));
+        D3DSURFACE_DESC desc{};
+        if (!device || !save)
+            error = "no device or no d3dx9_43";
+        else if (FAILED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) || FAILED(backBuffer->GetDesc(&desc)))
+            error = "no back buffer";
+        else
+        {
+            width = desc.Width;
+            height = desc.Height;
+            if (capture.maxWidth && width > capture.maxWidth)
+            {
+                height = std::max<UINT>(1, UINT(uint64_t(height) * capture.maxWidth / width));
+                width = capture.maxWidth;
+            }
+            // (8-bit first; the back buffer's own format when the device cannot convert to it)
+            for (D3DFORMAT format : {D3DFMT_X8R8G8B8, desc.Format})
+            {
+                if (SUCCEEDED(device->CreateRenderTarget(width, height, format, D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr)) &&
+                    SUCCEEDED(device->StretchRect(backBuffer, nullptr, target, nullptr, D3DTEXF_LINEAR)) &&
+                    SUCCEEDED(device->CreateOffscreenPlainSurface(width, height, format, D3DPOOL_SYSTEMMEM, &memory, nullptr)) &&
+                    SUCCEEDED(device->GetRenderTargetData(target, memory)))
+                    break;
+                if (memory) memory->Release(), memory = nullptr;
+                if (target) target->Release(), target = nullptr;
+            }
+            if (!memory)
+                error = "the back buffer could not be copied";
+            else if (FAILED(save(&file, D3DXIFF_PNG, memory, nullptr, nullptr)) || !file)
+                error = "PNG encoding failed";
+            else
+            {
+                const auto* bytes = static_cast<const uint8_t*>(file->GetBufferPointer());
+                png.assign(bytes, bytes + file->GetBufferSize());
+            }
+        }
+        for (IUnknown* object : std::initializer_list<IUnknown*>{file, memory, target, backBuffer})
+            if (object)
+                object->Release();
+        {
+            std::lock_guard lock(capture.mutex);
+            capture.png = std::move(png);
+            capture.width = width;
+            capture.height = height;
+            capture.error = std::move(error);
+            capture.finished = true;
+            capture.pending = false;
+        }
+        capture.done.notify_all();
+    }
+
+    std::string Screenshot(const Request& request)
+    {
+        std::unique_lock lock(capture.mutex);
+        capture.finished = false;
+        capture.maxWidth = uint32_t(request.Number("max_width", 1920));
+        capture.pending = true;
+        // (the game presents in its menus and while paused too; a minimized game does not)
+        if (!capture.done.wait_for(lock, std::chrono::seconds(10), [] { return capture.finished; }))
+        {
+            capture.pending = false;
+            throw std::runtime_error("no frame was presented within 10 s (is the game minimized?)");
+        }
+        if (!capture.error.empty())
+            throw std::runtime_error(capture.error);
+        const auto path = FusionLog::PathFor("Screenshot", L".png");
+        std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(capture.png.data()), std::streamsize(capture.png.size()));
+        return Object({{"mime", Quote("image/png")}, {"width", std::to_string(capture.width)},
+            {"height", std::to_string(capture.height)}, {"file", Quote(path.string())},
+            {"data", Quote(Base64(capture.png.data(), capture.png.size()))}});
+    }
+
     std::string Info()
     {
         HMODULE game = GetModuleHandleW(nullptr);
@@ -520,6 +643,7 @@ namespace DebugServer
         if (command == "ini_get") return IniGet(request);
         if (command == "ini_set") return IniSet(request);
         if (command == "log_tail") return LogTail(request);
+        if (command == "screenshot") return Screenshot(request);
         throw std::runtime_error("unknown command '" + command + "'");
     }
 
@@ -617,7 +741,10 @@ public:
             const int port = iniReader.ReadInteger("DEBUG", "DebugServerPort", 0);
             DebugServer::allowWrite = iniReader.ReadInteger("DEBUG", "DebugServerAllowWrite", 0) != 0;
             if (port > 0 && port < 65536)
+            {
+                FusionFix::onBeforePresent() += []() { DebugServer::TakeScreenshot(); };
                 DebugServer::Start(port);
+            }
         };
     }
 } DebugServerModule;
