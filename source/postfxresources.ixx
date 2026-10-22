@@ -335,7 +335,7 @@ public:
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth, vec2PrevDepthRange;
-        D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, fSpreadRadius, fVehicleScale;
+        D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, fNeighbourFill, fSpreadRadius, fVehicleScale;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, fCSGrassGloss, techContactShadows;
         D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
@@ -954,6 +954,9 @@ public:
     static bool SSRMarchFullDepth() { static auto p = FusionFixSettings.GetRef("PREF_SSR_FULL_DEPTH"); return p && p->get() != 0; }
     float fSSRDistanceFade = 0.0f;
     float fSSRFallback = 0.8f;
+    // SSRNeighbourFill: the fill of a miss from the hits around it (NeighbourFill, the spread), apart from SSRFallback's
+    // from past what hid the ray, to tell which one smeared a reflection into copies around it.
+    float fSSRNeighbourFill = 0.8f;
     // deferred_lighting draws SSR's colour, the scene's own light, through the game's reflection scale meant for its
     // parabolic map: 10 times globalScalars.w (c39.w, read in BindLightingInputs, 0 until then) times 2 x specular times
     // its Fresnel. On car bodies, whose clean paint takes SSR in full by its gloss, SSR_PS divides that 10 x c39.w back
@@ -1601,6 +1604,7 @@ public:
                 h.fReflectionBlur = SSREffect->GetParameterByName(nullptr, "fReflectionBlur");
                 h.fDistanceFade = SSREffect->GetParameterByName(nullptr, "fDistanceFade");
                 h.fFallback = SSREffect->GetParameterByName(nullptr, "fFallback");
+                h.fNeighbourFill = SSREffect->GetParameterByName(nullptr, "fNeighbourFill");
                 h.fVehicleScale = SSREffect->GetParameterByName(nullptr, "fVehicleScale");
                 h.fSpreadRadius = SSREffect->GetParameterByName(nullptr, "fSpreadRadius");
                 h.vec4SunView = SSREffect->GetParameterByName(nullptr, "vec4SunView");
@@ -1940,6 +1944,7 @@ public:
             IniFlag("REFLECTIONS", "SSRTemporalJitter", &PostFxResource::bSSRTemporalJitter, 1),
             IniFloat("REFLECTIONS", "SSRTemporal", &PostFxResource::fSSRTemporalBlend, 0.85f, 0.0f, 0.97f),
             IniFloat("REFLECTIONS", "SSRFallback", &PostFxResource::fSSRFallback, 0.8f, 0.0f, 1.0f),
+            IniFloat("REFLECTIONS", "SSRNeighbourFill", &PostFxResource::fSSRNeighbourFill, 0.8f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "GGXSoft", &PostFxResource::fLightsGGXSoft, 0.0f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "GGXStretchView", &PostFxResource::fLightsGGXStretchView, 1.0f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "GGXGlints", &PostFxResource::fLightsGGXGlints, 1.0f, 0.0f, 8.0f),

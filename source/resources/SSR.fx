@@ -251,7 +251,8 @@ uniform float fReflectionBlur;    // blur radius in pixels a reflection reaches 
 uniform float fDistanceFade;      // reflections fade out towards this distance from the surface, 0 disables
 uniform float fTemporalBlend;     // share of last frame's SSR kept each frame, 0 while there is none to keep
 uniform float fTemporalAnySurface; // 1 while accumulating indirect light, which every surface gets, not only glossy ones
-uniform float fFallback;          // 0..1, strength of the fill where rays find next to nothing, see SSRFallback_PS
+uniform float fFallback;          // 0..1, strength of the fill from past what hid the ray (ScreenFallback), see SSRFallback_PS
+uniform float fNeighbourFill;     // 0..1, strength of the fill from the hits around a miss (NeighbourFill, SSRSpread_PS)
 uniform float fVehicleScale = 1.0; // SSRVehicleUnits / (10 x the game's c39.w) on car bodies, SkinIDTex their material IDs
 uniform float fSpreadRadius;      // pixels, how far SSRSpread_PS looks this step
 
@@ -854,7 +855,7 @@ float3 NeighbourFill(float2 uv, float2 vPos, float z, out float weight)
             sumW += w;
         }
     }
-    weight = fFallback * saturate(sumW / 2.0);
+    weight = fNeighbourFill * saturate(sumW / 2.0);
     return sumW > 1e-3 ? sum / sumW : 0.0;
 }
 
@@ -970,7 +971,7 @@ float4 SSRSpread_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float2x2 turn = FillTurn(vPos);
     float4 own = tex2Dlod(SSRFallbackTex, float4(uv, 0, 0));
     float4 trace = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
-    if (own.a >= fFallback * 0.99 || NoSurface(trace) || trace.a >= kFallbackBelow)
+    if (own.a >= max(fFallback, fNeighbourFill) * 0.99 || NoSurface(trace) || trace.a >= kFallbackBelow)
         return own;
     static const float2 taps[8] =
     {
@@ -1011,7 +1012,7 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         return hit;
     float4 r = hit;
     [branch]
-    if (fFallback > 0.0 && r.a < 1.0)
+    if (max(fFallback, fNeighbourFill) > 0.0 && r.a < 1.0)
     {
         float4 fallback = tex2Dlod(SSRFallbackTex, float4(uv, 0, 0));
         float fill = fallback.a * (1.0 - r.a) * saturate(1.0 - r.a / kFallbackBelow);

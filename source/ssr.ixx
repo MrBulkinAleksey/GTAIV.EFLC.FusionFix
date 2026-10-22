@@ -197,6 +197,7 @@ export void RenderScreenSpaceReflections()
     effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);
     effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);
     effect->SetFloat(h.fFallback, R.fSSRFallback);
+    effect->SetFloat(h.fNeighbourFill, R.fSSRNeighbourFill);
     // Car bodies: SSR's colour in the units of the game's parabolic map, see fSSRVehicleUnits (last frame's c39.w).
     const bool vehicleUnits = R.fGameReflectionScale > 0.0f && R.mMaterialIdRT && R.mMaterialIdRT->mD3DTexture;
     if (vehicleUnits)
@@ -287,12 +288,12 @@ export void RenderScreenSpaceReflections()
         effect->SetTexture(h.SSRResultTex2D, R.SSRTraceTex[half]->mD3DTexture);
         IDirect3DTexture9* fill = R.SSRFallbackTex[half]->mD3DTexture;
         ProfilerMark(pDevice, kProfSSRFill, true);
-        if (R.fSSRFallback > 0.0f)
+        if (R.fSSRFallback > 0.0f || R.fSSRNeighbourFill > 0.0f)
         {
             draw(1, R.SSRFallbackSurf[half]);
             // The fill's cascade, each step twice as far out as the last (the first reached nine
             // pixels), taking turns between the two targets; in pixels of this size.
-            if (R.SSRSpreadSurf[half])
+            if (R.SSRSpreadSurf[half] && R.fSSRNeighbourFill > 0.0f)
             {
                 IDirect3DSurface9* surfs[2] = { R.SSRSpreadSurf[half], R.SSRFallbackSurf[half] };
                 IDirect3DTexture9* texs[2] = { R.SSRSpreadTex[half]->mD3DTexture, R.SSRFallbackTex[half]->mD3DTexture };
