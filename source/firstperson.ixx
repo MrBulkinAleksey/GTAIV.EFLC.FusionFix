@@ -66,8 +66,15 @@ namespace FirstPerson
     // running animations, 0.18 m against a wall), and the near clip is nearClipOnFoot: the ped's collision keeps a
     // wall a capsule's radius (0.2 to 0.3 m) from its position, so the near plane, its corners some 1.35 times the
     // near clip from the eye, stays on this side. With the eye on the head and a near clip of 0.12 the view went
-    // through walls ahead and to the side (FirstPersonEyeReach / FirstPersonNearClip, hidden, read again live).
-    static float eyeReach = 0.1f;
+    // through walls ahead and to the side. The reach grows with the ped's speed, from reachStill below reachSlowSpeed
+    // to reachRunning above reachFastSpeed: running in the open the head leans out over 0.2 m and the eye held back
+    // looked down onto his back, while running into a wall the run plays with the ped all but still. Hidden, read
+    // again live: FirstPersonEyeReach, FirstPersonEyeReachRunning, FirstPersonReachSlowSpeed, FirstPersonReachFastSpeed,
+    // FirstPersonNearClip.
+    static float reachStill = 0.1f, reachRunning = 0.35f;
+    static float reachSlowSpeed = 1.0f, reachFastSpeed = 4.0f; // m/s
+    static constexpr float ReachEase = 0.2f;    // of the way to the speed's reach each frame
+    static float eyeReach = 0.1f;               // this frame's
     static float nearClipOnFoot = 0.05f;
     static constexpr float LookDownForward = 0.2f;  // m the eye moves out over the chest looking straight down
     static constexpr float LookDownUp = 0.03f;
@@ -254,6 +261,11 @@ namespace FirstPerson
         }
         Ped handle = 0;
         Natives::GetPlayerChar(Natives::GetPlayerId(), &handle);
+        float speed = 0.0f;
+        if (handle)
+            Natives::GetCharSpeed(handle, &speed);
+        const float running = std::clamp((speed - reachSlowSpeed) / std::max(reachFastSpeed - reachSlowSpeed, 0.1f), 0.0f, 1.0f);
+        eyeReach += (reachStill + (reachRunning - reachStill) * running - eyeReach) * ReachEase;
 
         int32_t phoneTask = 0;
         const bool phone = handle && (Natives::GetMobilePhoneTaskSubTask(handle, &phoneTask) || Natives::IsMobilePhoneCallOngoing());
@@ -286,9 +298,11 @@ namespace FirstPerson
             wasDucking = ducking;
             float position[3]{};
             CEntity::GetPosition(ped, position);
-            FusionLog::Write("FirstPerson", "OnFoot", "%s: head %s z %.2f above the ped %.2f, eye z %.2f, view pitch %.1f, duck offset %.2f\n",
-                ducking ? "ducking" : "standing", bone ? "bone" : "fallback", head[2], head[2] - position[2], eye[2],
-                std::asin(std::clamp(front[2], -1.0f, 1.0f)) * 57.29578f, *reinterpret_cast<const float*>(camera + 0x2C8));
+            const float ahead = std::sqrt((head[0] - position[0]) * (head[0] - position[0]) + (head[1] - position[1]) * (head[1] - position[1]));
+            const float eyeAhead = std::sqrt((eye[0] - position[0]) * (eye[0] - position[0]) + (eye[1] - position[1]) * (eye[1] - position[1]));
+            FusionLog::Write("FirstPerson", "OnFoot", "%s: head %s z %.2f above the ped %.2f, %.2f across; eye z %.2f, %.2f across (reach %.2f at %.1f m/s), view pitch %.1f, duck offset %.2f\n",
+                ducking ? "ducking" : "standing", bone ? "bone" : "fallback", head[2], head[2] - position[2], ahead, eye[2], eyeAhead,
+                eyeReach, speed, std::asin(std::clamp(front[2], -1.0f, 1.0f)) * 57.29578f, *reinterpret_cast<const float*>(camera + 0x2C8));
         }
         std::copy(std::begin(eye), std::end(eye), frame + 12);
         eyeFrame = *CTimer::m_frameCount;
@@ -667,7 +681,10 @@ public:
             {
                 FirstPerson::forwardOffset = std::clamp(ini.ReadFloat("MISC", "FirstPersonForward", 0.1f), -0.5f, 0.5f);
                 FirstPerson::upOffset = std::clamp(ini.ReadFloat("MISC", "FirstPersonUp", 0.05f), -0.5f, 0.5f);
-                FirstPerson::eyeReach = std::clamp(ini.ReadFloat("MISC", "FirstPersonEyeReach", 0.1f), 0.0f, 0.5f);
+                FirstPerson::reachStill = std::clamp(ini.ReadFloat("MISC", "FirstPersonEyeReach", 0.1f), 0.0f, 0.5f);
+                FirstPerson::reachRunning = std::clamp(ini.ReadFloat("MISC", "FirstPersonEyeReachRunning", 0.35f), 0.0f, 0.6f);
+                FirstPerson::reachSlowSpeed = std::clamp(ini.ReadFloat("MISC", "FirstPersonReachSlowSpeed", 1.0f), 0.0f, 10.0f);
+                FirstPerson::reachFastSpeed = std::clamp(ini.ReadFloat("MISC", "FirstPersonReachFastSpeed", 4.0f), 0.0f, 10.0f);
                 FirstPerson::nearClipOnFoot = std::clamp(ini.ReadFloat("MISC", "FirstPersonNearClip", 0.05f), 0.01f, 0.3f);
             };
             readOffsets(iniReader);
