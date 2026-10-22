@@ -9,6 +9,10 @@ module;
 #include <atomic>
 #include <cctype>
 #include <condition_variable>
+#include <deque>
+#include <functional>
+#include <future>
+#include <memory>
 #include <mutex>
 #include <cstring>
 #include <filesystem>
@@ -27,6 +31,7 @@ import common;
 import comvars;
 import d3dx9_43;
 import inireload;
+import natives;
 
 // [DEBUG] DebugServerPort: a server on 127.0.0.1 that a tool (tools/gta4-live-mcp in the recomp's repository) reaches
 // through an SSH tunnel, to look into the running game from another machine: memory (read, search, signatures, and
@@ -424,6 +429,158 @@ namespace DebugServer
             {"data", Quote(Base64(capture.png.data(), capture.png.size()))}});
     }
 
+    // ---- the scene: script natives, which run only in the game's own frame, so a request waits for the next one
+
+    struct MainThreadCall
+    {
+        std::function<std::string()> work;
+        std::promise<std::string> result;
+        std::atomic<bool> cancelled{false};
+    };
+    static std::mutex mainThreadMutex;
+    static std::deque<std::shared_ptr<MainThreadCall>> mainThreadCalls;
+
+    // From onGameProcessEvent, which runs only while the game itself runs (not paused, not in a menu).
+    void RunMainThreadCalls()
+    {
+        std::deque<std::shared_ptr<MainThreadCall>> calls;
+        {
+            std::lock_guard lock(mainThreadMutex);
+            calls.swap(mainThreadCalls);
+        }
+        for (auto& call : calls)
+        {
+            if (call->cancelled)
+                continue;
+            try
+            {
+                call->result.set_value(call->work());
+            }
+            catch (...)
+            {
+                call->result.set_exception(std::current_exception());
+            }
+        }
+    }
+
+    std::string OnMainThread(std::function<std::string()> work)
+    {
+        auto call = std::make_shared<MainThreadCall>();
+        call->work = std::move(work);
+        auto result = call->result.get_future();
+        {
+            std::lock_guard lock(mainThreadMutex);
+            mainThreadCalls.push_back(call);
+        }
+        if (result.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
+        {
+            call->cancelled = true; // (dropped, not done late)
+            throw std::runtime_error("the game ran no frame within 5 s: it is paused, in a menu or loading");
+        }
+        return result.get();
+    }
+
+    std::string Float(float value)
+    {
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "%.3f", value);
+        return buffer;
+    }
+
+    Ped PlayerPed()
+    {
+        Ped ped = 0;
+        Natives::GetPlayerChar(Natives::ConvertIntToPlayerIndex(Natives::GetPlayerId()), &ped);
+        if (!ped)
+            throw std::runtime_error("no player character (not in the game yet?)");
+        return ped;
+    }
+
+    // Where the player and the game camera are, the time and the weather.
+    std::string Scene()
+    {
+        return OnMainThread([]
+        {
+            const Ped ped = PlayerPed();
+            float x = 0, y = 0, z = 0, heading = 0, camX = 0, camY = 0, camZ = 0, rotX = 0, rotY = 0, rotZ = 0;
+            Natives::GetCharCoordinates(ped, &x, &y, &z);
+            Natives::GetCharHeading(ped, &heading);
+            const bool inCar = Natives::IsCharInAnyCar(ped);
+            Camera camera = 0;
+            Natives::GetGameCam(&camera);
+            if (camera)
+            {
+                Natives::GetCamPos(camera, &camX, &camY, &camZ);
+                Natives::GetCamRot(camera, &rotX, &rotY, &rotZ);
+            }
+            uint32_t hour = 0, minute = 0, weather = 0;
+            Natives::GetTimeOfDay(&hour, &minute);
+            Natives::GetCurrentWeather(&weather);
+            return Object({
+                {"player", Array({Float(x), Float(y), Float(z)})}, {"heading", Float(heading)},
+                {"in_car", inCar ? "true" : "false"},
+                {"camera", Array({Float(camX), Float(camY), Float(camZ)})},
+                {"camera_rotation", Array({Float(rotX), Float(rotY), Float(rotZ)})},
+                {"time", Quote(std::to_string(hour) + ":" + (minute < 10 ? "0" : "") + std::to_string(minute))},
+                {"weather", std::to_string(weather)},
+            });
+        });
+    }
+
+    // The player (and the car they are in) to x, y, z, the scene and its collision loaded first.
+    std::string Teleport(const Request& request)
+    {
+        const float x = std::stof(request.Get("x")), y = std::stof(request.Get("y")), z = std::stof(request.Get("z"));
+        const bool turn = request.Has("heading");
+        const float heading = turn ? std::stof(request.Get("heading")) : 0.0f;
+        return OnMainThread([=]
+        {
+            const Ped ped = PlayerPed();
+            Natives::RequestCollisionAtPosn(x, y, z);
+            Natives::LoadScene(x, y, z);
+            if (Natives::IsCharInAnyCar(ped))
+            {
+                Vehicle car = 0;
+                Natives::GetCarCharIsUsing(ped, &car);
+                Natives::SetCarCoordinates(car, x, y, z);
+                if (turn)
+                    Natives::SetCarHeading(car, heading);
+            }
+            else
+            {
+                Natives::SetCharCoordinates(ped, x, y, z);
+                if (turn)
+                    Natives::SetCharHeading(ped, heading);
+            }
+            FusionLog::Write("DebugServer", "Scene", "teleport to %.1f %.1f %.1f\n", x, y, z);
+            return Object({{"player", Array({Float(x), Float(y), Float(z)})}});
+        });
+    }
+
+    std::string SetTime(const Request& request)
+    {
+        const uint32_t hour = uint32_t(request.Number("hour")) % 24, minute = uint32_t(request.Number("minute", 0)) % 60;
+        return OnMainThread([=]
+        {
+            Natives::SetTimeOfDay(hour, minute);
+            return Object({{"time", Quote(std::to_string(hour) + ":" + (minute < 10 ? "0" : "") + std::to_string(minute))}});
+        });
+    }
+
+    // A weather id (the game's eWeather: 0 extra sunny .. 9 sunny windy), or "release" for the game's own.
+    std::string SetWeather(const Request& request)
+    {
+        const std::string weather = request.Get("weather");
+        return OnMainThread([=]
+        {
+            if (weather == "release")
+                Natives::ReleaseWeather();
+            else
+                Natives::ForceWeatherNow(uint32_t(std::stoul(weather)));
+            return Object({{"weather", Quote(weather)}});
+        });
+    }
+
     std::string Info()
     {
         HMODULE game = GetModuleHandleW(nullptr);
@@ -644,6 +801,10 @@ namespace DebugServer
         if (command == "ini_set") return IniSet(request);
         if (command == "log_tail") return LogTail(request);
         if (command == "screenshot") return Screenshot(request);
+        if (command == "scene") return Scene();
+        if (command == "teleport") return Teleport(request);
+        if (command == "set_time") return SetTime(request);
+        if (command == "set_weather") return SetWeather(request);
         throw std::runtime_error("unknown command '" + command + "'");
     }
 
@@ -743,6 +904,7 @@ public:
             if (port > 0 && port < 65536)
             {
                 FusionFix::onBeforePresent() += []() { DebugServer::TakeScreenshot(); };
+                FusionFix::onGameProcessEvent() += []() { DebugServer::RunMainThreadCalls(); };
                 DebugServer::Start(port);
             }
         };
