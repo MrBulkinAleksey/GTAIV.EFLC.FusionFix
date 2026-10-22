@@ -619,6 +619,10 @@ namespace DebugServer
         }, 30); // (LoadScene streams the place in before it returns, which can take seconds)
     }
 
+    // Freeze's script camera and whether it stopped the clock (SetTime keeps it stopped).
+    static Camera frozenCamera = 0;
+    static bool clockStopped = false;
+
     std::string SetTime(const Request& request)
     {
         const uint32_t hour = uint32_t(request.Number("hour")) % 24, minute = uint32_t(request.Number("minute", 0)) % 60;
@@ -649,8 +653,6 @@ namespace DebugServer
 
     // A still scene for comparing frames: a script camera where the game camera is (or at x, y, z turned rx, ry, rz
     // with fov, as given), the player frozen and without control, the clock stopped. "on": false gives all back.
-    static Camera frozenCamera = 0;
-    static bool clockStopped = false;
 
     std::string Freeze(const Request& request)
     {
