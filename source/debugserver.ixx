@@ -89,7 +89,26 @@ namespace DebugServer
             return it->second;
         }
         std::string Get(const std::string& key, std::string fallback) const { return Has(key) ? Get(key) : fallback; }
-        uint64_t Number(const std::string& key) const { return std::stoull(Get(key), nullptr, 0); }
+        // Decimal, or hex with "0x" (not octal for a leading 0); a sign, a fraction or anything after the digits fails.
+        uint64_t Number(const std::string& key) const
+        {
+            const std::string text = Get(key);
+            const bool hex = text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X');
+            const std::string digits = hex ? text.substr(2) : text;
+            size_t used = 0;
+            uint64_t value = 0;
+            try
+            {
+                value = std::stoull(digits, &used, hex ? 16 : 10);
+            }
+            catch (const std::exception&)
+            {
+                used = 0;
+            }
+            if (digits.empty() || !isxdigit(uint8_t(digits[0])) || used != digits.size())
+                throw std::runtime_error("\"" + key + "\" is not a whole number: " + text);
+            return value;
+        }
         uint64_t Number(const std::string& key, uint64_t fallback) const { return Has(key) ? Number(key) : fallback; }
         // The id as it came, to echo (a number or a string, here kept as JSON text).
         std::string idJson = "null";
@@ -166,11 +185,25 @@ namespace DebugServer
 
     // ---- answers ----------------------------------------------------------------------------------------------------
 
+    // The length of the well-formed UTF-8 sequence at text[at] (a lead byte >= 0x80), 0 if it is not one.
+    size_t Utf8Length(std::string_view text, size_t at)
+    {
+        const uint8_t lead = uint8_t(text[at]);
+        const size_t length = lead >= 0xF0 && lead <= 0xF4 ? 4 : lead >= 0xE0 && lead < 0xF0 ? 3 : lead >= 0xC2 && lead < 0xE0 ? 2 : 0;
+        if (!length || at + length > text.size())
+            return 0;
+        for (size_t i = 1; i < length; ++i)
+            if ((uint8_t(text[at + i]) & 0xC0) != 0x80)
+                return 0;
+        return length;
+    }
+
     std::string Quote(std::string_view text)
     {
         std::string out = "\"";
-        for (char c : text)
+        for (size_t at = 0; at < text.size(); ++at)
         {
+            const char c = text[at];
             switch (c)
             {
             case '"': out += "\\\""; break;
@@ -186,12 +219,29 @@ namespace DebugServer
                     out += buffer;
                 }
                 else if (uint8_t(c) >= 0x80)
-                    out += '?'; // (logs and paths may hold other code pages; JSON wants UTF-8)
+                {
+                    // UTF-8 as it is; a byte of another code page (a log may hold one) as '?', for JSON wants UTF-8
+                    const size_t length = Utf8Length(text, at);
+                    if (length)
+                    {
+                        out.append(text.substr(at, length));
+                        at += length - 1;
+                    }
+                    else
+                        out += '?';
+                }
                 else
                     out += c;
             }
         }
         return out + "\"";
+    }
+
+    // A path as UTF-8 (path::string() goes through the ANSI code page and throws on what it cannot hold).
+    std::string Utf8(const std::filesystem::path& path)
+    {
+        const std::u8string text = path.u8string();
+        return std::string(text.begin(), text.end());
     }
 
     std::string Address(uintptr_t address)
@@ -335,7 +385,8 @@ namespace DebugServer
         std::mutex mutex;
         std::condition_variable done;
         std::atomic<bool> pending{false};
-        bool finished = false;
+        uint64_t asked = 0;     // the request's number, for an answer taken for one that timed out not to go to the next
+        uint64_t answered = 0;
         uint32_t maxWidth = 0;
         std::vector<uint8_t> png;
         uint32_t width = 0, height = 0;
@@ -348,6 +399,13 @@ namespace DebugServer
     {
         if (!capture.pending)
             return;
+        uint64_t number = 0;
+        uint32_t maxWidth = 0;
+        {
+            std::lock_guard lock(capture.mutex);
+            number = capture.asked;
+            maxWidth = capture.maxWidth;
+        }
         std::string error;
         std::vector<uint8_t> png;
         UINT width = 0, height = 0;
@@ -367,10 +425,10 @@ namespace DebugServer
         {
             width = desc.Width;
             height = desc.Height;
-            if (capture.maxWidth && width > capture.maxWidth)
+            if (maxWidth && width > maxWidth)
             {
-                height = std::max<UINT>(1, UINT(uint64_t(height) * capture.maxWidth / width));
-                width = capture.maxWidth;
+                height = std::max<UINT>(1, UINT(uint64_t(height) * maxWidth / width));
+                width = maxWidth;
             }
             // (8-bit first; the back buffer's own format when the device cannot convert to it)
             for (D3DFORMAT format : {D3DFMT_X8R8G8B8, desc.Format})
@@ -398,11 +456,13 @@ namespace DebugServer
                 object->Release();
         {
             std::lock_guard lock(capture.mutex);
+            if (number != capture.asked)
+                return; // (the request timed out and another came meanwhile: this frame is not for it)
             capture.png = std::move(png);
             capture.width = width;
             capture.height = height;
             capture.error = std::move(error);
-            capture.finished = true;
+            capture.answered = number;
             capture.pending = false;
         }
         capture.done.notify_all();
@@ -411,11 +471,11 @@ namespace DebugServer
     std::string Screenshot(const Request& request)
     {
         std::unique_lock lock(capture.mutex);
-        capture.finished = false;
+        const uint64_t number = ++capture.asked;
         capture.maxWidth = uint32_t(request.Number("max_width", 1920));
         capture.pending = true;
         // (the game presents in its menus and while paused too; a minimized game does not)
-        if (!capture.done.wait_for(lock, std::chrono::seconds(10), [] { return capture.finished; }))
+        if (!capture.done.wait_for(lock, std::chrono::seconds(10), [number] { return capture.answered == number; }))
         {
             capture.pending = false;
             throw std::runtime_error("no frame was presented within 10 s (is the game minimized?)");
@@ -425,7 +485,7 @@ namespace DebugServer
         const auto path = FusionLog::PathFor("Screenshot", L".png");
         std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(capture.png.data()), std::streamsize(capture.png.size()));
         return Object({{"mime", Quote("image/png")}, {"width", std::to_string(capture.width)},
-            {"height", std::to_string(capture.height)}, {"file", Quote(path.string())},
+            {"height", std::to_string(capture.height)}, {"file", Quote(Utf8(path))},
             {"data", Quote(Base64(capture.png.data(), capture.png.size()))}});
     }
 
@@ -463,7 +523,7 @@ namespace DebugServer
         }
     }
 
-    std::string OnMainThread(std::function<std::string()> work)
+    std::string OnMainThread(std::function<std::string()> work, int seconds = 5)
     {
         auto call = std::make_shared<MainThreadCall>();
         call->work = std::move(work);
@@ -472,10 +532,11 @@ namespace DebugServer
             std::lock_guard lock(mainThreadMutex);
             mainThreadCalls.push_back(call);
         }
-        if (result.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
+        if (result.wait_for(std::chrono::seconds(seconds)) != std::future_status::ready)
         {
-            call->cancelled = true; // (dropped, not done late)
-            throw std::runtime_error("the game ran no frame within 5 s: it is paused, in a menu or loading");
+            call->cancelled = true; // (dropped, not done late, if it has not begun)
+            throw std::runtime_error("the game ran no frame within " + std::to_string(seconds) +
+                " s: it is paused, in a menu or loading (or the call is still running)");
         }
         return result.get();
     }
@@ -554,7 +615,7 @@ namespace DebugServer
             }
             FusionLog::Write("DebugServer", "Scene", "teleport to %.1f %.1f %.1f\n", x, y, z);
             return Object({{"player", Array({Float(x), Float(y), Float(z)})}});
-        });
+        }, 30); // (LoadScene streams the place in before it returns, which can take seconds)
     }
 
     std::string SetTime(const Request& request)
@@ -587,19 +648,19 @@ namespace DebugServer
         HMODULE plugin = nullptr;
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
             reinterpret_cast<LPCWSTR>(&Info), &plugin);
-        char exe[MAX_PATH] = {};
-        GetModuleFileNameA(game, exe, MAX_PATH);
+        wchar_t exe[MAX_PATH] = {};
+        GetModuleFileNameW(game, exe, MAX_PATH);
         return Object({
             {"title", Quote("GTA IV (PC, FusionFix)")},
-            {"exe", Quote(std::filesystem::path(exe).filename().string())},
+            {"exe", Quote(Utf8(std::filesystem::path(exe).filename()))},
             {"exe_base", Address(reinterpret_cast<uintptr_t>(game))},
             {"plugin_base", Address(reinterpret_cast<uintptr_t>(plugin))},
             {"pid", std::to_string(GetCurrentProcessId())},
             {"pointer_size", std::to_string(sizeof(void*))},
             {"endianness", Quote("little")},
             {"allow_write", allowWrite ? "true" : "false"},
-            {"ini", Quote(CIniReader("").GetIniPath().string())},
-            {"logs_dir", Quote(FusionLog::Directory().string())},
+            {"ini", Quote(Utf8(CIniReader("").GetIniPath()))},
+            {"logs_dir", Quote(Utf8(FusionLog::Directory()))},
         });
     }
 
@@ -687,7 +748,8 @@ namespace DebugServer
             if (!VirtualQuery(reinterpret_cast<void*>(at), &info, sizeof(info)))
                 break;
             const uintptr_t regionEnd = reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize;
-            if (info.State == MEM_COMMIT && Readable(info.Protect))
+            // (not uncached or write-combined memory, the GPU's buffers mapped: reading it is many times slower)
+            if (info.State == MEM_COMMIT && Readable(info.Protect) && !(info.Protect & (PAGE_NOCACHE | PAGE_WRITECOMBINE)))
             {
                 const auto* first = reinterpret_cast<const uint8_t*>(std::max(at, uintptr_t(info.BaseAddress)));
                 const auto* last = reinterpret_cast<const uint8_t*>(std::min(regionEnd, end));
@@ -697,9 +759,12 @@ namespace DebugServer
                 break;
             at = regionEnd;
         }
+        // (not the pattern itself, as this request decoded it)
+        const auto own = reinterpret_cast<uintptr_t>(pattern.data());
         std::vector<std::string> matches;
         for (size_t i = 0; i < count; ++i)
-            matches.push_back(Address(found[i]));
+            if (found[i] != own)
+                matches.push_back(Address(found[i]));
         return Object({{"matches", Array(matches)}, {"truncated", count >= limit ? "true" : "false"}});
     }
 
@@ -751,8 +816,8 @@ namespace DebugServer
             std::error_code error;
             for (const auto& entry : std::filesystem::directory_iterator(FusionLog::Directory(), error))
             {
-                const auto name = entry.path().filename().string();
-                if (entry.path().extension() != ".log" || !name.starts_with("GTAIV.EFLC.FusionFix."))
+                const auto name = entry.path().filename().wstring();
+                if (entry.path().extension() != ".log" || !name.starts_with(L"GTAIV.EFLC.FusionFix."))
                     continue;
                 const auto time = entry.last_write_time(error);
                 if (!error && (path.empty() || time > newest))
@@ -764,7 +829,7 @@ namespace DebugServer
         }
         std::ifstream file(path, std::ios::binary | std::ios::ate);
         if (path.empty() || !file)
-            throw std::runtime_error("no log " + path.string());
+            throw std::runtime_error("no log " + Utf8(path));
         const std::streamoff size = file.tellg();
         const std::streamoff from = std::max<std::streamoff>(0, size - (8 << 20));
         file.seekg(from);
@@ -784,7 +849,7 @@ namespace DebugServer
         }
         if (lines.size() > wanted)
             lines.erase(lines.begin(), lines.end() - wanted);
-        return Object({{"file", Quote(path.string())}, {"lines", Array(lines)}});
+        return Object({{"file", Quote(Utf8(path))}, {"lines", Array(lines)}});
     }
 
     std::string Handle(const Request& request)
@@ -881,7 +946,10 @@ namespace DebugServer
             {
                 SOCKET client = accept(listener, nullptr, nullptr);
                 if (client == INVALID_SOCKET)
+                {
+                    Sleep(100); // (a broken listener fails at once: not a busy loop)
                     continue;
+                }
                 FusionLog::Write("DebugServer", "", "client connected\n");
                 Serve(client);
                 closesocket(client);
