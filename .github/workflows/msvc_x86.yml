@@ -78,14 +78,13 @@ jobs:
       with:
         submodules: recursive
 
-    # The last build's objects (build/, bin/), for MSBuild to compile again only what changed. sccache is no help
-    # here: it caches neither MSVC's modules nor /MP's many files a call.
+    # The last build's objects (build/), for MSBuild to compile again only what changed. sccache is no help here: it
+    # caches neither MSVC's modules nor /MP's many files a call. Not bin/: release.bat embeds the PDB into its binaries
+    # and signs them in place, and a cached one would go through both again; linking them anew each run is cheap.
     - name: Restore the build cache
       uses: actions/cache@v4
       with:
-        path: |
-          build
-          bin
+        path: build
         key: msbuild-${{ github.sha }}
         restore-keys: msbuild-
 
