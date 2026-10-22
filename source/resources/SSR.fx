@@ -253,6 +253,7 @@ uniform float fTemporalBlend;     // share of last frame's SSR kept each frame, 
 uniform float fTemporalAnySurface; // 1 while accumulating indirect light, which every surface gets, not only glossy ones
 uniform float fFallback;          // 0..1, strength of the fill from past what hid the ray (ScreenFallback), see SSRFallback_PS
 uniform float fNeighbourFill;     // 0..1, strength of the fill from the hits around a miss (NeighbourFill, SSRSpread_PS)
+uniform float fFillMinDistance;   // over fMaxDistance: hits nearer than this along their ray fill no misses (0: all do)
 uniform float fVehicleScale = 1.0; // SSRVehicleUnits / (10 x the game's c39.w) on car bodies, SkinIDTex their material IDs
 uniform float fSpreadRadius;      // pixels, how far SSRSpread_PS looks this step
 
@@ -848,6 +849,12 @@ float3 NeighbourFill(float2 uv, float2 vPos, float z, out float weight)
         float2 tapUV = uv + mul(turn, taps[i]) * vec2InvViewportSize;
         float4 hit = tex2Dlod(SSRResultTex, float4(tapUV, 0, 0));
         float w = max(hit.a, 0.0) * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
+        // A miss beside the reflection of something standing close to the surface (the player at a car's bonnet) most
+        // likely sees what is behind it, not it: filled from such hits the misses around his reflection took its dark
+        // colour, a halo of him 9 to 36 pixels wide. Only hits farther along their ray than fFillMinDistance fill.
+        [branch]
+        if (w > 0.0 && fFillMinDistance > 0.0)
+            w *= smoothstep(0.5 * fFillMinDistance, fFillMinDistance, tex2Dlod(SSRHitDistTex, float4(tapUV, 0, 0)).r);
         [branch]
         if (w > 0.0)
         {

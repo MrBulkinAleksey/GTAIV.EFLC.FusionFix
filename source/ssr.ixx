@@ -198,6 +198,9 @@ export void RenderScreenSpaceReflections()
     effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);
     effect->SetFloat(h.fFallback, R.fSSRFallback);
     effect->SetFloat(h.fNeighbourFill, R.fSSRNeighbourFill);
+    // The fill's distance gate reads how far the hits went, which the march writes with its second target
+    const bool hitDistances = R.SSRHitDistSurf[half] && R.SSRHitDistTex[half] && R.fSSRNeighbourFillMinDistance > 0.0f;
+    effect->SetFloat(h.fFillMinDistance, hitDistances ? R.fSSRNeighbourFillMinDistance / (std::max)(R.fSSRMaxDistance, 0.01f) : 0.0f);
     // Car bodies: SSR's colour in the units of the game's parabolic map, see fSSRVehicleUnits (last frame's c39.w).
     const bool vehicleUnits = R.fGameReflectionScale > 0.0f && R.mMaterialIdRT && R.mMaterialIdRT->mD3DTexture;
     if (vehicleUnits)
@@ -271,20 +274,22 @@ export void RenderScreenSpaceReflections()
         setPassSize(half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height);
         effect->SetTexture(h.MarchDepthTex2D, R.SSRMarchDepthTex->mD3DTexture);
 
-        // The march also writes how far its rays went, for the accumulation.
+        // The march also writes how far its rays went, for the accumulation and the fill's distance gate.
         IDirect3DSurface9* oldTarget1 = nullptr;
-        if (temporal)
+        if (temporal || hitDistances)
         {
             pDevice->GetRenderTarget(1, &oldTarget1);
             pDevice->SetRenderTarget(1, R.SSRHitDistSurf[half]);
         }
         draw(0, R.SSRTraceSurf[half]);
         ProfilerMark(pDevice, kProfSSRTrace, false);
-        if (temporal)
+        if (temporal || hitDistances)
         {
             pDevice->SetRenderTarget(1, oldTarget1);
             SAFE_RELEASE(oldTarget1);
         }
+        if (hitDistances)
+            effect->SetTexture(h.SSRHitDistTex2D, R.SSRHitDistTex[half]->mD3DTexture);
         effect->SetTexture(h.SSRResultTex2D, R.SSRTraceTex[half]->mD3DTexture);
         IDirect3DTexture9* fill = R.SSRFallbackTex[half]->mD3DTexture;
         ProfilerMark(pDevice, kProfSSRFill, true);
