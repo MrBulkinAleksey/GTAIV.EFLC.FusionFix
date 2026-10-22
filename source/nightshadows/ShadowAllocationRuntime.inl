@@ -1035,10 +1035,12 @@ namespace PlayerShadowAllocation
             // twice within 2 s, it ranks off screen for 3 s: it takes no slot from lights that are there.
             if(kind!=budget::Kind::PlayerBeam && FlickeringLight(key,state.frame,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds)) &&
                gain==SlotGain::InView) { gain=SlotGain::OffScreen; ++lightsFlickering; }
-            // A car's rear lamp ranks as off screen: it takes a slot only no lamp or headlight in view wants. A slot trace
+            // A car's rear lamp ranks below every other light: it takes only a slot no lamp or headlight wants. A slot trace
             // while driving: rear lamps within 25 m took 123 slots to the street lamps' 137, the lamps 1.4 of 7 on average
-            // with 14 lights waiting
-            if(isTailLightKey && gain==SlotGain::InView && isTailLightKey(key)) { gain=SlotGain::OffScreen; ++tailLightsYielded; }
+            // with 14 lights waiting. Ranked off screen only, a parked police car's rear lamp 6 m off still took the slot of
+            // a street lamp 31 m off whenever the lamp's car went out of its light (both off screen, the nearer wins),
+            // for seconds, and the lamp's shadows and contact shadows blinked out with it (a slot trace standing still).
+            if(isTailLightKey && gain!=SlotGain::None && isTailLightKey(key)) { gain=SlotGain::None; ++tailLightsYielded; }
             if(slotTrace.enabled)
                 try {
                     fusionfix::shadows::ShadowSlotTrace::Light traced{key,static_cast<uint8_t>(kind),rawGain,gain,cached,volumeVisible,
