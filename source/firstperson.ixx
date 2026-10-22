@@ -1,6 +1,7 @@
 module;
 
 #include <common.hxx>
+#include <chrono>
 #include "FusionLog.hpp"
 
 export module firstperson;
@@ -67,14 +68,16 @@ namespace FirstPerson
     // wall a capsule's radius (0.2 to 0.3 m) from its position, so the near plane, its corners some 1.35 times the
     // near clip from the eye, stays on this side. With the eye on the head and a near clip of 0.12 the view went
     // through walls ahead and to the side. The reach grows with the ped's speed, from reachStill below reachSlowSpeed
-    // to reachRunning above reachFastSpeed: running in the open the head leans out over 0.2 m and the eye held back
+    // to reachRunning above reachFastSpeed (0.2 and 1.5 m/s: from 1 m/s the collar showed as the run began): running in the open the head leans out over 0.2 m and the eye held back
     // looked down onto his back, while running into a wall the run plays with the ped all but still. Hidden, read
     // again live: FirstPersonEyeReach, FirstPersonEyeReachRunning, FirstPersonReachSlowSpeed, FirstPersonReachFastSpeed,
     // FirstPersonNearClip.
     static float reachStill = 0.1f, reachRunning = 0.35f;
-    static float reachSlowSpeed = 1.0f, reachFastSpeed = 4.0f; // m/s
+    static float reachSlowSpeed = 0.2f, reachFastSpeed = 1.5f; // m/s
     static constexpr float ReachEase = 0.2f;    // of the way to the speed's reach each frame
     static float eyeReach = 0.1f;               // this frame's
+    static bool reachByMotion = true;
+    static float motionSpeed = 0.0f;            // across, from the ped's position frame to frame (m/s)
     static float nearClipOnFoot = 0.05f;
     static constexpr float LookDownForward = 0.2f;  // m the eye moves out over the chest looking straight down
     static constexpr float LookDownUp = 0.03f;
@@ -264,6 +267,29 @@ namespace FirstPerson
         float speed = 0.0f;
         if (handle)
             Natives::GetCharSpeed(handle, &speed);
+        // How fast the ped really goes across, from its position frame to frame: running into a wall the game's speed
+        // stayed up for half a second while the ped stood, and the eye leaned through the wall with the head
+        // (FirstPersonReachByMotion, hidden, 1; 0 takes the game's speed)
+        {
+            static float lastPosition[2]{};
+            static auto lastTime = std::chrono::steady_clock::now();
+            static float moved = 0.0f;
+            float position[3]{};
+            const auto now = std::chrono::steady_clock::now();
+            const float seconds = std::chrono::duration<float>(now - lastTime).count();
+            if (CEntity::GetPosition(ped, position) && seconds > 0.0f)
+            {
+                const float dx = position[0] - lastPosition[0], dy = position[1] - lastPosition[1];
+                const float step = std::sqrt(dx * dx + dy * dy) / seconds;
+                moved = seconds > 0.25f || step > 50.0f ? 0.0f : moved + (step - moved) * std::min(seconds * 15.0f, 1.0f);
+                lastPosition[0] = position[0];
+                lastPosition[1] = position[1];
+                lastTime = now;
+            }
+            motionSpeed = moved;
+            if (reachByMotion)
+                speed = std::min(speed, moved);
+        }
         const float running = std::clamp((speed - reachSlowSpeed) / std::max(reachFastSpeed - reachSlowSpeed, 0.1f), 0.0f, 1.0f);
         eyeReach += (reachStill + (reachRunning - reachStill) * running - eyeReach) * ReachEase;
 
@@ -300,9 +326,9 @@ namespace FirstPerson
             CEntity::GetPosition(ped, position);
             const float ahead = std::sqrt((head[0] - position[0]) * (head[0] - position[0]) + (head[1] - position[1]) * (head[1] - position[1]));
             const float eyeAhead = std::sqrt((eye[0] - position[0]) * (eye[0] - position[0]) + (eye[1] - position[1]) * (eye[1] - position[1]));
-            FusionLog::Write("FirstPerson", "OnFoot", "%s: head %s z %.2f above the ped %.2f, %.2f across; eye z %.2f, %.2f across (reach %.2f at %.1f m/s), view pitch %.1f, duck offset %.2f\n",
+            FusionLog::Write("FirstPerson", "OnFoot", "%s: head %s z %.2f above the ped %.2f, %.2f across; eye z %.2f, %.2f across (reach %.2f at %.1f m/s, moving %.1f m/s), view pitch %.1f, duck offset %.2f\n",
                 ducking ? "ducking" : "standing", bone ? "bone" : "fallback", head[2], head[2] - position[2], ahead, eye[2], eyeAhead,
-                eyeReach, speed, std::asin(std::clamp(front[2], -1.0f, 1.0f)) * 57.29578f, *reinterpret_cast<const float*>(camera + 0x2C8));
+                eyeReach, speed, motionSpeed, std::asin(std::clamp(front[2], -1.0f, 1.0f)) * 57.29578f, *reinterpret_cast<const float*>(camera + 0x2C8));
         }
         std::copy(std::begin(eye), std::end(eye), frame + 12);
         eyeFrame = *CTimer::m_frameCount;
@@ -683,8 +709,9 @@ public:
                 FirstPerson::upOffset = std::clamp(ini.ReadFloat("MISC", "FirstPersonUp", 0.05f), -0.5f, 0.5f);
                 FirstPerson::reachStill = std::clamp(ini.ReadFloat("MISC", "FirstPersonEyeReach", 0.1f), 0.0f, 0.5f);
                 FirstPerson::reachRunning = std::clamp(ini.ReadFloat("MISC", "FirstPersonEyeReachRunning", 0.35f), 0.0f, 0.6f);
-                FirstPerson::reachSlowSpeed = std::clamp(ini.ReadFloat("MISC", "FirstPersonReachSlowSpeed", 1.0f), 0.0f, 10.0f);
-                FirstPerson::reachFastSpeed = std::clamp(ini.ReadFloat("MISC", "FirstPersonReachFastSpeed", 4.0f), 0.0f, 10.0f);
+                FirstPerson::reachSlowSpeed = std::clamp(ini.ReadFloat("MISC", "FirstPersonReachSlowSpeed", 0.2f), 0.0f, 10.0f);
+                FirstPerson::reachFastSpeed = std::clamp(ini.ReadFloat("MISC", "FirstPersonReachFastSpeed", 1.5f), 0.0f, 10.0f);
+                FirstPerson::reachByMotion = ini.ReadInteger("MISC", "FirstPersonReachByMotion", 1) != 0;
                 FirstPerson::nearClipOnFoot = std::clamp(ini.ReadFloat("MISC", "FirstPersonNearClip", 0.05f), 0.01f, 0.3f);
             };
             readOffsets(iniReader);
