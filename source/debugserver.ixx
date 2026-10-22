@@ -10,6 +10,7 @@ module;
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -1837,6 +1838,94 @@ namespace DebugServer
         return Object({{"sessions", Array(items)}});
     }
 
+    // ---- what is near a place: the buildings (map models, procedural props) and objects within a radius
+
+    struct PoolHeader { uint32_t storage, flags; int32_t size, stride; };
+
+    // The pool a global points to, read safely; false where it does not look like one.
+    bool ReadPool(uint32_t global, PoolHeader& pool)
+    {
+        uint32_t address = 0;
+        if (!global || !SafeCopy(&address, reinterpret_cast<const void*>(uintptr_t(global)), 4) || address < 0x10000 ||
+            !SafeCopy(&pool, reinterpret_cast<const void*>(uintptr_t(address)), sizeof(pool)))
+            return false;
+        return pool.storage >= 0x10000 && pool.flags >= 0x10000 && pool.size > 0 && pool.size <= 200000 && pool.stride >= 0x24 &&
+            pool.stride <= 0x10000;
+    }
+
+    uint32_t PoolGlobal(const char* signature)
+    {
+        auto pattern = hook::pattern(signature);
+        return pattern.empty() ? 0 : *pattern.get_first<uint32_t>(2);
+    }
+
+    std::string Nearby(const Request& request)
+    {
+        const float x = std::stof(request.Get("x")), y = std::stof(request.Get("y")), z = std::stof(request.Get("z"));
+        const float radius = std::stof(request.Get("radius", "10"));
+        const size_t limit = (std::min)(size_t(request.Number("max", 100)), size_t(1000));
+        // (as procedural.ixx and comvars.ixx find them: props and map models are buildings)
+        static const uint32_t buildings = PoolGlobal("8B 0D ? ? ? ? E8 ? ? ? ? 3D F4 01 00 00");
+        static const uint32_t objects = PoolGlobal("8B 0D ? ? ? ? 83 C4 ? 50 E8 ? ? ? ? 85 C0 74");
+        const uintptr_t modelInfos = GameBase() + 0xE95CD8;   // CE 0x1295cd8, model infos by index
+        struct Found { float distance; std::string json; };
+        std::vector<Found> found;
+        const std::pair<const char*, uint32_t> pools[] = { { "building", buildings }, { "object", objects } };
+        for (const auto& [kind, global] : pools)
+        {
+            PoolHeader pool;
+            if (!ReadPool(global, pool))
+                continue;
+            std::vector<uint8_t> flags(size_t(pool.size));
+            if (!SafeCopy(flags.data(), reinterpret_cast<const void*>(uintptr_t(pool.flags)), flags.size()))
+                continue;
+            for (int32_t i = 0; i < pool.size; ++i)
+            {
+                if (flags[i] & 0x80)
+                    continue;
+                const uint32_t entity = pool.storage + uint32_t(i) * uint32_t(pool.stride);
+                uint8_t head[0x30];
+                uint32_t matrixAddress = 0;
+                float matrix[16];
+                if (!SafeCopy(head, reinterpret_cast<const void*>(uintptr_t(entity)), sizeof(head)))
+                    continue;
+                memcpy(&matrixAddress, head + 0x20, 4);
+                float position[3];
+                if (matrixAddress >= 0x10000 && SafeCopy(matrix, reinterpret_cast<const void*>(uintptr_t(matrixAddress)), sizeof(matrix)))
+                    memcpy(position, matrix + 12, sizeof(position));
+                else
+                {
+                    memcpy(position, head + 0x10, sizeof(position));
+                    matrixAddress = 0;
+                }
+                const float dx = position[0] - x, dy = position[1] - y, dz = position[2] - z;
+                const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (!(distance <= radius))
+                    continue;
+                int16_t index = -1;
+                memcpy(&index, head + 0x2E, 2);
+                uint32_t info = 0, hash = 0, entityFlags = 0;
+                float bounds[8] = {};
+                if (index >= 0 && index < 31000 && SafeCopy(&info, reinterpret_cast<const void*>(modelInfos + uintptr_t(index) * 4), 4) && info >= 0x10000)
+                {
+                    SafeCopy(bounds, reinterpret_cast<const void*>(uintptr_t(info + 0x20)), sizeof(bounds));
+                    SafeCopy(&hash, reinterpret_cast<const void*>(uintptr_t(info + 0x3C)), 4);
+                }
+                SafeCopy(&entityFlags, reinterpret_cast<const void*>(uintptr_t(entity + 0x210)), 4);
+                const float size[3] = { bounds[4] - bounds[0], bounds[5] - bounds[1], bounds[6] - bounds[2] };
+                found.push_back({ distance, Object({{"kind", Quote(kind)}, {"entity", Hex32(entity)}, {"model", std::to_string(index)},
+                    {"hash", Hex32(hash)}, {"info", Hex32(info)}, {"pos", Array({Float(position[0]), Float(position[1]), Float(position[2])})},
+                    {"distance", Float(distance)}, {"size", Array({Float(size[0]), Float(size[1]), Float(size[2])})},
+                    {"up", Float(matrixAddress ? matrix[10] : 1.0f)}, {"flags210", Hex32(entityFlags)}}) });
+            }
+        }
+        std::sort(found.begin(), found.end(), [](const Found& a, const Found& b) { return a.distance < b.distance; });
+        std::vector<std::string> items;
+        for (size_t i = 0; i < found.size() && i < limit; ++i)
+            items.push_back(found[i].json);
+        return Object({{"total", std::to_string(found.size())}, {"entities", Array(items)}});
+    }
+
     std::string Handle(const Request& request)
     {
         const std::string command = request.Get("cmd");
@@ -1861,6 +1950,7 @@ namespace DebugServer
         if (command == "trace_read") return TraceRead(request);
         if (command == "trace_stop") return TraceStop(request);
         if (command == "trace_list") return TraceList();
+        if (command == "nearby") return Nearby(request);
         throw std::runtime_error("unknown command '" + command + "'");
     }
 
