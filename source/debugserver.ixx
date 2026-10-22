@@ -1315,6 +1315,9 @@ namespace DebugServer
 
     static std::mutex debugMutex;
     static std::array<std::atomic<uint32_t>, 4> debugAddresses{};   // 0: the register is free
+    // What each register was last set to, kept after its trace stops: a thread not refreshed yet may still trap there
+    static std::array<std::atomic<uint32_t>, 4> ownedAddresses{};
+    static std::array<std::atomic<bool>, 4> ownedExecute{};
     static std::atomic<uint32_t> debugDr7{0};
     static DWORD serverThread = 0, refresherThread = 0;
     static PVOID exceptionHandler = nullptr;
@@ -1362,22 +1365,27 @@ namespace DebugServer
         CloseHandle(snapshot);
     }
 
+    // Ours by DR6's bits, or for an execute breakpoint by the address it trapped at: Wine's context for one has DR0..7
+    // and DR6's bits cleared (a crash of the first test, 2026-10-23), so the registers' own state is ours to keep
     LONG CALLBACK OnDebugException(EXCEPTION_POINTERS* info)
     {
         if (info->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP)
             return EXCEPTION_CONTINUE_SEARCH;
         CONTEXT* c = info->ContextRecord;
-        const DWORD registers[4] = { c->Dr0, c->Dr1, c->Dr2, c->Dr3 };
+        const auto trapped = uint32_t(reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress));
         bool ours = false, execute = false;
         for (size_t n = 0; n < 4; ++n)
         {
-            if (!(c->Dr6 & (1u << n)) || !registers[n])
+            const uint32_t owned = ownedAddresses[n];
+            if (!owned)
+                continue;
+            const bool ownExecute = ownedExecute[n];
+            if (!(c->Dr6 & (1u << n)) && !(ownExecute && trapped == owned))
                 continue;
             // (also a register a stopped trace left in a thread not refreshed yet: swallowed, never passed on)
             ours = true;
-            if (((c->Dr7 >> (16 + 4 * n)) & 3) == 0)
-                execute = true;
-            if (inHit || debugAddresses[n] != registers[n])
+            execute |= ownExecute;
+            if (inHit || debugAddresses[n] != owned)
                 continue;
             uint8_t xmm[128] = {};
             if ((c->ContextFlags & CONTEXT_EXTENDED_REGISTERS) == CONTEXT_EXTENDED_REGISTERS)
@@ -1388,6 +1396,15 @@ namespace DebugServer
         if (!ours)
             return EXCEPTION_CONTINUE_SEARCH;
         c->Dr6 &= ~0xFu;
+        // (the context goes back to the thread with its debug registers: ours, not the zeros Wine may have put there)
+        if (c->ContextFlags & CONTEXT_DEBUG_REGISTERS & ~CONTEXT_i386)
+        {
+            c->Dr0 = debugAddresses[0];
+            c->Dr1 = debugAddresses[1];
+            c->Dr2 = debugAddresses[2];
+            c->Dr3 = debugAddresses[3];
+            c->Dr7 = debugDr7;
+        }
         if (execute)
             c->EFlags |= 0x10000; // RF: the instruction runs instead of trapping again
         return EXCEPTION_CONTINUE_EXECUTION;
@@ -1613,6 +1630,8 @@ namespace DebugServer
                 }).detach();
             }
             debugSlots[t->slot] = t.get();
+            ownedExecute[t->slot] = t->mode == TraceMode::Execute;
+            ownedAddresses[t->slot] = t->address;
             debugAddresses[t->slot] = t->address;
             UpdateDr7();
             ApplyDebugRegisters();
