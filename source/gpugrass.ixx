@@ -26,10 +26,12 @@ import framehistory;
 import temporal;
 import postfxresources;
 import postfxprofiler;
+import postfxpass;
 import procedural;
 import grasswind;
 import nearbybodies;
 import shaders;
+import screenquad;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -57,7 +59,10 @@ using namespace PostFxProfiler;
 // (BladeShare: all up to kDenseRange, half at GpuGrassFullRange, where far blades have become tufts of three, none at
 // GpuGrassRange), and go to the instance buffer: one instanced draw for them all.
 // The blades take a quarter of their colour from the ground under them: _DEFERRED_GBUFFER_0_ is copied first (into Wet Ground's
-// copy, which that pass makes again after the grass).
+// copy, which that pass makes again after the grass). Before that copy the ground itself under the grass is darkened
+// towards a grassy floor (GroundTint in GpuGrass.fx, TintGround): pale soil and gravel textures showed between the
+// blades. Where EdgeTex has grass, on ground facing up of the materials Wet Ground wets, fading out at GpuGrassRange;
+// hidden [PROCEDURAL] GpuGrassGroundTint (0.5, live; 0 off) is how far at full cover.
 //
 // Temporal AA, DLAA and FSR: the grass is drawn before the motion vectors are made from depth (OnGBufferBeforeMotion),
 // so they have the camera's motion of the blades, and after them drawn again into the motion target (RenderMotion)
@@ -123,6 +128,8 @@ namespace GpuGrass
     bool bLog = false;
     bool bHideProps = true;
     float fRange = 100.0f, fFullRange = 22.0f, fDensity = 1.0f;
+    float fGroundTint = 0.5f;
+    constexpr float kGroundTintColour[3] = { 0.45f, 0.55f, 0.3f };   // what the ground is multiplied towards
 
     // Render thread
     // What grows on a triangle: how much, the share of grass, of weeds, of small plants, the height (0..1), the debug colour
@@ -149,6 +156,7 @@ namespace GpuGrass
     {
         D3DXHANDLE technique, viewProj, wind, windDir, blade, eye, nearPlane, farDivNear, bodies, bend, sun;
         D3DXHANDLE motion, viewProjNoJitter, prevViewProj, windPrev, depthBias, edgeGrid, ditherFrame;
+        D3DXHANDLE groundTint, projInfo, worldX, worldY, worldZ, groundTintColour, tintAllow0, tintAllow1, tintRange;
     } h{};
     // What RenderMotion draws again: this frame's instances, if Render drew them, the depth test it drew with, and
     // the wind's vector of this frame and the one before
@@ -203,6 +211,7 @@ namespace GpuGrass
         fFullRange = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassFullRange", 22.0f), 0.0f, fRange - 1.0f);
         bHideProps = iniReader.ReadInteger("PROCEDURAL", "GpuGrassHideProps", 1) != 0;
         fDensity = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassDensity", 1.0f), 0.1f, 1.0f);
+        fGroundTint = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassGroundTint", 0.5f), 0.0f, 1.0f);
         bLog = iniReader.ReadInteger("DEBUG", "GpuGrassLog", 0) != 0;
     }
 
@@ -592,6 +601,15 @@ namespace GpuGrass
                 h.depthBias = effect->GetParameterByName(nullptr, "fDepthBias");
                 h.edgeGrid = effect->GetParameterByName(nullptr, "vec4EdgeGrid");
                 h.ditherFrame = effect->GetParameterByName(nullptr, "fDitherFrame");
+                h.groundTint = effect->GetTechniqueByName("GroundTint");
+                h.projInfo = effect->GetParameterByName(nullptr, "vec4ProjInfo");
+                h.worldX = effect->GetParameterByName(nullptr, "vec4WorldX");
+                h.worldY = effect->GetParameterByName(nullptr, "vec4WorldY");
+                h.worldZ = effect->GetParameterByName(nullptr, "vec4WorldZ");
+                h.groundTintColour = effect->GetParameterByName(nullptr, "vec4GroundTint");
+                h.tintAllow0 = effect->GetParameterByName(nullptr, "vec4TintAllow0");
+                h.tintAllow1 = effect->GetParameterByName(nullptr, "vec4TintAllow1");
+                h.tintRange = effect->GetParameterByName(nullptr, "fTintRange");
             }
         }
         if (!effect)
@@ -675,6 +693,122 @@ namespace GpuGrass
         if (rt && rt->mD3DTexture)
             rt->mD3DTexture->GetSurfaceLevel(0, &surface);
         return surface;
+    }
+
+    // The ground under the grass multiplied towards kGroundTintColour in `colour` (_DEFERRED_GBUFFER_0_, RGB only: its
+    // alpha is the game's), reading the depth buffer the pass drew into (unbound meanwhile, Render binds it again), the
+    // normals and the material IDs; the samplers and the blend put back
+    void TintGround(IDirect3DDevice9* pDevice, IDirect3DSurface9* colour, const D3DSURFACE_DESC& desc, IDirect3DSurface9* depth)
+    {
+        auto& R = PostFxResources;
+        rage::grcViewport* vp = rage::GetCurrentViewport();
+        if (!(fGroundTint > 0.0f) || !h.groundTint || !edgeTexture || !vp || !R.mNormalRT || !R.mMaterialIdRT ||
+            !R.mNormalRT->mD3DTexture || !R.mMaterialIdRT->mD3DTexture)
+            return;
+        // (the depth buffer as a texture, at the colour's size; under a render scale not always _DEFERRED_GBUFFER_3_)
+        IDirect3DTexture9* depthTexture = nullptr;
+        D3DSURFACE_DESC depthDesc{};
+        if (FAILED(depth->GetDesc(&depthDesc)) || depthDesc.Width != desc.Width || depthDesc.Height != desc.Height ||
+            FAILED(depth->GetContainer(IID_IDirect3DTexture9, reinterpret_cast<void**>(&depthTexture))) || !depthTexture)
+            return;
+        const float width = float(desc.Width), height = float(desc.Height);
+        const D3DXVECTOR4 projInfo = PostFxPass::ProjInfo(*(const D3DMATRIX*)vp->mProjectionMatrix, width, height);
+        effect->SetVector(h.projInfo, &projInfo);
+        {
+            const D3DXMATRIX& viewInv = *(const D3DXMATRIX*)vp->mViewInverseMatrix;
+            D3DXVECTOR4 toView[3];
+            PostFxPass::WorldToViewRows(vp, toView);
+            const D3DXVECTOR4 worldX(toView[0].x, toView[1].x, toView[2].x, viewInv.m[3][0]);
+            const D3DXVECTOR4 worldY(toView[0].y, toView[1].y, toView[2].y, viewInv.m[3][1]);
+            const D3DXVECTOR4 worldZ(toView[0].z, toView[1].z, toView[2].z, viewInv.m[3][2]);
+            effect->SetVector(h.worldX, &worldX);
+            effect->SetVector(h.worldY, &worldY);
+            effect->SetVector(h.worldZ, &worldZ);
+        }
+        effect->SetFloat(h.nearPlane, vp->mNearClip);
+        effect->SetFloat(h.farDivNear, vp->mFarClip / vp->mNearClip);
+        const D3DXVECTOR4 edgeGrid(edgeOrigin[0], edgeOrigin[1], 1.0f / (kEdgeCell * kEdgeSide), 1.0f);
+        effect->SetVector(h.edgeGrid, &edgeGrid);
+        const D3DXVECTOR4 tint(kGroundTintColour[0], kGroundTintColour[1], kGroundTintColour[2], fGroundTint);
+        effect->SetVector(h.groundTintColour, &tint);
+        const int mask = R.nWetGroundMaterials;
+        const D3DXVECTOR4 allow0(float(mask & 1), float((mask >> 1) & 1), float((mask >> 2) & 1), float((mask >> 3) & 1));
+        const D3DXVECTOR4 allow1(float((mask >> 4) & 1), float((mask >> 5) & 1), float((mask >> 6) & 1), float((mask >> 7) & 1));
+        effect->SetVector(h.tintAllow0, &allow0);
+        effect->SetVector(h.tintAllow1, &allow1);
+        effect->SetFloat(h.tintRange, fRange);
+
+        static constexpr DWORD kFirstSlot = 3, kSlots = 4;
+        static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER,
+                                                                  D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
+        IDirect3DBaseTexture9* oldTexture[kSlots] = {};
+        DWORD oldSampler[kSlots][std::size(kSamplerStates)] = {};
+        for (DWORD s = 0; s < kSlots; ++s)
+        {
+            pDevice->GetTexture(kFirstSlot + s, &oldTexture[s]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                pDevice->GetSamplerState(kFirstSlot + s, kSamplerStates[i], &oldSampler[s][i]);
+        }
+        static constexpr D3DRENDERSTATETYPE kBlendStates[] = { D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP, D3DRS_SEPARATEALPHABLENDENABLE };
+        DWORD oldBlend[std::size(kBlendStates)] = {};
+        for (size_t i = 0; i < std::size(kBlendStates); ++i)
+            pDevice->GetRenderState(kBlendStates[i], &oldBlend[i]);
+        SavedVertexInput vertexInput(pDevice);
+
+        pDevice->SetRenderTarget(0, colour);
+        for (DWORD i = 1; i < 4; ++i)
+            pDevice->SetRenderTarget(i, nullptr);
+        pDevice->SetDepthStencilSurface(nullptr);
+        D3DVIEWPORT9 viewport = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
+        pDevice->SetViewport(&viewport);
+        // The ground's colour times the shader's
+        static constexpr struct { D3DRENDERSTATETYPE state; DWORD value; } kStates[] =
+        {
+            { D3DRS_ZENABLE, FALSE }, { D3DRS_ZWRITEENABLE, FALSE }, { D3DRS_ALPHABLENDENABLE, TRUE }, { D3DRS_SRCBLEND, D3DBLEND_ZERO },
+            { D3DRS_DESTBLEND, D3DBLEND_SRCCOLOR }, { D3DRS_BLENDOP, D3DBLENDOP_ADD }, { D3DRS_SEPARATEALPHABLENDENABLE, FALSE },
+            { D3DRS_ALPHATESTENABLE, FALSE }, { D3DRS_STENCILENABLE, FALSE }, { D3DRS_CULLMODE, D3DCULL_NONE },
+            { D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE },
+            { D3DRS_SCISSORTESTENABLE, FALSE }, { D3DRS_SRGBWRITEENABLE, FALSE }, { D3DRS_FILLMODE, D3DFILL_SOLID },
+            { D3DRS_CLIPPLANEENABLE, 0 }, { D3DRS_FOGENABLE, FALSE },
+        };
+        for (auto [state, value] : kStates)
+            pDevice->SetRenderState(state, value);
+        pDevice->SetVertexShader(nullptr);
+        pDevice->SetFVF(kScreenVertexFVF);
+
+        UINT passes = 0;
+        effect->SetTechnique(h.groundTint);
+        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
+        effect->BeginPass(0);
+        effect->CommitChanges();
+        IDirect3DBaseTexture9* textures[kSlots] = { depthTexture, R.mNormalRT->mD3DTexture, R.mMaterialIdRT->mD3DTexture, edgeTexture };
+        for (DWORD s = 0; s < kSlots; ++s)
+        {
+            const bool edges = s == 3;
+            SetTextureBoth(pDevice, kFirstSlot + s, textures[s]);
+            SetSamplerStateBoth(pDevice, kFirstSlot + s, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+            SetSamplerStateBoth(pDevice, kFirstSlot + s, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+            SetSamplerStateBoth(pDevice, kFirstSlot + s, D3DSAMP_MAGFILTER, edges ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+            SetSamplerStateBoth(pDevice, kFirstSlot + s, D3DSAMP_MINFILTER, edges ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+            SetSamplerStateBoth(pDevice, kFirstSlot + s, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+            SetSamplerStateBoth(pDevice, kFirstSlot + s, D3DSAMP_SRGBTEXTURE, FALSE);
+        }
+        PostFxPass::BindEffectConstantsOnly(pDevice, effect);
+        ScreenQuad::Full(width, height).Draw(pDevice);
+        effect->EndPass();
+        effect->End();
+
+        pDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+        for (size_t i = 0; i < std::size(kBlendStates); ++i)
+            pDevice->SetRenderState(kBlendStates[i], oldBlend[i]);
+        for (DWORD s = 0; s < kSlots; ++s)
+        {
+            SetTextureBoth(pDevice, kFirstSlot + s, oldTexture[s]);
+            SAFE_RELEASE(oldTexture[s]);
+            for (size_t i = 0; i < std::size(kSamplerStates); ++i)
+                SetSamplerStateBoth(pDevice, kFirstSlot + s, kSamplerStates[i], oldSampler[s][i]);
+        }
+        depthTexture->Release();
     }
 }
 
@@ -876,7 +1010,19 @@ export namespace GpuGrass
         targets[0]->GetDesc(&desc);
 
         ProfilerScope timed(pDevice, kProfGpuGrass);
-        // The ground's colour before the grass, which the blades take a quarter of: into Wet Ground's copy of the first target
+        // Kept besides what StateBackup keeps: every float constant (D3DX places the effect's from c0, over the game's
+        // and FusionFix's cached ones such as the log depth's), the third target's colour mask, the streams' frequencies
+        static float vsConstants[256 * 4], psConstants[224 * 4];
+        pDevice->GetVertexShaderConstantF(0, vsConstants, 256);
+        pDevice->GetPixelShaderConstantF(0, psConstants, 224);
+        DWORD colourWrite2 = 0, zfunc = D3DCMP_LESSEQUAL;
+        pDevice->GetRenderState(D3DRS_COLORWRITEENABLE2, &colourWrite2);
+        pDevice->GetRenderState(D3DRS_ZFUNC, &zfunc);
+
+        // The ground under the grass darkened first, then its colour before the grass, which the blades take a quarter
+        // of: into Wet Ground's copy of the first target
+        if (edgeTextureReady)
+            TintGround(pDevice, targets[0], desc, depth);
         auto& R = PostFxResources;
         bool groundCopied = false;
         {
@@ -895,14 +1041,6 @@ export namespace GpuGrass
             }
             groundCopied = R.WetCopySurf[0] && SUCCEEDED(pDevice->StretchRect(targets[0], nullptr, R.WetCopySurf[0], nullptr, D3DTEXF_NONE));
         }
-        // Kept besides what StateBackup keeps: every float constant (D3DX places the effect's from c0, over the game's
-        // and FusionFix's cached ones such as the log depth's), the third target's colour mask, the streams' frequencies
-        static float vsConstants[256 * 4], psConstants[224 * 4];
-        pDevice->GetVertexShaderConstantF(0, vsConstants, 256);
-        pDevice->GetPixelShaderConstantF(0, psConstants, 224);
-        DWORD colourWrite2 = 0, zfunc = D3DCMP_LESSEQUAL;
-        pDevice->GetRenderState(D3DRS_COLORWRITEENABLE2, &colourWrite2);
-        pDevice->GetRenderState(D3DRS_ZFUNC, &zfunc);
 
         for (DWORD i = 0; i < 3; ++i)
             pDevice->SetRenderTarget(i, targets[i]);

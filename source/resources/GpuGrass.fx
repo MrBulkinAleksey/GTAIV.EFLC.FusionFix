@@ -429,3 +429,53 @@ technique Motion
         PixelShader = compile ps_3_0 MotionPS();
     }
 }
+
+// Under the grass (GroundTint, drawn before the blades and the ground's colour copy they take from): the ground's own
+// colour, pale soil and gravel textures between the blades, is multiplied towards vec4GroundTint.rgb, so the blades
+// stand in a dark, grassy floor of their own colour instead of on bare ground. Where: the grass's edge grid (EdgeTex,
+// 0 off the grass, 1 well inside it) at the pixel's place on the ground, ground facing up, the material categories
+// vec4TintAllow0/1 let through (WetGroundMaterials: not cars or people), within fTintRange of the camera.
+sampler2D TintDepthTex : register(s3);     // the depth buffer the G-buffer pass drew into (log depth), unbound meanwhile
+sampler2D TintNormalTex : register(s4);    // _DEFERRED_GBUFFER_1_
+sampler2D TintMaterialTex : register(s5);  // _STENCIL_BUFFER_, the material IDs
+sampler2D TintEdgeTex : register(s6);      // EdgeTex for the pixel shader, linear
+float4 vec4ProjInfo;
+float4 vec4WorldX;      // view to world rows, the camera's position in w
+float4 vec4WorldY;
+float4 vec4WorldZ;
+float4 vec4GroundTint;  // the colour the ground is multiplied towards (rgb), how far at full cover (w)
+float4 vec4TintAllow0;  // material categories 0..3 tinted (1) or not (0)
+float4 vec4TintAllow1;  // and 4..7
+float fTintRange;
+
+float4 GroundTintPS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
+{
+    float raw = tex2D(TintDepthTex, uv).r;
+    [branch]
+    if (raw <= 0.0 || raw >= 0.99999)
+        return 1.0; // sky
+    float id = floor(tex2D(TintMaterialTex, uv).r * 255.0 + 0.4);
+    id -= id >= 128.0 ? 128.0 : 0.0;
+    float category = fmod(id, 8.0);
+    float allow = dot(vec4TintAllow0, float4(category == 0.0, category == 1.0, category == 2.0, category == 3.0)) +
+                  dot(vec4TintAllow1, float4(category == 4.0, category == 5.0, category == 6.0, category == 7.0));
+    float3 n = tex2D(TintNormalTex, uv).xyz * 2.0 - 1.0;
+    float ground = smoothstep(0.6, 0.85, n.z * rsqrt(max(dot(n, n), 1e-4)));
+    float z = pow(abs(fFarDivNear), raw) * fNearPlane;
+    float3 v = float3((vpos + 0.5) * vec4ProjInfo.xy + vec4ProjInfo.zw, 1.0);
+    float3 dir = float3(dot(v, vec4WorldX.xyz), dot(v, vec4WorldY.xyz), dot(v, vec4WorldZ.xyz));
+    float3 P = float3(vec4WorldX.w, vec4WorldY.w, vec4WorldZ.w) + dir * z;
+    float2 g = (P.xy - vec4EdgeGrid.xy) * vec4EdgeGrid.z;
+    float cover = all(g == saturate(g)) ? tex2D(TintEdgeTex, g).r : 0.0;
+    float fade = saturate((fTintRange - length(dir * z)) * 0.1);
+    float k = vec4GroundTint.w * allow * ground * cover * fade;
+    return float4(lerp(1.0, vec4GroundTint.rgb, k), 1.0);
+}
+
+technique GroundTint
+{
+    pass P0
+    {
+        PixelShader = compile ps_3_0 GroundTintPS();
+    }
+}
