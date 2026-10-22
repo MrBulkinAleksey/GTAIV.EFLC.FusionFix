@@ -609,7 +609,8 @@ namespace DebugServer
             }
             else
             {
-                Natives::SetCharCoordinates(ped, x, y, z);
+                // (z as scene gives it, the character's centre: SetCharCoordinates puts the feet there, 1 m lower)
+                Natives::SetCharCoordinatesNoOffset(ped, x, y, z);
                 if (turn)
                     Natives::SetCharHeading(ped, heading);
             }
