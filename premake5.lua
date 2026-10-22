@@ -47,11 +47,11 @@ workspace "GTAIV.EFLC.FusionFix"
    multiprocessorcompile ("On")
    startproject "GTAIV.EFLC.FusionFix"
 
-   defines { "rsc_CompanyName=\"GTAIV.EFLC.FusionFix\"" }
-   defines { "rsc_LegalCopyright=\"GPL-3.0 license\""}
-   defines { "rsc_InternalName=\"%{prj.name}\"", "rsc_ProductName=\"%{prj.name}\"", "rsc_OriginalFilename=\"%{cfg.buildtarget.name}\"" }
-   defines { "rsc_FileDescription=\"GTAIV.EFLC.FusionFix\"" }
-   defines { "rsc_UpdateUrl=\"https://github.com/ThirteenAG/GTAIV.EFLC.FusionFix\"" }
+   resdefines { "rsc_CompanyName=\"GTAIV.EFLC.FusionFix\"" }
+   resdefines { "rsc_LegalCopyright=\"GPL-3.0 license\""}
+   resdefines { "rsc_InternalName=\"%{prj.name}\"", "rsc_ProductName=\"%{prj.name}\"", "rsc_OriginalFilename=\"%{cfg.buildtarget.name}\"" }
+   resdefines { "rsc_FileDescription=\"GTAIV.EFLC.FusionFix\"" }
+   resdefines { "rsc_UpdateUrl=\"https://github.com/ThirteenAG/GTAIV.EFLC.FusionFix\"" }
 
    local major = os.date("%d")
    local minor = os.date("%m")
@@ -82,14 +82,14 @@ workspace "GTAIV.EFLC.FusionFix"
       productVersion = productVersion .. "-" .. githash
    end
 
-   defines { "rsc_FileVersion_MAJOR=" .. major }
-   defines { "rsc_FileVersion_MINOR=" .. minor }
-   defines { "rsc_FileVersion_BUILD=" .. build }
-   defines { "rsc_FileVersion_REVISION=" .. revision }
-   defines { "rsc_FileVersion=\"" .. major .. "." .. minor .. "." .. build .. "\"" }
-   defines { "rsc_ProductVersion=\"" .. productVersion .. "\"" }
-   defines { "rsc_GitSHA1=\"" .. githash .. "\"" }
-   defines { "rsc_GitSHA1W=L\"" .. githash .. "\"" }
+   resdefines { "rsc_FileVersion_MAJOR=" .. major }
+   resdefines { "rsc_FileVersion_MINOR=" .. minor }
+   resdefines { "rsc_FileVersion_BUILD=" .. build }
+   resdefines { "rsc_FileVersion_REVISION=" .. revision }
+   resdefines { "rsc_FileVersion=\"" .. major .. "." .. minor .. "." .. build .. "\"" }
+   resdefines { "rsc_ProductVersion=\"" .. productVersion .. "\"" }
+   resdefines { "rsc_GitSHA1=\"" .. githash .. "\"" }
+   resdefines { "rsc_GitSHA1W=L\"" .. githash .. "\"" }
 
    defines { "_CRT_SECURE_NO_WARNINGS" }
 
@@ -276,19 +276,19 @@ workspace "GTAIV.EFLC.FusionFix.Helper"
    multiprocessorcompile ("On")
    startproject "GTAIV.EFLC.FusionFix.Helper"
 
-   defines { "rsc_CompanyName=\"GTAIV.EFLC.FusionFix\"" }
-   defines { "rsc_LegalCopyright=\"GPL-3.0 license\""}
-   defines { "rsc_InternalName=\"%{prj.name}\"", "rsc_ProductName=\"%{prj.name}\"", "rsc_OriginalFilename=\"%{cfg.buildtarget.name}\"" }
-   defines { "rsc_FileDescription=\"GTAIV.EFLC.FusionFix upscaler helper\"" }
-   defines { "rsc_UpdateUrl=\"https://github.com/ThirteenAG/GTAIV.EFLC.FusionFix\"" }
-   defines { "rsc_FileVersion_MAJOR=" .. major }
-   defines { "rsc_FileVersion_MINOR=" .. minor }
-   defines { "rsc_FileVersion_BUILD=" .. build }
-   defines { "rsc_FileVersion_REVISION=" .. revision }
-   defines { "rsc_FileVersion=\"" .. major .. "." .. minor .. "." .. build .. "\"" }
-   defines { "rsc_ProductVersion=\"" .. productVersion .. "\"" }
-   defines { "rsc_GitSHA1=\"" .. githash .. "\"" }
-   defines { "rsc_GitSHA1W=L\"" .. githash .. "\"" }
+   resdefines { "rsc_CompanyName=\"GTAIV.EFLC.FusionFix\"" }
+   resdefines { "rsc_LegalCopyright=\"GPL-3.0 license\""}
+   resdefines { "rsc_InternalName=\"%{prj.name}\"", "rsc_ProductName=\"%{prj.name}\"", "rsc_OriginalFilename=\"%{cfg.buildtarget.name}\"" }
+   resdefines { "rsc_FileDescription=\"GTAIV.EFLC.FusionFix upscaler helper\"" }
+   resdefines { "rsc_UpdateUrl=\"https://github.com/ThirteenAG/GTAIV.EFLC.FusionFix\"" }
+   resdefines { "rsc_FileVersion_MAJOR=" .. major }
+   resdefines { "rsc_FileVersion_MINOR=" .. minor }
+   resdefines { "rsc_FileVersion_BUILD=" .. build }
+   resdefines { "rsc_FileVersion_REVISION=" .. revision }
+   resdefines { "rsc_FileVersion=\"" .. major .. "." .. minor .. "." .. build .. "\"" }
+   resdefines { "rsc_ProductVersion=\"" .. productVersion .. "\"" }
+   resdefines { "rsc_GitSHA1=\"" .. githash .. "\"" }
+   resdefines { "rsc_GitSHA1W=L\"" .. githash .. "\"" }
    defines { "_CRT_SECURE_NO_WARNINGS", "_WINDOWS" }
 
 project "GTAIV.EFLC.FusionFix.Helper"
