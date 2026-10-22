@@ -709,7 +709,7 @@ namespace GpuGrass
         IDirect3DTexture9* depthTexture = nullptr;
         D3DSURFACE_DESC depthDesc{};
         if (FAILED(depth->GetDesc(&depthDesc)) || depthDesc.Width != desc.Width || depthDesc.Height != desc.Height ||
-            FAILED(depth->GetContainer(IID_IDirect3DTexture9, reinterpret_cast<void**>(&depthTexture))) || !depthTexture)
+            FAILED(depth->GetContainer(__uuidof(IDirect3DTexture9), reinterpret_cast<void**>(&depthTexture))) || !depthTexture)
             return;
         const float width = float(desc.Width), height = float(desc.Height);
         const D3DXVECTOR4 projInfo = PostFxPass::ProjInfo(*(const D3DMATRIX*)vp->mProjectionMatrix, width, height);
