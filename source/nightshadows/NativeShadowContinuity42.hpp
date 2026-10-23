@@ -36,8 +36,8 @@ public:
         // nothing nearer wants it, and keeps a claim against others beyond it, but gives way to any within.
         bool inReach=true;
         // AddedLightsLast: a light the map gave no shadow (a facade's or a glow's, a traffic signal) with one of ours
-        // takes a slot only no other light wants, and gives it up to any newcomer; meanwhile the shapes in the light
-        // shaders shadow the cars, people and props under it.
+        // gives way to any light whose shadow shows as much (gain), also holding a slot; meanwhile the shapes in the
+        // light shaders shadow the cars, people and props under it.
         bool lastResort=false;
     };
     // ClaimDistanceRatio: a claim keeps its slot against a newcomer of the same gain unless
@@ -106,9 +106,9 @@ public:
         if(native<0 || native>2 || !challenger.observed || !incumbent.observed) return Rule::Native;
         if((challenger.flags|incumbent.flags)&0x400u) return Rule::Special;
         if(challenger.ownBeam!=incumbent.ownBeam) return Rule::OwnBeam;
+        if(challenger.gain!=incumbent.gain) return Rule::Gain;
         if(challenger.lastResort!=incumbent.lastResort) return Rule::LastResort;
         if(challenger.fresh!=incumbent.fresh) return Rule::Fresh;
-        if(challenger.gain!=incumbent.gain) return Rule::Gain;
         if(challenger.inReach!=incumbent.inReach) return Rule::Reach;
         if(ClaimClass(challenger)!=ClaimClass(incumbent)) return Rule::Claim;
         if(ClaimScored(challenger,incumbent)) {
@@ -122,10 +122,14 @@ public:
         if(native<0 || native>2 || !challenger.observed || !incumbent.observed ||
            ((challenger.flags|incumbent.flags)&0x400u)) return native;
         if(challenger.ownBeam!=incumbent.ownBeam) return challenger.ownBeam?0:2;
-        // before the hold: a last resort holding a slot still gives it up to any other light
+        // By what its shadow shows first, and only among those that show as much a last resort gives way, also when
+        // it holds a slot. Before the gain, a facade light over you whose shadow showed lost its slot to lamps 60-100 m
+        // off whose shadows showed nothing, and took it back each time one of them dropped out of the game's light list
+        // for a frame: ten turns in ten seconds, the people's shadows under it swapping between its map and the
+        // shapes. The hold is unchanged: a fresh holder shows in view, and nothing shows more.
+        if(challenger.gain!=incumbent.gain) return challenger.gain>incumbent.gain?0:2;
         if(challenger.lastResort!=incumbent.lastResort) return challenger.lastResort?2:0;
         if(challenger.fresh!=incumbent.fresh) return challenger.fresh?0:2;
-        if(challenger.gain!=incumbent.gain) return challenger.gain>incumbent.gain?0:2;
         if(challenger.inReach!=incumbent.inReach) return challenger.inReach?0:2;
         // Both held a slot: neither has the better right, and the slot each had says nothing. Ranked by that,
         // which the commit renumbers every frame, the one left out for a newcomer changed frame by frame, and
