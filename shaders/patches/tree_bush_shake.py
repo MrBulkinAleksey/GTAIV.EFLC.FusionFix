@@ -23,7 +23,6 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(sys.argv[1]) / 'win32_30_nv8'
 TAG = 'FusionFix tree_bush_shake.patch'
 # The shader and the register its swayed model-space position is in, after the line that makes it
 SHADERS = [
@@ -31,10 +30,11 @@ SHADERS = [
     ('gta_trees_extended/gta_trees_extendedVS0.asm', 'r3', '    mad r3.xyz, r1, r2.x, r0.xzww'),
 ]
 
-DEF = f'''\
-    def c247, 9.99999975e-006, 1, 0, 0.300000012 // {TAG}: epsilon, 1, 0, a body's rounding (m)
-    def c246, 0.899999976, 1.29999995, 0.699999988, 0.25 // {TAG}: the shake's cycles a metre along x, y and up, the second wave's offset (cycles)
-    def c245, 6.28318548, -3.14159274, -0.5, 0 // {TAG}: 2pi, -pi, -1 / 2
+def defs(tag=TAG, e='c247', s='c246', t='c245'):
+    return f'''\
+    def {e}, 9.99999975e-006, 1, 0, 0.300000012 // {tag}: epsilon, 1, 0, a body's rounding (m)
+    def {s}, 0.899999976, 1.29999995, 0.699999988, 0.25 // {tag}: the shake's cycles a metre along x, y and up, the second wave's offset (cycles)
+    def {t}, 6.28318548, -3.14159274, -0.5, 0 // {tag}: 2pi, -pi, -1 / 2
 '''
 
 BODY = '''\
@@ -45,26 +45,26 @@ BODY = '''\
       mad r11.y, r10.y, -c{a}.z, r11.y
       abs r10.xy, r11
       add r10.xy, r10, -c{b}
-      max r10.xy, r10, c247.z
+      max r10.xy, r10, {e}.z
       mul r10.z, r10.x, r10.x
       mad r10.z, r10.y, r10.y, r10.z
-      add r10.z, r10.z, c247.x
+      add r10.z, r10.z, {e}.x
       rsq r10.z, r10.z
       rcp r10.z, r10.z
       mul r10.w, r10.z, c{b}.z
-      add_sat r10.w, -r10.w, c247.y
+      add_sat r10.w, -r10.w, {e}.y
       mul r10.w, r10.w, r10.w
       mul r10.w, r10.w, c{b}.w
       mov r12.xy, c{b}
-      add r12.xy, r12, c247.w
+      add r12.xy, r12, {e}.w
       rcp r12.x, r12.x
       rcp r12.y, r12.y
       mul r12.xy, r11, r12
       mul r12.z, r12.x, r12.x
       mad r12.z, r12.y, r12.y, r12.z
-      add r12.z, r12.z, c247.x
+      add r12.z, r12.z, {e}.x
       rsq r12.z, r12.z
-      min r12.z, r12.z, c247.y
+      min r12.z, r12.z, {e}.y
       mul r12.xy, r12, r12.z
       mul r13.xy, r12.x, c{a}.zwzw
       mad r13.x, r12.y, c{a}.w, r13.x
@@ -74,34 +74,34 @@ BODY = '''\
 '''
 
 
-def shake(position):
+def shake(position, tag=TAG, e='c247', s='c246', t='c245'):
     return f'''\
-    // --- {TAG}: b13 = a bush a body is in. Moves {position}.xyz, the swayed position in the model's space.
+    // --- {tag}: b13 = a bush a body is in. Moves {position}.xyz, the swayed position in the model's space.
     if b13
       mul r4.xyz, c1, v0.y
       mad r4.xyz, v0.x, c0, r4
       mad r4.xyz, v0.z, c2, r4
       add r4.xyz, r4, c3
       // bodies: r9.xy = the push's direction times its strength, r9.w = the strongest
-      mov r9, c247.z
-{BODY.format(a=248, b=249)}{BODY.format(a=250, b=251)}\
+      mov r9, {e}.z
+{BODY.format(a=248, b=249, e=e)}{BODY.format(a=250, b=251, e=e)}\
       mul r10.z, r9.x, r9.x
       mad r10.z, r9.y, r9.y, r10.z
-      add r10.z, r10.z, c247.x
+      add r10.z, r10.z, {e}.x
       rsq r10.z, r10.z
       mul r10.z, r10.z, r9.w
-      min r10.z, r10.z, c247.y
+      min r10.z, r10.z, {e}.y
       mul r9.xy, r9, r10.z
       mul r6.xy, r9, c241.y
       // the shake: two waves, the second twice as quick
-      mul r7.x, r4.x, c246.x
-      mad r7.x, r4.y, c246.y, r7.x
-      mad r7.x, v0.z, c246.z, r7.x
+      mul r7.x, r4.x, {s}.x
+      mad r7.x, r4.y, {s}.y, r7.x
+      mad r7.x, v0.z, {s}.z, r7.x
       add r7.x, r7.x, c241.w
       add r7.y, r7.x, r7.x
-      add r7.y, r7.y, c246.w
+      add r7.y, r7.y, {s}.w
       frc r7.xy, r7
-      mad r7.xy, r7, c245.x, c245.y
+      mad r7.xy, r7, {t}.x, {t}.y
       sincos r8.xy, r7.x
       sincos r11.xy, r7.y
       mov r8.x, r8.y
@@ -114,7 +114,7 @@ def shake(position):
       mul r6.z, r6.x, r6.x
       mad r6.z, r6.y, r6.y, r6.z
       mul r6.z, r6.z, c241.x
-      mul r6.z, r6.z, c245.z
+      mul r6.z, r6.z, {t}.z
       dp3 r7.x, c0, c0
       dp3 r7.y, c1, c1
       dp3 r7.z, c2, c2
@@ -126,7 +126,7 @@ def shake(position):
       dp3 r8.z, r6, c2
       mad {position}.xyz, r8, r7, {position}
     endif
-    // --- {TAG} end
+    // --- {tag} end
 '''
 
 
@@ -144,12 +144,14 @@ def patch(path, position, after):
     out = []
     for i, line in enumerate(lines):
         if i == first_def:
-            out.append(DEF.rstrip('\n'))
+            out.append(defs().rstrip('\n'))
         out.append(line)
         if line == after:
             out.append(shake(position).rstrip('\n'))
     path.write_text(head + 'vs_3_0\n' + '\n'.join(out))
 
 
-for name, position, after in SHADERS:
-    patch(ROOT / name, position, after)
+if __name__ == '__main__':
+    ROOT = Path(sys.argv[1]) / 'win32_30_nv8'
+    for name, position, after in SHADERS:
+        patch(ROOT / name, position, after)
