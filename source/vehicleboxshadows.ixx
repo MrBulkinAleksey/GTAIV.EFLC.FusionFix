@@ -996,6 +996,10 @@ export struct VehicleBoxShadows
             std::copy_n(&found->peds[0][0], found->pedCount * 3, &lastFound.peds[0][0]);
             lastFound.propCount = found->propCount;
             std::copy_n(found->props, found->propCount, lastFound.props);
+            lastFound.bodyCount = found->bodyCount;
+            std::copy_n(found->body, found->bodyCount, lastFound.body);
+            std::copy_n(found->bodyCentre, 3, lastFound.bodyCentre);
+            lastFound.bodyReach = found->bodyReach;
             std::copy_n(found->focus, 3, lastFound.focus);
             lastFound.watched = found->watched;
             lastFound.sequence = found->sequence;
