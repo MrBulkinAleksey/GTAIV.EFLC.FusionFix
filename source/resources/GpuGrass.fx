@@ -25,7 +25,10 @@
 //
 // G-buffer, as gta_default's deferred pixel shader writes it: colour, normal * 0.5 + 0.5, (no specular, the gloss of
 // a material with no specular map, the occlusion), and the log depth of FusionShaders (log2(w / near) / log2(far /
-// near)) to the depth buffer. The material ID target is left as the ground had it.
+// near)) to the depth buffer. The material ID target is left as the ground had it. The log depth is made per vertex
+// (LogDepthClip), not written by the pixel shader: a written depth turns off the GPU's depth test before the pixel
+// shader, and the cards' many layers were all shaded, even those behind others; over a card's few centimetres the
+// log interpolated linearly is as good as exact.
 
 float4x4 matViewProj;
 float4 vec4Wind;        // the wind's direction over the gust's wavelength (xy), the gust's phase, the flutter's phase (cycles)
@@ -67,7 +70,7 @@ struct VSOutput
     float4 position : POSITION;
     float4 colour : TEXCOORD0;  // the card's own colour, how dense the grass is around it (dark roots)
     float4 normal : TEXCOORD1;  // its normal, how far it has faded in (Card.fade)
-    float2 w : TEXCOORD2;       // clip w, specular (×0.5, as the G-buffer has it)
+    float specular : TEXCOORD2; // specular (×0.5, as the G-buffer has it)
     float4 ground : TEXCOORD3;  // the root's clip x, y, w; the clump's light (darker in clumps)
     float4 uv : TEXCOORD4;      // CardTex's coordinates, how far off (0 near, 1 far), how dry
     float4 view : TEXCOORD5;    // from the camera to the vertex, how much the card lets the sun through
@@ -245,6 +248,13 @@ float3 CardPosition(VSInput input, Card b, float4 wind, float3 pressed)
     return b.root + b.across * (input.vertex.y * b.width * 0.5 * (1.0 + 0.3 * b.t)) + float3(offset, b.t * height * (1.0 - 0.5 * pressed.z) - drop);
 }
 
+// `clip` with the log depth for its z (as z / w): what the pixel shader would write, interpolated per vertex
+float4 LogDepthClip(float4 clip, float bias)
+{
+    clip.z = (log2(max(clip.w / fNearPlane, 1.0)) / log2(fFarDivNear) - bias) * clip.w;
+    return clip;
+}
+
 // CardTex's coordinates of the vertex
 float2 CardUV(VSInput input, Card b)
 {
@@ -262,7 +272,7 @@ VSOutput GrassVS(VSInput input)
         output.position = float4(0.0, 0.0, -1.0, 1.0);
         output.colour = 0.0;
         output.normal = float4(0.0, 0.0, 1.0, 1.0);
-        output.w = float2(1.0, 0.0);
+        output.specular = 0.0;
         output.ground = 0.0;
         output.uv = 0.0;
         output.view = 0.0;
@@ -274,8 +284,7 @@ VSOutput GrassVS(VSInput input)
     float3 pressed = vec4Bend.x > 0.0 ? Bending(root, b.height) : 0.0;
     float3 position = CardPosition(input, b, vec4Wind, pressed);
 
-    output.position = mul(float4(position, 1.0), matViewProj);
-    output.w = float2(output.position.w, 0.0);
+    output.position = LogDepthClip(mul(float4(position, 1.0), matViewProj), 0.0);
     // Lit mostly from above, as grass seen as a lawn; each blade rounded across (CardTex's b in the pixel shader);
     // leaves face up more. Far off the blades' own normals go over to the lawn's (up), so the light doesn't sparkle
     float3 normal = b.facing * lerp(0.35, 0.15, b.isPlant);
@@ -297,7 +306,7 @@ VSOutput GrassVS(VSInput input)
     float dense = saturate(input.edge1.w) * (1.0 - b.distant);
     output.colour = float4(saturate(colour), dense);
     // A faint sheen on the blades, none on leaves, nor far off
-    output.w.y = 0.05 * (1.0 - b.isPlant) * (1.0 - b.dry * 0.5) * (1.0 - b.distant);
+    output.specular = 0.05 * (1.0 - b.isPlant) * (1.0 - b.dry * 0.5) * (1.0 - b.distant);
 
     float4 rootClip = mul(float4(root, 1.0), matViewProj);
     output.ground = float4(rootClip.xy, rootClip.w, lerp(1.0, 0.85, b.clump * b.isGrass));
@@ -319,7 +328,7 @@ struct MotionOutput
     float4 position : POSITION;
     float4 current : TEXCOORD0;  // clip x, y, w; Card.fade
     float3 previous : TEXCOORD1;
-    float3 uv : TEXCOORD2;       // CardTex's coordinates, clip w
+    float2 uv : TEXCOORD2;       // CardTex's coordinates
 };
 
 MotionOutput MotionVS(VSInput input)
@@ -339,10 +348,11 @@ MotionOutput MotionVS(VSInput input)
     float3 pressed = vec4Bend.x > 0.0 ? Bending(root, b.height) : 0.0;
     float3 position = CardPosition(input, b, vec4Wind, pressed);
     float3 before = CardPosition(input, b, vec4WindPrev, pressed);
-    output.position = mul(float4(position, 1.0), matViewProj);
+    // A hair nearer than the grass wrote itself, so the depth test keeps it where the grass is what is seen
+    output.position = LogDepthClip(mul(float4(position, 1.0), matViewProj), fDepthBias);
     output.current = float4(mul(float4(position, 1.0), matViewProjNoJitter).xyw, b.fade);
     output.previous = mul(float4(before, 1.0), matPrevViewProj).xyw;
-    output.uv = float3(CardUV(input, b), output.position.w);
+    output.uv = CardUV(input, b);
     return output;
 }
 
@@ -358,12 +368,10 @@ void ClipFade(float fade, float2 vPos)
     }
 }
 
-float4 MotionPS(MotionOutput input, float2 vPos : VPOS, out float depth : DEPTH) : COLOR0
+float4 MotionPS(MotionOutput input, float2 vPos : VPOS) : COLOR0
 {
-    clip(tex2D(CardTex, input.uv.xy).a - 0.5);
+    clip(tex2D(CardTex, input.uv).a - 0.5);
     ClipFade(input.current.w, vPos);
-    // A hair nearer than the grass wrote itself, so the depth test keeps it where the grass is what is seen
-    depth = log2(max(input.uv.z / fNearPlane, 1.0)) / log2(fFarDivNear) - fDepthBias;
     float2 current = input.current.xy / input.current.z;
     float2 previous = input.previous.xy / input.previous.z;
     return float4((previous - current) * float2(0.5, -0.5), 0.0, 1.0);
@@ -374,7 +382,6 @@ struct PSOutput
     float4 colour : COLOR0;
     float4 normal : COLOR1;
     float4 specular : COLOR2;
-    float depth : DEPTH;
 };
 
 PSOutput GrassPS(VSOutput input, float2 vPos : VPOS)
@@ -419,8 +426,7 @@ PSOutput GrassPS(VSOutput input, float2 vPos : VPOS)
     output.normal = float4(normal * 0.5 + 0.5, 1.0);
     // A faint broad highlight, gloss 221 / 1023 (power 24) on all of it: the mark by which contact shadows (SSR.fx
     // fCSGrassGloss) leave the grass out, where swaying blades and the flower heads made them flicker
-    output.specular = float4(input.w.y * up, 221.0 / 1023.0, lerp(lerp(0.45, 0.25, dense), 1.0, up), 1.0);
-    output.depth = log2(max(input.w.x / fNearPlane, 1.0)) / log2(fFarDivNear);
+    output.specular = float4(input.specular * up, 221.0 / 1023.0, lerp(lerp(0.45, 0.25, dense), 1.0, up), 1.0);
     return output;
 }
 
