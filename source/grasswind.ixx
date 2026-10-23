@@ -81,7 +81,7 @@ export namespace GrassShared
 // modulo 64 m; from the window's corner, clamped, edge texels empty) for the G-buffer pass; c243 = 1 / 64 m, the
 // strength (0 = off), the texture coordinate's offset. Needs vertex textures (DXVK has them).
 //
-// Bush Shake ([PROCEDURAL] BushShake): the bushes (models drawn with gta_trees, up to 3.5 m tall) a person or a car goes
+// Bush Shake ([PROCEDURAL] BushShake): the bushes (models drawn with gta_trees, up to 5.5 m tall) a person or a car goes
 // through part away from them and shake while it moves, harder the faster it goes (shaders/patches/tree_bush_shake.patch,
 // gta_trees and gta_trees_extended deferred_draw VS0). Around the G-buffer draw of a model that short with a body
 // reaching it b13 is set, c248-c251 get the bodies as for the grass and c241 the model's height, the push and the shake at
@@ -110,7 +110,8 @@ class GrassWind
 
     // Bushes: models up to this tall (m) from their origin; the push at the top (m, of the height, up to 0.4 m); the shake at
     // the top (m) at full speed, the speed that gives it (m/s), the shake's frequency (Hz)
-    static constexpr float kBushMaxHeight = 3.5f;
+    // (the park bushes stand 3.85 m and their rows 4.05-4.72 m above their origins; trees start at 6.5 m)
+    static constexpr float kBushMaxHeight = 5.5f;
     static constexpr float kBushPushPerHeight = 0.2f, kBushMaxPush = 0.4f;
     static constexpr float kBushShake = 0.07f, kBushShakeSpeed = 3.0f, kBushShakeHz = 5.0f;
 
@@ -593,7 +594,7 @@ class GrassWind
     }
 
     // The two bodies nearest the model that reach it and stand on its ground; false if none
-    static bool FindBodies(uint16_t model, const float* place, float height, const NearbyBodies::Body* (&nearest)[2])
+    static bool FindBodies(uint16_t model, const float* place, float height, const NearbyBodies::Body* (&nearest)[2], float maxRadius = 8.0f)
     {
         nearest[0] = nearest[1] = nullptr;
         float nearestGap[2] = { FLT_MAX, FLT_MAX };
@@ -602,7 +603,7 @@ class GrassWind
         const auto info = EntityClass::ModelInfo(model);
         // How far the model's blades reach from its origin: the bounding sphere's radius plus its centre's offset
         const auto sphere = info ? reinterpret_cast<const float*>(info + 0x10) : nullptr;
-        const float radius = sphere ? std::clamp(sphere[3] + std::sqrt(sphere[0] * sphere[0] + sphere[1] * sphere[1]), 0.0f, 8.0f) : 2.0f;
+        const float radius = sphere ? std::clamp(sphere[3] + std::sqrt(sphere[0] * sphere[0] + sphere[1] * sphere[1]), 0.0f, maxRadius) : 2.0f;
         for (const auto& body : bodies)
         {
             if (body.kind == NearbyBodies::Body::Rotor)
@@ -684,7 +685,8 @@ class GrassWind
     {
         const float height = BushHeight(model);
         const NearbyBodies::Body* nearest[2];
-        if (height <= 0.0f || !FindBodies(model, place, height, nearest))
+        // A row of bushes is one model up to 30 m long: its whole reach, not the grass's 8 m around the origin
+        if (height <= 0.0f || !FindBodies(model, place, height, nearest, FLT_MAX))
             return;
         float speed = 0.0f;
         for (const auto* body : nearest)
