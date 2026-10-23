@@ -507,9 +507,14 @@ export struct VehicleBoxShadows
         capsule(neck, shoulders, 0.045f);
         capsule(headLow, headHigh, 0.085f);
         capsule(at[LThigh], at[RThigh], 0.08f); // the hips
-        float leftShoulder[3], rightShoulder[3];
-        along(at[LUpper], up, -0.03f, leftShoulder);
-        along(at[RUpper], up, -0.03f, rightShoulder);
+        // PedBoneShoulderWidth: the shoulders' bar and the body's sides end that share of the way out to the upper
+        // arms' bones, a little under them
+        float leftShoulder[3], rightShoulder[3], leftOut[3], rightOut[3];
+        const float shoulderWidth = PostFxResources.fPedBoneShoulderWidth;
+        lerp(shoulders, at[LUpper], shoulderWidth, leftOut);
+        lerp(shoulders, at[RUpper], shoulderWidth, rightOut);
+        along(leftOut, up, -0.03f, leftShoulder);
+        along(rightOut, up, -0.03f, rightShoulder);
         capsule(leftShoulder, rightShoulder, 0.055f);
         // the feet forward from the ankles, low: the way from the thigh's knee over the ankle gives no forward, the ped's
         // matrix does

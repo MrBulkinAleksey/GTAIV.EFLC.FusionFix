@@ -889,6 +889,8 @@ public:
     bool bPedBoneShadows = true;
     // PedBoneRadiusScale: the bone capsules' thickness, 1 as BodyShapes sets them
     float fPedBoneRadiusScale = 1.1f;
+    // PedBoneShoulderWidth: how far out to the upper arms' bones the shoulders reach, 1 all the way
+    float fPedBoneShoulderWidth = 0.8f;
     // PropShapeShadows: props within PropShapeDistance of the player get the shadow of a capsule or a box from the
     // lights near them, up to PropShapesPerLight shapes a light (see VehicleBoxShadows); a lamp post's post is
     // PropShapePostRadius thick, its arm PropShapeArmRadius
@@ -1934,6 +1936,7 @@ public:
             IniFloat("NIGHTSHADOWS", "PedCapsuleBaseSoftness", &PostFxResource::fPedCapsuleBaseSoftness, 0.05f, 0.01f, 1.0f),
             IniFlag("NIGHTSHADOWS", "PedBoneShadows", &PostFxResource::bPedBoneShadows, 1),
             IniFloat("NIGHTSHADOWS", "PedBoneRadiusScale", &PostFxResource::fPedBoneRadiusScale, 1.1f, 0.3f, 2.0f),
+            IniFloat("NIGHTSHADOWS", "PedBoneShoulderWidth", &PostFxResource::fPedBoneShoulderWidth, 0.8f, 0.3f, 1.2f),
             IniFlag("NIGHTSHADOWS", "PropShapeShadows", &PostFxResource::bPropShapeShadows, 1),
             IniFloat("NIGHTSHADOWS", "PropShapeDistance", &PostFxResource::fPropShapeDistance, 80.0f, 10.0f, 200.0f),
             IniFloat("NIGHTSHADOWS", "PropShapePostRadius", &PostFxResource::fPropShapePostRadius, 0.12f, 0.03f, 0.5f),
