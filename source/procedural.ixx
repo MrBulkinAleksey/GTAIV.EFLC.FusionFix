@@ -68,6 +68,13 @@ import entityclass;
 //    they leave the sun's cascades (the phases of type 0x15, CE 0x159b760, the same the game drops for props: past
 //    the second cascade their shadows are a few texels), past 80 m they thin out as the small props do, 80 / distance
 //    kept by the hash of their place, and under 1% of their distance (a 1.6 m bench past 160 m) none are drawn.
+//  - FarFadeCull ([PERFORMANCE]): any building or prop under kFadeCullRadius (not vehicles or people, no LOD parent)
+//    past kFadeCullFrom that the game is fading out by distance (its alpha, entity +0x63, set by the visibility pass
+//    CE 0xae6ca0 -> 0xae9400/0xae9260 before the lists are made) leaves the scene's list once that alpha is under its
+//    own share of kFadeCullAlpha (the hash of its place), so each goes somewhere in the faint half of its fade instead
+//    of at its end. Detail Quality's 110 m are added to every entity's reach and faded over: lamp posts (150 m of their
+//    own), traffic lights (100 m) and plant props (12-20 m) were drawn 130-290 m out as a faint stipple at the full
+//    price of a draw, 5-9 us each for the posts, some 1.5 ms of a 6 ms G-buffer looking over a park.
 //    Taken where the entity goes into the phases' lists (CE 0xae43a0): the render lists' hooks above miss most
 //    objects (a log: CJ_MH_CP_POST1 kept 30 cascade draws a frame 75 m out).
 //
@@ -131,6 +138,10 @@ namespace Procedural
     bool bFarThinning = true;
     bool bSmallFarCull = true;
     bool bHeavyPropCull = true;
+    bool bFarFadeCull = true;
+    constexpr float kFadeCullRadius = 8.0f;        // entities under this radius
+    constexpr float kFadeCullFrom = 50.0f;         // further than this
+    constexpr uint32_t kFadeCullAlpha = 128;       // leave once their fade's alpha is under their share of this
     constexpr uint32_t kHeavyDraws = 8;            // device draws an entity in the G-buffer from which a model is heavy
     constexpr float kHeavyRadius = 3.0f;           // and its radius under this
     constexpr float kHeavyCascadesFrom = 40.0f;
@@ -399,7 +410,7 @@ namespace Procedural
     uint32_t nCandidatesCapped = 0, nEntitiesCapped = 0;
     uint32_t nQueueMax = 0, nWaitingMax = 0, nDropped = 0;
     uint32_t nGrassHidden = 0;
-    uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0, nHeavyCascades = 0, nHeavyScene = 0;
+    uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0, nHeavyCascades = 0, nHeavyScene = 0, nFadeCulled = 0;
     uint32_t nConeFull = 0, nParkedNow = 0;
     uint32_t nUpdates = 0;
     double fUpdateMs = 0.0, fUpdateMaxMs = 0.0;
@@ -569,6 +580,7 @@ namespace Procedural
         bFarThinning = iniReader.ReadInteger("PROCEDURAL", "ProceduralFarThinning", 1) != 0;
         bSmallFarCull = iniReader.ReadInteger("PROCEDURAL", "ProceduralSmallFarCull", 1) != 0;
         bHeavyPropCull = iniReader.ReadInteger("PERFORMANCE", "HeavyPropCull", 1) != 0;
+        bFarFadeCull = iniReader.ReadInteger("PERFORMANCE", "FarFadeCull", 1) != 0;
         fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
         fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
         bConeRelease = iniReader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
@@ -1010,6 +1022,30 @@ namespace Procedural
             }
         }
         return phases;
+    }
+
+    // FarFadeCull: a small building or prop far off out of the scene in the faint half of the game's fade
+    uint32_t DropFaded(uintptr_t entity, uint32_t phases, float distance)
+    {
+        if (!(distance > kFadeCullFrom) || !modelInfos || !pScenePhase)
+            return phases;
+        const auto scene = *pScenePhase;
+        const uint32_t alpha = *(uint8_t*)(entity + 0x63);
+        if (!(phases & scene) || alpha >= kFadeCullAlpha || *(uintptr_t*)(entity + 0x4c))
+            return phases;
+        const auto info = *(uintptr_t*)(modelInfos + *(uint16_t*)(entity + 0x2e) * 4);
+        const float radius = info ? *(float*)(info + 0x1c) : 0.0f;
+        if (!(radius > 0.0f && radius < kFadeCullRadius))
+            return phases;
+        const auto kind = EntityClass::OfEntity((void*)entity);
+        if (kind != EntityClass::Kind::Building && kind != EntityClass::Kind::Prop)
+            return phases;
+        float place[3];
+        const float keep = CEntity::GetPosition(entity, place) ? float((PositionKey(place) >> 12) & 0xFFFFFF) / float(0x1000000) : 0.0f;
+        if (float(alpha) >= keep * float(kFadeCullAlpha))
+            return phases;
+        nFadeCulled++;
+        return phases & ~scene;
     }
 
     // The render lists: reflection phases off for props, and the scene for small ones far off
@@ -1595,12 +1631,14 @@ public:
                 {
                     static auto AddHook = safetyhook::create_mid(add.get_first(0), [](SafetyHookContext& regs)
                     {
-                        if (!bHeavyPropCull)
-                            return;
                         auto& phases = *(uint32_t*)(regs.esp + 4);
                         const auto entity = *(uintptr_t*)(regs.esp + 8);
-                        if (phases && entity)
+                        if (!phases || !entity)
+                            return;
+                        if (bHeavyPropCull)
                             phases = DropHeavy(entity, phases, *(float*)(regs.esp + 0xc));
+                        if (bFarFadeCull && phases)
+                            phases = DropFaded(entity, phases, *(float*)(regs.esp + 0xc));
                     });
                 }
             }
@@ -1644,13 +1682,13 @@ public:
             auto alive = props.size();
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
-                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, grass left to GPU grass {}, heavy out of cascades {}, heavy left out {}; box full {}, candidates capped {}",
+                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, grass left to GPU grass {}, heavy out of cascades {}, heavy left out {}, faded far left out {}; box full {}, candidates capped {}",
                 fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
-                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nGrassHidden, nHeavyCascades, nHeavyScene, nEntitiesCapped, nCandidatesCapped));
+                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nGrassHidden, nHeavyCascades, nHeavyScene, nFadeCulled, nEntitiesCapped, nCandidatesCapped));
             fUpdateMs = fUpdateMaxMs = 0.0;
             nUpdates = 0;
             nQueueMax = nWaitingMax = 0;
-            nReflectionsSkipped = nSmallFarCulled = nGrassHidden = nHeavyCascades = nHeavyScene = 0;
+            nReflectionsSkipped = nSmallFarCulled = nGrassHidden = nHeavyCascades = nHeavyScene = nFadeCulled = 0;
             nConeFull = 0;
             nConeReleased = 0;
         };
