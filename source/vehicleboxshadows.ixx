@@ -468,11 +468,12 @@ export struct VehicleBoxShadows
                 return;
             at[i][0] = m[12]; at[i][1] = m[13]; at[i][2] = m[14];
         }
-        const auto capsule = [&list](const float a[3], const float b[3], float radius)
+        const float scale = PostFxResources.fPedBoneRadiusScale;
+        const auto capsule = [&list, scale](const float a[3], const float b[3], float radius)
         {
             auto& shape = list.body[list.bodyCount++];
             std::copy_n(a, 3, shape.t0);
-            shape.t0[3] = radius;
+            shape.t0[3] = radius * scale;
             std::copy_n(b, 3, shape.t1);
             shape.t1[3] = -2.0f;
         };
@@ -502,14 +503,14 @@ export struct VehicleBoxShadows
         along(at[Head], up, -0.05f, neck);
         along(at[Head], up, 0.03f, headLow);
         along(at[Head], up, 0.1f, headHigh);
-        capsule(belly, chest, 0.13f);
-        capsule(neck, shoulders, 0.055f);
-        capsule(headLow, headHigh, 0.095f);
-        capsule(at[LThigh], at[RThigh], 0.1f); // the hips
+        capsule(belly, chest, 0.1f);
+        capsule(neck, shoulders, 0.045f);
+        capsule(headLow, headHigh, 0.085f);
+        capsule(at[LThigh], at[RThigh], 0.08f); // the hips
         float leftShoulder[3], rightShoulder[3];
         along(at[LUpper], up, -0.03f, leftShoulder);
         along(at[RUpper], up, -0.03f, rightShoulder);
-        capsule(leftShoulder, rightShoulder, 0.07f);
+        capsule(leftShoulder, rightShoulder, 0.055f);
         // the feet forward from the ankles, low: the way from the thigh's knee over the ankle gives no forward, the ped's
         // matrix does
         const float* m = CEntity::GetMatrix(ped);
@@ -523,21 +524,21 @@ export struct VehicleBoxShadows
             const int upper = side ? RUpper : LUpper, fore = side ? RFore : LFore, hand = side ? RHand : LHand;
             const float* shoulder = side ? rightShoulder : leftShoulder;
             // the side of the body, from the hip to the shoulder
-            capsule(at[thigh], shoulder, 0.08f);
+            capsule(at[thigh], shoulder, 0.055f);
             // the thigh thick at the hip and thinner to the knee, the calf thicker than the shin
             float thighMiddle[3], calfMiddle[3];
             lerp(at[thigh], at[calf], 0.45f, thighMiddle);
             lerp(at[calf], at[foot], 0.4f, calfMiddle);
-            capsule(at[thigh], thighMiddle, 0.09f);
-            capsule(thighMiddle, at[calf], 0.07f);
-            capsule(at[calf], calfMiddle, 0.06f);
-            capsule(calfMiddle, at[foot], 0.045f);
+            capsule(at[thigh], thighMiddle, 0.075f);
+            capsule(thighMiddle, at[calf], 0.058f);
+            capsule(at[calf], calfMiddle, 0.05f);
+            capsule(calfMiddle, at[foot], 0.038f);
             float toe[3];
             along(at[foot], forward, 0.14f, toe);
             toe[2] -= 0.05f;
-            capsule(at[foot], toe, 0.045f);
-            capsule(at[upper], at[fore], 0.05f);
-            capsule(at[fore], at[hand], 0.042f);
+            capsule(at[foot], toe, 0.04f);
+            capsule(at[upper], at[fore], 0.042f);
+            capsule(at[fore], at[hand], 0.035f);
             // the hand on from the wrist, the way the forearm points
             float way[3] = { at[hand][0] - at[fore][0], at[hand][1] - at[fore][1], at[hand][2] - at[fore][2] };
             const float wayLength = std::sqrt(way[0] * way[0] + way[1] * way[1] + way[2] * way[2]);
@@ -547,7 +548,7 @@ export struct VehicleBoxShadows
                     v /= wayLength;
                 float tip[3];
                 along(at[hand], way, 0.09f, tip);
-                capsule(at[hand], tip, 0.04f);
+                capsule(at[hand], tip, 0.035f);
             }
         }
         // The weapon in the hands: a thin capsule along its longest way, the weapon model nearest a hand within 0.6 m
