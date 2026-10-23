@@ -83,7 +83,7 @@ export struct VehicleBoxShadows
         bool post;      // a lamp post, which no lamp's map ever shows
     };
     static constexpr int kProps = 512, kShapesPerLight = 32, kShapeTexels = kShapesPerLight * 2;
-    static constexpr int kBodyShapes = 16;
+    static constexpr int kBodyShapes = 18;
     struct List
     {
         std::atomic<uintptr_t> lights{0}; // the light list these boxes go with
@@ -302,6 +302,16 @@ export struct VehicleBoxShadows
     // - upright and wider: a box turned as the prop, no taller than 3.2 m nor wider than 6 m (a billboard high on
     //   its post would cast a wall);
     // - leaning or lying, one way clearly the longest: a capsule along it.
+    // The model's type, the model info's virtual at +0xC (CE: 1 an object, 4 a weapon); 0 where it has none
+    static uint8_t ModelType(uintptr_t info)
+    {
+        const auto vtable = info ? *reinterpret_cast<const uintptr_t* const*>(info) : nullptr;
+        if (!vtable || !vtable[3])
+            return 0;
+        return reinterpret_cast<uint8_t(__thiscall*)(uintptr_t)>(vtable[3])(info);
+    }
+    static constexpr uint8_t ModelWeapon = 4;
+
     static void CaptureProps(List& list, const float focus[3])
     {
         const auto& R = PostFxResources;
@@ -322,6 +332,10 @@ export struct VehicleBoxShadows
                 return;
             const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + index * 4);
             if (!info)
+                return;
+            // A weapon in someone's hands: its bounds took it for a leaning prop, a capsule a metre long and as thick as
+            // the magazine; the player's own goes with the bones (BodyShapes)
+            if (ModelType(info) == ModelWeapon)
                 return;
             const float* lo = reinterpret_cast<const float*>(info + 0x20);
             const float* hi = reinterpret_cast<const float*>(info + 0x30);
@@ -513,8 +527,62 @@ export struct VehicleBoxShadows
                 capsule(at[hand], tip, 0.045f);
             }
         }
+        // The weapon in the hands: a thin capsule along its longest way, the weapon model nearest a hand within 0.6 m
+        uintptr_t weapon = 0;
+        float weaponDistance = 0.6f * 0.6f;
+        CObject::ForEachObject([&](uintptr_t object)
+        {
+            const float* om = CEntity::GetMatrix(object);
+            const auto index = *reinterpret_cast<const int16_t*>(object + 0x2E);
+            if (!om || index < 0 || index >= 31000)
+                return;
+            for (const int hand : { LHand, RHand })
+            {
+                const float dx = om[12] - at[hand][0], dy = om[13] - at[hand][1], dz = om[14] - at[hand][2];
+                const float d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 < weaponDistance && ModelType(*reinterpret_cast<const uintptr_t*>(modelInfos + index * 4)) == ModelWeapon)
+                {
+                    weapon = object;
+                    weaponDistance = d2;
+                }
+            }
+        });
+        if (weapon)
+        {
+            const float* om = CEntity::GetMatrix(weapon);
+            const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + *reinterpret_cast<const int16_t*>(weapon + 0x2E) * 4);
+            const float* lo = reinterpret_cast<const float*>(info + 0x20);
+            const float* hi = reinterpret_cast<const float*>(info + 0x30);
+            float half[3], mid[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                half[k] = (hi[k] - lo[k]) * 0.5f;
+                mid[k] = (hi[k] + lo[k]) * 0.5f;
+            }
+            int longest = 0;
+            for (int k = 1; k < 3; ++k)
+                if (half[k] > half[longest])
+                    longest = k;
+            const float radius = 0.04f;
+            if (half[longest] > radius && half[longest] < 1.0f)
+            {
+                float a[3], b[3];
+                std::copy_n(mid, 3, a);
+                std::copy_n(mid, 3, b);
+                a[longest] -= half[longest] - radius;
+                b[longest] += half[longest] - radius;
+                float wa[3], wb[3];
+                for (int k = 0; k < 3; ++k)
+                {
+                    wa[k] = om[12 + k] + om[k] * a[0] + om[4 + k] * a[1] + om[8 + k] * a[2];
+                    wb[k] = om[12 + k] + om[k] * b[0] + om[4 + k] * b[1] + om[8 + k] * b[2];
+                }
+                if (std::isfinite(wa[0] + wa[1] + wa[2] + wb[0] + wb[1] + wb[2]))
+                    capsule(wa, wb, radius);
+            }
+        }
         std::copy_n(at[Pelvis], 3, list.bodyCentre);
-        list.bodyReach = 1.3f;
+        list.bodyReach = 1.6f;
     }
 
     static void Capture()
