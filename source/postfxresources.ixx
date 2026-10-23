@@ -894,6 +894,9 @@ public:
     // PedBoneShadowsFollowDraw: the bone capsules moved to where the player was drawn this frame, from where the
     // bones were posed at the light list's hand over
     bool bPedBoneShadowsFollowDraw = true;
+    // ShapeGroups: the light shaders read a light's shapes in four groups, each only near the way to the light from the
+    // pixels it may shadow (zz_shape_groups.patch); 0 reads them all everywhere
+    bool bShapeGroups = true;
     // PropShapeShadows: props within PropShapeDistance of the player get the shadow of a capsule or a box from the
     // lights near them, up to PropShapesPerLight shapes a light (see VehicleBoxShadows); a lamp post's post is
     // PropShapePostRadius thick, its arm PropShapeArmRadius
@@ -1941,6 +1944,7 @@ public:
             IniFloat("NIGHTSHADOWS", "PedBoneRadiusScale", &PostFxResource::fPedBoneRadiusScale, 1.1f, 0.3f, 2.0f),
             IniFloat("NIGHTSHADOWS", "PedBoneShoulderWidth", &PostFxResource::fPedBoneShoulderWidth, 0.8f, 0.3f, 1.2f),
             IniFlag("NIGHTSHADOWS", "PedBoneShadowsFollowDraw", &PostFxResource::bPedBoneShadowsFollowDraw, 1),
+            IniFlag("NIGHTSHADOWS", "ShapeGroups", &PostFxResource::bShapeGroups, 1),
             IniFlag("NIGHTSHADOWS", "PropShapeShadows", &PostFxResource::bPropShapeShadows, 1),
             IniFloat("NIGHTSHADOWS", "PropShapeDistance", &PostFxResource::fPropShapeDistance, 80.0f, 10.0f, 200.0f),
             IniFloat("NIGHTSHADOWS", "PropShapePostRadius", &PostFxResource::fPropShapePostRadius, 0.12f, 0.03f, 0.5f),

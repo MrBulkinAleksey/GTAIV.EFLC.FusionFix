@@ -1250,8 +1250,9 @@ export struct VehicleBoxShadows
     // their shapes up to PropShapesPerLight; those it took last frame held at a quarter of that, so the choice does
     // not flicker between two. Left out: props outside its light or its cone, those whose shadow cannot fall where
     // the camera sees, the arm of the lamp's own post, a shape the light stands in.
-    static int ShapesForLight(const rage::CLightSource& light, bool hasMap, Shape (&shapes)[kShapesPerLight])
+    static int ShapesForLight(const rage::CLightSource& light, bool hasMap, Shape (&shapes)[kShapesPerLight], int& bodyShapes)
     {
+        bodyShapes = 0;
         const auto& R = PostFxResources;
         if (!drawn || (!drawn->propCount && !drawn->bodyCount))
             return 0;
@@ -1346,6 +1347,7 @@ export struct VehicleBoxShadows
         }
         last = {};
         const int bodyUsed = used;
+        bodyShapes = used;
         for (int i = 0; i < taken && used - bodyUsed < most; ++i)
         {
             const auto& p = *chosen[i].second;
@@ -1359,6 +1361,130 @@ export struct VehicleBoxShadows
         }
         propsWithShadows.fetch_add(uint32_t(used - bodyUsed), std::memory_order_relaxed);
         return used;
+    }
+
+    // A sphere round a shape: a capsule's ends and radius, a box's half sides.
+    static void ShapeSphere(const Shape& shape, float centre[3], float& radius)
+    {
+        if (shape.t1[3] < 0.0f)
+        {
+            float l2 = 0.0f;
+            for (int k = 0; k < 3; ++k)
+            {
+                centre[k] = (shape.t0[k] + shape.t1[k]) * 0.5f;
+                l2 += (shape.t1[k] - shape.t0[k]) * (shape.t1[k] - shape.t0[k]);
+            }
+            radius = std::sqrt(l2) * 0.5f + shape.t0[3];
+        }
+        else
+        {
+            std::copy_n(shape.t0, 3, centre);
+            radius = std::sqrt(shape.t0[3] * shape.t0[3] + shape.t1[2] * shape.t1[2] + shape.t1[3] * shape.t1[3]);
+        }
+    }
+
+    // The light shaders read a light's shapes in kShapeGroups groups, each only where the way from the pixel to the
+    // light passes near the sphere round it (zz_shape_groups.patch): the player's bones one, the props the rest, put
+    // together by where they stand (each group about a seed, the seeds as far apart as they come). The shapes are
+    // reordered by group; spheres gets each group's centre and radius, ends where each group ends.
+    static constexpr int kShapeGroups = 4;
+    static void GroupShapes(Shape* shapes, int count, int bodyShapes, float (&spheres)[kShapeGroups][4], float (&ends)[kShapeGroups])
+    {
+        float centres[kShapesPerLight][3], radii[kShapesPerLight];
+        for (int i = 0; i < count; ++i)
+            ShapeSphere(shapes[i], centres[i], radii[i]);
+        int group[kShapesPerLight] = {};
+        int groups = 0;
+        if (bodyShapes > 0)
+            groups = 1;
+        const int props = count - bodyShapes;
+        const int seedsWanted = (std::min)(kShapeGroups - groups, props);
+        int seeds[kShapeGroups] = {};
+        int seedCount = 0;
+        if (seedsWanted > 0)
+        {
+            seeds[seedCount++] = bodyShapes;
+            float nearest[kShapesPerLight];
+            for (int i = bodyShapes; i < count; ++i)
+                nearest[i] = 1.0e30f;
+            while (seedCount < seedsWanted)
+            {
+                const float* c = centres[seeds[seedCount - 1]];
+                int farthest = -1;
+                float most = 0.25f; // within half a metre of a seed: no seed of its own
+                for (int i = bodyShapes; i < count; ++i)
+                {
+                    const float dx = centres[i][0] - c[0], dy = centres[i][1] - c[1], dz = centres[i][2] - c[2];
+                    nearest[i] = (std::min)(nearest[i], dx * dx + dy * dy + dz * dz);
+                    if (nearest[i] > most)
+                    {
+                        most = nearest[i];
+                        farthest = i;
+                    }
+                }
+                if (farthest < 0)
+                    break;
+                seeds[seedCount++] = farthest;
+            }
+        }
+        for (int i = 0; i < count; ++i)
+        {
+            if (i < bodyShapes)
+            {
+                group[i] = 0;
+                continue;
+            }
+            int best = 0;
+            float bestD2 = 1.0e30f;
+            for (int j = 0; j < seedCount; ++j)
+            {
+                const float* c = centres[seeds[j]];
+                const float dx = centres[i][0] - c[0], dy = centres[i][1] - c[1], dz = centres[i][2] - c[2];
+                const float d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 < bestD2)
+                {
+                    bestD2 = d2;
+                    best = j;
+                }
+            }
+            group[i] = groups + best;
+        }
+        groups += seedCount;
+
+        // Reordered by group, each group's sphere about the middle of its shapes' bounds
+        Shape sorted[kShapesPerLight];
+        int at = 0;
+        for (int g = 0; g < kShapeGroups; ++g)
+        {
+            const int first = at;
+            float lo[3] = { 1.0e30f, 1.0e30f, 1.0e30f }, hi[3] = { -1.0e30f, -1.0e30f, -1.0e30f };
+            for (int i = 0; i < count; ++i)
+                if (group[i] == g && g < groups)
+                {
+                    sorted[at++] = shapes[i];
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        lo[k] = (std::min)(lo[k], centres[i][k] - radii[i]);
+                        hi[k] = (std::max)(hi[k], centres[i][k] + radii[i]);
+                    }
+                }
+            ends[g] = float(at);
+            spheres[g][0] = spheres[g][1] = spheres[g][2] = spheres[g][3] = 0.0f;
+            if (at == first)
+                continue;
+            for (int k = 0; k < 3; ++k)
+                spheres[g][k] = (lo[k] + hi[k]) * 0.5f;
+            float radius = 0.0f;
+            for (int i = 0; i < count; ++i)
+                if (group[i] == g)
+                {
+                    const float dx = centres[i][0] - spheres[g][0], dy = centres[i][1] - spheres[g][1], dz = centres[i][2] - spheres[g][2];
+                    radius = (std::max)(radius, std::sqrt(dx * dx + dy * dy + dz * dz) + radii[i]);
+                }
+            // a little more, for the shaders' own surfaces' margins
+            spheres[g][3] = radius + 0.1f;
+        }
+        std::copy_n(sorted, count, shapes);
     }
 
     // The light's shapes into the texture on s7; false where it could not be made or filled
@@ -1410,6 +1536,7 @@ export struct VehicleBoxShadows
         const bool hasMap = mapHasCars;
         // The props' shapes near the light, on s7, their count in c115.x
         Shape shapes[kShapesPerLight] = {};
+        float shapeSpheres[kShapeGroups][4] = {}, shapeEnds[kShapeGroups] = {};
         int propsUsed = 0;
         // Boxes 0-2 at c143-c148 with the lamp's own at c149, boxes 3 and 4 at c121-c124.
         float constants[kPerLight * 2 + 1][4] = {};
@@ -1777,7 +1904,14 @@ export struct VehicleBoxShadows
             (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
         {
             FindDrawn();
-            propsUsed = ShapesForLight(light, hasMap, shapes);
+            int bodyShapes = 0;
+            propsUsed = ShapesForLight(light, hasMap, shapes, bodyShapes);
+            if (propsUsed)
+                GroupShapes(shapes, propsUsed, bodyShapes, shapeSpheres, shapeEnds);
+            // ShapeGroups 0: every group read everywhere, as before, to compare
+            if (!R.bShapeGroups)
+                for (auto& sphere : shapeSpheres)
+                    sphere[3] = 1.0e6f;
             if (propsUsed && !BindShapes(pDevice, shapes, propsUsed))
                 propsUsed = 0;
             // The player's bones, if among them, soften as the people's capsules (c154.z), from the feet a metre
@@ -1817,8 +1951,10 @@ export struct VehicleBoxShadows
         const float capsule[4] = { R.fPedCapsuleRadius, -(R.fPedCapsuleRadius + 0.3f), pedLightSize, R.fPedCapsuleBaseSoftness };
         pDevice->SetPixelShaderConstantF(150, peds[0], kPedsPerLight);
         pDevice->SetPixelShaderConstantF(154, capsule, 1);
-        const float shapeCount[4] = { float(propsUsed), 0.0f, 0.0f, 0.0f };
+        // c115: the shapes' count and where the first three groups end (zz_shape_groups.patch), c125-c128 the groups' spheres
+        const float shapeCount[4] = { float(propsUsed), propsUsed ? shapeEnds[0] : 0.0f, propsUsed ? shapeEnds[1] : 0.0f, propsUsed ? shapeEnds[2] : 0.0f };
         pDevice->SetPixelShaderConstantF(115, shapeCount, 1);
+        pDevice->SetPixelShaderConstantF(125, &shapeSpheres[0][0], kShapeGroups);
         constantsOn = true;
         float strongest = 0.0f;
         for (int i = 0; i < used; ++i)
