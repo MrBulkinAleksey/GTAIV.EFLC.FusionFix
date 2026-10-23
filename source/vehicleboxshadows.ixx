@@ -83,7 +83,7 @@ export struct VehicleBoxShadows
         bool post;      // a lamp post, which no lamp's map ever shows
     };
     static constexpr int kProps = 512, kShapesPerLight = 32, kShapeTexels = kShapesPerLight * 2;
-    static constexpr int kBodyShapes = 18;
+    static constexpr int kBodyShapes = 26;
     struct List
     {
         std::atomic<uintptr_t> lights{0}; // the light list these boxes go with
@@ -446,7 +446,7 @@ export struct VehicleBoxShadows
             list.props[i] = found[i].second;
     }
 
-    // PedBoneShadows: the player as 16 capsules between the bones as posed this frame (CPed::GetBoneMatrix), into
+    // PedBoneShadows: the player as 25 capsules between the bones as posed this frame (CPed::GetBoneMatrix), into
     // list.body; none where a bone is missing or stands off the ped (another skeleton, a ped not yet posed). Each
     // capsule's other end carries -2 for -1: the light shaders leave such shapes out on peds' and the player's own
     // pixels, as they would shadow the body they stand in (zz_ped_capsule_look.patch).
@@ -487,15 +487,28 @@ export struct VehicleBoxShadows
             for (int k = 0; k < 3; ++k)
                 out[k] = from[k] + way[k] * metres;
         };
-        float neck[3], headLow[3], headHigh[3], hips[3];
-        along(at[Head], up, -0.08f, neck);
+        const auto lerp = [](const float from[3], const float to[3], float part, float out[3])
+        {
+            for (int k = 0; k < 3; ++k)
+                out[k] = from[k] + (to[k] - from[k]) * part;
+        };
+        // The body: a belly from the pelvis up to under the shoulders, its sides from the hips out to the shoulders
+        // (a V rather than a pipe with a bar across), the shoulders a little under their bones, the neck, the head
+        float shoulders[3], chest[3], belly[3], neck[3], headLow[3], headHigh[3];
+        lerp(at[LUpper], at[RUpper], 0.5f, shoulders);
+        along(shoulders, up, -0.12f, chest);
+        along(at[Pelvis], up, 0.05f, belly);
+        along(at[Head], up, -0.05f, neck);
         along(at[Head], up, 0.03f, headLow);
-        along(at[Head], up, 0.11f, headHigh);
-        along(at[Pelvis], up, 0.05f, hips);
-        capsule(hips, neck, 0.14f);                    // the body
-        capsule(at[LUpper], at[RUpper], 0.08f);        // the shoulders
-        capsule(at[LThigh], at[RThigh], 0.1f);         // the hips
-        capsule(headLow, headHigh, 0.1f);              // the head
+        along(at[Head], up, 0.1f, headHigh);
+        capsule(belly, chest, 0.13f);
+        capsule(neck, shoulders, 0.055f);
+        capsule(headLow, headHigh, 0.095f);
+        capsule(at[LThigh], at[RThigh], 0.1f); // the hips
+        float leftShoulder[3], rightShoulder[3];
+        along(at[LUpper], up, -0.03f, leftShoulder);
+        along(at[RUpper], up, -0.03f, rightShoulder);
+        capsule(leftShoulder, rightShoulder, 0.07f);
         // the feet forward from the ankles, low: the way from the thigh's knee over the ankle gives no forward, the ped's
         // matrix does
         const float* m = CEntity::GetMatrix(ped);
@@ -507,14 +520,23 @@ export struct VehicleBoxShadows
         {
             const int thigh = side ? RThigh : LThigh, calf = side ? RCalf : LCalf, foot = side ? RFoot : LFoot;
             const int upper = side ? RUpper : LUpper, fore = side ? RFore : LFore, hand = side ? RHand : LHand;
-            capsule(at[thigh], at[calf], 0.085f);
-            capsule(at[calf], at[foot], 0.06f);
+            const float* shoulder = side ? rightShoulder : leftShoulder;
+            // the side of the body, from the hip to the shoulder
+            capsule(at[thigh], shoulder, 0.08f);
+            // the thigh thick at the hip and thinner to the knee, the calf thicker than the shin
+            float thighMiddle[3], calfMiddle[3];
+            lerp(at[thigh], at[calf], 0.45f, thighMiddle);
+            lerp(at[calf], at[foot], 0.4f, calfMiddle);
+            capsule(at[thigh], thighMiddle, 0.09f);
+            capsule(thighMiddle, at[calf], 0.07f);
+            capsule(at[calf], calfMiddle, 0.06f);
+            capsule(calfMiddle, at[foot], 0.045f);
             float toe[3];
             along(at[foot], forward, 0.14f, toe);
             toe[2] -= 0.05f;
             capsule(at[foot], toe, 0.045f);
-            capsule(at[upper], at[fore], 0.055f);
-            capsule(at[fore], at[hand], 0.045f);
+            capsule(at[upper], at[fore], 0.05f);
+            capsule(at[fore], at[hand], 0.042f);
             // the hand on from the wrist, the way the forearm points
             float way[3] = { at[hand][0] - at[fore][0], at[hand][1] - at[fore][1], at[hand][2] - at[fore][2] };
             const float wayLength = std::sqrt(way[0] * way[0] + way[1] * way[1] + way[2] * way[2]);
@@ -524,7 +546,7 @@ export struct VehicleBoxShadows
                     v /= wayLength;
                 float tip[3];
                 along(at[hand], way, 0.09f, tip);
-                capsule(at[hand], tip, 0.045f);
+                capsule(at[hand], tip, 0.04f);
             }
         }
         // The weapon in the hands: a thin capsule along its longest way, the weapon model nearest a hand within 0.6 m
@@ -1699,6 +1721,11 @@ export struct VehicleBoxShadows
             propsUsed = ShapesForLight(light, hasMap, shapes);
             if (propsUsed && !BindShapes(pDevice, shapes, propsUsed))
                 propsUsed = 0;
+            // The player's bones, if among them, soften as the people's capsules (c154.z), from the feet a metre
+            // under the pelvis
+            if (propsUsed && !pedsUsed && drawn && drawn->bodyCount)
+                pedLightSize = R.fPedCapsuleLightSize + R.fPedCapsuleSoftening *
+                    (std::max)(light.mPosition.z - (drawn->bodyCentre[2] - 1.0f) - 2.0f, 0.0f);
         }
         if (!used && !pedsUsed && !propsUsed)
         {

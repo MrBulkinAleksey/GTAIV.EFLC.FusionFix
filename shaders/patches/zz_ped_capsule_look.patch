@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 744537d9..1aeda0b0 100644
+index 744537d9..ee68b984 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -66,6 +66,10 @@
@@ -13,7 +13,29 @@ index 744537d9..1aeda0b0 100644
      defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
-@@ -564,6 +568,11 @@
+@@ -553,7 +557,20 @@
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+     add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
+-    call l4
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     rsq r25.w, r25.w
+     rcp r25.w, r25.w
+     add r25.w, r25.w, -r18.w
+@@ -564,6 +581,11 @@
      add r25.x, r15.z, -r25.x
      cmp r25.w, r25.x, r25.w, c138.y
      cmp r24.y, r25.w, r24.y, c138.y
@@ -25,7 +47,7 @@ index 744537d9..1aeda0b0 100644
      mul r17.w, r17.w, r24.y
      ret
      // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
-@@ -644,19 +653,46 @@
+@@ -644,19 +666,46 @@
      rcp r21.y, r21.y
      mul_sat r24.x, -r21.x, r21.y
      mad r22.xyz, r16, r24.x, r15
@@ -78,7 +100,7 @@ index 744537d9..1aeda0b0 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index cfe5b855..c5357379 100644
+index cfe5b855..9e2480a7 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -69,6 +69,10 @@
@@ -92,7 +114,29 @@ index cfe5b855..c5357379 100644
      defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
-@@ -573,6 +577,11 @@
+@@ -562,7 +566,20 @@
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+     add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
+-    call l4
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     rsq r25.w, r25.w
+     rcp r25.w, r25.w
+     add r25.w, r25.w, -r18.w
+@@ -573,6 +590,11 @@
      add r25.x, r15.z, -r25.x
      cmp r25.w, r25.x, r25.w, c138.y
      cmp r24.y, r25.w, r24.y, c138.y
@@ -104,7 +148,7 @@ index cfe5b855..c5357379 100644
      mul r17.w, r17.w, r24.y
      ret
      // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
-@@ -653,19 +662,46 @@
+@@ -653,19 +675,46 @@
      rcp r21.y, r21.y
      mul_sat r24.x, -r21.x, r21.y
      mad r22.xyz, r16, r24.x, r15
@@ -157,7 +201,7 @@ index cfe5b855..c5357379 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 58972675..b1173a67 100644
+index 58972675..f986f8d6 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -69,6 +69,10 @@
@@ -171,7 +215,29 @@ index 58972675..b1173a67 100644
      defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
-@@ -575,6 +579,11 @@
+@@ -564,7 +568,20 @@
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+     add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
+-    call l4
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     rsq r25.w, r25.w
+     rcp r25.w, r25.w
+     add r25.w, r25.w, -r18.w
+@@ -575,6 +592,11 @@
      add r25.x, r15.z, -r25.x
      cmp r25.w, r25.x, r25.w, c138.y
      cmp r24.y, r25.w, r24.y, c138.y
@@ -183,7 +249,7 @@ index 58972675..b1173a67 100644
      mul r17.w, r17.w, r24.y
      ret
      // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
-@@ -655,19 +664,46 @@
+@@ -655,19 +677,46 @@
      rcp r21.y, r21.y
      mul_sat r24.x, -r21.x, r21.y
      mad r22.xyz, r16, r24.x, r15
@@ -236,7 +302,7 @@ index 58972675..b1173a67 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index dfaffe50..1661bbf6 100644
+index dfaffe50..924815c8 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -69,6 +69,10 @@
@@ -250,7 +316,29 @@ index dfaffe50..1661bbf6 100644
      defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
-@@ -577,6 +581,11 @@
+@@ -566,7 +570,20 @@
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+     add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
+-    call l4
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     rsq r25.w, r25.w
+     rcp r25.w, r25.w
+     add r25.w, r25.w, -r18.w
+@@ -577,6 +594,11 @@
      add r25.x, r15.z, -r25.x
      cmp r25.w, r25.x, r25.w, c138.y
      cmp r24.y, r25.w, r24.y, c138.y
@@ -262,7 +350,7 @@ index dfaffe50..1661bbf6 100644
      mul r17.w, r17.w, r24.y
      ret
      // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
-@@ -657,19 +666,46 @@
+@@ -657,19 +679,46 @@
      rcp r21.y, r21.y
      mul_sat r24.x, -r21.x, r21.y
      mad r22.xyz, r16, r24.x, r15
@@ -315,7 +403,7 @@ index dfaffe50..1661bbf6 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 67cd84cc..b03b93ca 100644
+index 67cd84cc..c31c6a7e 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -101,6 +101,10 @@
@@ -329,7 +417,29 @@ index 67cd84cc..b03b93ca 100644
      defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
-@@ -785,6 +789,11 @@
+@@ -774,7 +778,20 @@
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+     add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
+-    call l4
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     rsq r25.w, r25.w
+     rcp r25.w, r25.w
+     add r25.w, r25.w, -r18.w
+@@ -785,6 +802,11 @@
      add r25.x, r15.z, -r25.x
      cmp r25.w, r25.x, r25.w, c138.y
      cmp r24.y, r25.w, r24.y, c138.y
@@ -341,7 +451,7 @@ index 67cd84cc..b03b93ca 100644
      mul r17.w, r17.w, r24.y
      ret
      // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
-@@ -865,19 +874,46 @@
+@@ -865,19 +887,46 @@
      rcp r21.y, r21.y
      mul_sat r24.x, -r21.x, r21.y
      mad r22.xyz, r16, r24.x, r15
@@ -394,7 +504,7 @@ index 67cd84cc..b03b93ca 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index cad5264c..dc5faaac 100644
+index cad5264c..fecdc079 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -71,6 +71,10 @@
@@ -408,7 +518,29 @@ index cad5264c..dc5faaac 100644
      defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
-@@ -598,6 +602,11 @@
+@@ -587,7 +591,20 @@
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+     add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
+-    call l4
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     rsq r25.w, r25.w
+     rcp r25.w, r25.w
+     add r25.w, r25.w, -r18.w
+@@ -598,6 +615,11 @@
      add r25.x, r15.z, -r25.x
      cmp r25.w, r25.x, r25.w, c138.y
      cmp r24.y, r25.w, r24.y, c138.y
@@ -420,7 +552,7 @@ index cad5264c..dc5faaac 100644
      mul r17.w, r17.w, r24.y
      ret
      // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
-@@ -678,19 +687,46 @@
+@@ -678,19 +700,46 @@
      rcp r21.y, r21.y
      mul_sat r24.x, -r21.x, r21.y
      mad r22.xyz, r16, r24.x, r15
@@ -473,7 +605,7 @@ index cad5264c..dc5faaac 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index b7aad4d1..0e4abda5 100644
+index b7aad4d1..176d3d73 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -103,6 +103,10 @@
@@ -487,7 +619,29 @@ index b7aad4d1..0e4abda5 100644
      defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
-@@ -801,6 +805,11 @@
+@@ -790,7 +794,20 @@
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+     add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
+-    call l4
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     rsq r25.w, r25.w
+     rcp r25.w, r25.w
+     add r25.w, r25.w, -r18.w
+@@ -801,6 +818,11 @@
      add r25.x, r15.z, -r25.x
      cmp r25.w, r25.x, r25.w, c138.y
      cmp r24.y, r25.w, r24.y, c138.y
@@ -499,7 +653,7 @@ index b7aad4d1..0e4abda5 100644
      mul r17.w, r17.w, r24.y
      ret
      // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
-@@ -881,19 +890,46 @@
+@@ -881,19 +903,46 @@
      rcp r21.y, r21.y
      mul_sat r24.x, -r21.x, r21.y
      mad r22.xyz, r16, r24.x, r15

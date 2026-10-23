@@ -884,7 +884,7 @@ public:
     // also at the feet, where it shrank to 5 cm and drew the shadow's foot square
     bool bPedCapsuleAddedLights = true;
     float fPedCapsuleLightSize = 0.5f, fPedCapsuleSoftening = 0.12f, fPedCapsuleBaseSoftness = 0.12f;
-    // PedBoneShadows: the player's shadow from 16 capsules along the bones (legs, feet, hips, body, shoulders, arms,
+    // PedBoneShadows: the player's shadow from 25 capsules along the bones (legs, feet, hips, body, shoulders, arms,
     // hands, head), posed each frame, in place of the one standing capsule, with the props' shapes
     bool bPedBoneShadows = true;
     // PropShapeShadows: props within PropShapeDistance of the player get the shadow of a capsule or a box from the
