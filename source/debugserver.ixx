@@ -40,7 +40,7 @@ import natives;
 // [DEBUG] DebugServerPort: a server on 127.0.0.1 that a tool (tools/gta4-live-mcp in the recomp's repository) reaches
 // through an SSH tunnel, to look into the running game from another machine: memory (read, search, signatures, and
 // writes with DebugServerAllowWrite), the loaded modules, the ini (read, write and read again as Ctrl+Shift+F10 does)
-// and the logs, and over time: values read each frame (watch_start) and the hits of an instruction or a piece of
+// and the logs (and FusionFix's other files next to it: files, file), and over time: values read each frame (watch_start) and the hits of an instruction or a piece of
 // memory (trace_start: a mid-hook or a debug register, with registers, callers and reads; trace_read, trace_stop,
 // trace_list). One client at a time; a request is a JSON object on one line ({"id": 1, "cmd": "read", ...}), the
 // answer one line ({"id": 1, "ok": true, ...}), the same protocol as the recomp's debug server. Bytes travel as hex in
@@ -893,6 +893,51 @@ namespace DebugServer
     }
 
     // The last lines of a feature's log ("feature": "NightShadows"), or of the newest log.
+    // FusionFix's own files next to the plugin (GTAIV.EFLC.FusionFix.*: logs, pictures, .folded): the names matching
+    // "filter" with their sizes, newest first; or one of them whole as base64 (a bare name, at most kMaxFileBytes)
+    constexpr uintmax_t kMaxFileBytes = 16u << 20;
+
+    std::string Files(const Request& request)
+    {
+        const std::string filter = request.Get("filter", "");
+        struct Entry { std::filesystem::file_time_type time; std::string json; };
+        std::vector<Entry> found;
+        std::error_code error;
+        for (const auto& entry : std::filesystem::directory_iterator(FusionLog::Directory(), error))
+        {
+            const std::string name = Utf8(entry.path().filename());
+            if (!name.starts_with("GTAIV.EFLC.FusionFix.") || name.find(filter) == std::string::npos || !entry.is_regular_file(error))
+                continue;
+            found.push_back({ entry.last_write_time(error), Object({{"name", Quote(name)}, {"size", std::to_string(entry.file_size(error))}}) });
+        }
+        std::sort(found.begin(), found.end(), [](const Entry& a, const Entry& b) { return a.time > b.time; });
+        std::vector<std::string> items;
+        for (const auto& e : found)
+            items.push_back(e.json);
+        return Object({{"files", Array(items)}});
+    }
+
+    std::string File(const Request& request)
+    {
+        const std::string name = request.Get("name");
+        const bool bare = !name.empty() && name.find_first_of("/\\:") == std::string::npos && name.find("..") == std::string::npos &&
+                          std::all_of(name.begin(), name.end(), [](char c) { return uint8_t(c) >= 0x20 && uint8_t(c) < 0x7F; });
+        if (!bare || !name.starts_with("GTAIV.EFLC.FusionFix."))
+            throw std::runtime_error("only a bare name of FusionFix's own files (GTAIV.EFLC.FusionFix.*) next to the plugin");
+        const auto path = FusionLog::Directory() / std::filesystem::path(name);
+        std::error_code error;
+        const uintmax_t size = std::filesystem::file_size(path, error);
+        if (error)
+            throw std::runtime_error("no file " + name);
+        if (size > kMaxFileBytes)
+            throw std::runtime_error(name + " is over 16 MB");
+        std::ifstream file(path, std::ios::binary);
+        std::vector<uint8_t> bytes(size_t(size));
+        if (!file.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(bytes.size())))
+            throw std::runtime_error("cannot read " + name);
+        return Object({{"name", Quote(name)}, {"size", std::to_string(size)}, {"data", Quote(Base64(bytes.data(), bytes.size()))}});
+    }
+
     std::string LogTail(const Request& request)
     {
         const size_t wanted = std::min<size_t>(size_t(request.Number("lines", 200)), kMaxLogLines);
@@ -1939,6 +1984,8 @@ namespace DebugServer
         if (command == "ini_get") return IniGet(request);
         if (command == "ini_set") return IniSet(request);
         if (command == "log_tail") return LogTail(request);
+        if (command == "files") return Files(request);
+        if (command == "file") return File(request);
         if (command == "screenshot") return Screenshot(request);
         if (command == "scene") return Scene();
         if (command == "teleport") return Teleport(request);
