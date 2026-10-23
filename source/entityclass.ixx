@@ -19,6 +19,7 @@ import comvars;
 import inireload;
 import renderskip;
 import temporal;
+import framehistory;
 
 // What kind of entity each draw of the scene belongs to: the map's own geometry, which never moves;
 // a prop (an object), which can be pushed, knocked over or broken; a vehicle or a ped. Props use the
@@ -714,8 +715,26 @@ namespace
         return result;
     }
 
-    // The draw's distance from the current viewport's camera (in the lamps' maps from the lamp of the half drawn) and
-    // its size on screen, into their buckets; the distance, or a negative when not known
+    // The draw's distance from the frame's camera (in the lamps' maps from the lamp of the half drawn) and its size on
+    // screen, into their buckets; the distance, or a negative when not known. Not the current viewport's: the water
+    // reflection's has the mirror in its view, its view inverse's position is (x, -z, -y) of the mirrored eye, and the
+    // water's draws all came out 400+ m
+    void FrameEye(const rage::grcViewport* viewport, float* eye)
+    {
+        const auto& camera = FrameHistory::Current();
+        if (!camera.Valid)
+        {
+            for (int k = 0; k < 3; ++k)
+                eye[k] = viewport ? viewport->mViewInverseMatrix[3][k] : 0.0f;
+            return;
+        }
+        // A rigid view: its position is -t R^T
+        const auto& v = camera.View;
+        eye[0] = -(v._41 * v._11 + v._42 * v._12 + v._43 * v._13);
+        eye[1] = -(v._41 * v._21 + v._42 * v._22 + v._43 * v._23);
+        eye[2] = -(v._41 * v._31 + v._42 * v._32 + v._43 * v._33);
+    }
+
     float CountByCamera(TargetStats& stats, uint16_t model, const float* place, int64_t ticks)
     {
         auto viewport = rage::GetCurrentViewport();
@@ -727,7 +746,10 @@ namespace
         const float* centre = reinterpret_cast<const float*>(info + 0x10);
         const float radius = *reinterpret_cast<const float*>(info + 0x1c);
         const float reach = radius + std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
-        const float* eye = stats.lamp ? currentOrigin.position : viewport->mViewInverseMatrix[3];
+        float frameEye[3];
+        if (!stats.lamp)
+            FrameEye(viewport, frameEye);
+        const float* eye = stats.lamp ? currentOrigin.position : frameEye;
         const float dx = place[0] - eye[0], dy = place[1] - eye[1], dz = place[2] - eye[2];
         const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
         static constexpr float cameraDistanceEdges[5] = { 25.0f, 50.0f, 100.0f, 200.0f, 400.0f };

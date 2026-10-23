@@ -16,6 +16,7 @@ export module waterreflectioncapture;
 import common;
 import comvars;
 import entityclass;
+import framehistory;
 import inireload;
 import renderskip;
 
@@ -297,8 +298,16 @@ namespace WaterReflectionCapture
             text += Matrix("view inverse", vp->mViewInverseMatrix);
             text += Matrix("view", vp->mViewMatrix);
             text += Matrix("projection", vp->mProjectionMatrix);
-            for (int k = 0; k < 3; ++k)
-                eye[k] = vp->mViewInverseMatrix[3][k];
+        }
+        // The frame's camera, not the viewport's: its view has the mirror in it (the position (x, -z, -y) of the
+        // mirrored eye)
+        if (const auto& camera = FrameHistory::Current(); camera.Valid)
+        {
+            const auto& v = camera.View;
+            eye[0] = -(v._41 * v._11 + v._42 * v._12 + v._43 * v._13);
+            eye[1] = -(v._41 * v._21 + v._42 * v._22 + v._43 * v._23);
+            eye[2] = -(v._41 * v._31 + v._42 * v._32 + v._43 * v._33);
+            text += std::format("      the frame's camera at {:.2f} {:.2f} {:.2f}\n", eye[0], eye[1], eye[2]);
         }
         if (target)
             Picture(real, target, "first-draw");
@@ -350,11 +359,11 @@ namespace WaterReflectionCapture
         {
             const auto info = EntityClass::ModelInfo(model);
             const uint32_t hash = info ? *reinterpret_cast<const uint32_t*>(info + 0x3c) : 0;
-            const float dx = place[0] - eye[0], dy = place[1] - eye[1];
-            const float distance = std::sqrt(dx * dx + dy * dy);
+            const float dx = place[0] - eye[0], dy = place[1] - eye[1], dz = place[2] - eye[2];
+            const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
             static constexpr const char* kKinds[] = { "unmarked", "building", "prop", "vehicle", "ped" };
             const char* kind = kKinds[std::min<size_t>(size_t(currentKind), 4)];
-            what = std::format("{} {:08X} at {:.0f} m", kind, hash, distance);
+            what = std::format("{} {:08X} at {:.0f} m ({:.0f} {:.0f} {:.0f})", kind, hash, distance, place[0], place[1], place[2]);
             const char* band = distance < 100.0f ? "0-100" : distance < 200.0f ? "100-200" : distance < 300.0f ? "200-300" : distance < 400.0f ? "300-400" :
                 distance < 800.0f ? "400-800" : "800+";
             key = std::format("{} {} m", kind, band);
@@ -365,7 +374,7 @@ namespace WaterReflectionCapture
         ++t.draws;
         t.primitives += primitives;
         if (draws <= 400)
-            text += std::format("{:4} {:<32} prim {} x{} | {}\n", draws, what, int(type), primitives, States(real));
+            text += std::format("{:4} {:<56} prim {} x{} | {}\n", draws, what, int(type), primitives, States(real));
     }
 
     static void ReadIni(CIniReader& iniReader)
