@@ -2405,6 +2405,34 @@ export namespace TemporalAA
         return found;
     }
 
+    // Render thread, after the G-buffer pass: where this frame's G-buffer drew the entity, its world matrix's position
+    // (a ped's draws, skinned, hold the ped's own there, the pose in the bones), of its draws the one nearest `around`
+    // within `reach` metres. nearest, where given: how far the nearest draw stood (-1 none recorded), for the log.
+    bool DrawnPosition(void* entity, const float around[3], float reach, float out[3], float* nearest)
+    {
+        if (nearest)
+            *nearest = -1.0f;
+        auto it = Temporal::EntitiesPrevious.find(entity);
+        if (it == Temporal::EntitiesPrevious.end())
+            return false;
+        float best = -1.0f;
+        for (auto& draw : it->second.Draws)
+        {
+            float p[3];
+            Temporal::DrawPosition(draw.World, nullptr, p);
+            const float dx = p[0] - around[0], dy = p[1] - around[1], dz = p[2] - around[2];
+            const float d2 = dx * dx + dy * dy + dz * dz;
+            if (std::isfinite(d2) && (best < 0.0f || d2 < best))
+            {
+                best = d2;
+                std::copy_n(p, 3, out);
+            }
+        }
+        if (nearest && best >= 0.0f)
+            *nearest = std::sqrt(best);
+        return best >= 0.0f && best < reach * reach;
+    }
+
     // The box shadows' log: the entity's draws from the last G-buffer, nearest `around` first, at most 12, each with its
     // distance, whether skinned, how its registers held the matrix and its axes (x y z of right, forward and up, a
     // skinned draw's turned by its root bone), the cosine between its forward on the ground and `heading`, and a

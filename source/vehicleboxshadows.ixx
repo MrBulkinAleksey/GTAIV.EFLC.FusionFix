@@ -103,6 +103,8 @@ export struct VehicleBoxShadows
         int bodyCount = 0;
         Shape body[kBodyShapes];
         float bodyCentre[3] = {}, bodyReach = 0.0f;
+        float bodyAt[3] = {};   // where the player stood when they were posed; render thread: where drawn, once moved there
+        uintptr_t player = 0;
     };
     static inline List lists[kLists]{};
     static inline int nextList = 0;
@@ -746,6 +748,8 @@ export struct VehicleBoxShadows
         list.pedCount = 0;
         list.bodyCount = 0;
         const uintptr_t player = CPlayer::getLocalPlayerPed();
+        list.player = player;
+        std::copy_n(focus, 3, list.bodyAt);
         if (PostFxResources.bPedCapsuleShadows && PostFxResources.bPedBoneShadows && !CPlayer::findPlayerCar())
             BodyShapes(list, player, focus);
         if (PostFxResources.bPedCapsuleShadows)
@@ -804,7 +808,7 @@ export struct VehicleBoxShadows
     // far the nearest stood, its matrix's translation, and how many draws it had), facing another way
     static inline uint32_t traceDrawnNone = 0, traceDrawnFar = 0, traceDrawnHeading = 0, traceDrawnCount = 0, traceDrawnHeadingOnly = 0;
     static inline bool traceDrawsDescribed = false;
-    static inline DWORD traceOffsetLast = 0;
+    static inline DWORD traceOffsetLast = 0, traceBodyLast = 0;
     static inline float traceDrawnNearest = -1.0f;
     static inline float traceStrongest = 0.0f;
     static inline bool traceMarkDown = false, traceShotDown = false;
@@ -1097,6 +1101,8 @@ export struct VehicleBoxShadows
             std::copy_n(found->body, found->bodyCount, lastFound.body);
             std::copy_n(found->bodyCentre, 3, lastFound.bodyCentre);
             lastFound.bodyReach = found->bodyReach;
+            std::copy_n(found->bodyAt, 3, lastFound.bodyAt);
+            lastFound.player = found->player;
             std::copy_n(found->focus, 3, lastFound.focus);
             lastFound.watched = found->watched;
             lastFound.sequence = found->sequence;
@@ -1104,6 +1110,52 @@ export struct VehicleBoxShadows
             if (found->frameSeconds > 0.0f)
                 lastFound.frameSeconds = found->frameSeconds;
             drawn = &lastFound;
+        }
+        if (drawn)
+            FollowDrawnBody();
+    }
+
+    // PedBoneShadowsFollowDraw: the player's bones were posed on the main thread at the hand over, and the player
+    // drawn this frame stands where a later or earlier update put them (the boxes' log found the cars 0.3 to 1.9 m
+    // from their hand over when driven fast; a frame drawn with the last hand over's boxes is one more behind): the
+    // bone capsules move to where this frame's G-buffer drew the player, by the ped's position in its draws.
+    static void FollowDrawnBody()
+    {
+        auto& R = PostFxResources;
+        if (!lastFound.bodyCount || !lastFound.player)
+            return;
+        float at[3], nearest = -1.0f;
+        const bool found = TemporalAA::DrawnPosition(reinterpret_cast<void*>(lastFound.player), lastFound.bodyAt, 2.0f, at, &nearest);
+        float d[3] = {};
+        if (found)
+            for (int k = 0; k < 3; ++k)
+                d[k] = at[k] - lastFound.bodyAt[k];
+        if (R.bVehicleBoxShadowsLog && GetTickCount() - traceBodyLast >= 200)
+        {
+            traceBodyLast = GetTickCount();
+            LARGE_INTEGER now{}, frequency{};
+            QueryPerformanceCounter(&now);
+            QueryPerformanceFrequency(&frequency);
+            const float ageMs = lastFound.handedAt.QuadPart ? float(now.QuadPart - lastFound.handedAt.QuadPart) * 1000.0f / float(frequency.QuadPart) : -1.0f;
+            if (found)
+                Trace("B player drawn from where the bones were posed: %.3f m (%.3f %.3f %.3f)%s; bones from %u hand overs back, %.1f ms ago",
+                    std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]), d[0], d[1], d[2], R.bPedBoneShadowsFollowDraw ? ", moved there" : "",
+                    latestHandOver.load(std::memory_order_relaxed) - lastFound.sequence, ageMs);
+            else
+                Trace("B player not among the draws within 2 m of where the bones were posed (nearest %.2f m)", nearest);
+        }
+        if (!found || !R.bPedBoneShadowsFollowDraw)
+            return;
+        for (int i = 0; i < lastFound.bodyCount; ++i)
+            for (int k = 0; k < 3; ++k)
+            {
+                lastFound.body[i].t0[k] += d[k];
+                lastFound.body[i].t1[k] += d[k];
+            }
+        for (int k = 0; k < 3; ++k)
+        {
+            lastFound.bodyCentre[k] += d[k];
+            lastFound.bodyAt[k] = at[k];
         }
     }
 
