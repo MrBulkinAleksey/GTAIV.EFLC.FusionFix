@@ -62,7 +62,7 @@ struct VSInput
     float4 edge1 : TEXCOORD3;   // its first edge, the share of its cards kept
     float4 edge2 : TEXCOORD4;   // its second edge, its surface's tag / 255 (debug colours)
     float4 kinds : TEXCOORD5;   // the share of grass, of weeds (the rest small plants), 1 / the share over which a
-                                // card rises (GpuGrass::RiseScale), the surface's own grass (0..1)
+                                // card fades in (GpuGrass::RiseScale), the surface's own grass (0..1)
 };
 
 struct VSOutput
@@ -169,7 +169,7 @@ struct Card
     float3 across, facing;
     float isGrass, isWeed, isPlant, isFlower;
     float patch, clump, dry, second, distant;
-    float fade;     // 0..1: a card with flowers fading in as it appears, by a dither the temporal AA smooths (ClipFade)
+    float fade;     // 0..1: a card fading in as it appears, by a dither the temporal AA smooths (ClipFade)
 };
 
 Card MakeCard(VSInput input, float3 root, float edge, float distance, float keep)
@@ -201,13 +201,12 @@ Card MakeCard(VSInput input, float3 root, float edge, float distance, float keep
     float h = input.blade.w;
     float height = b.isGrass * (0.24 + 0.3 * h) + b.isWeed * (0.32 + 0.4 * h) + b.isPlant * (0.12 + 0.14 * h);
     height *= lerp(0.65, 1.3, b.patch) * lerp(0.85, 1.15, b.clump) * lerp(0.45, 1.0, input.kinds.w) * vec4Blade.x;
-    // Shorter towards an edge; and the cards last kept rise out of the ground as the share grows (the camera coming
+    // Shorter towards an edge. The cards last kept fade in at their full height as the share grows (the camera coming
     // nearer) over about two metres of the way, so they neither pop in nor grow slowly over tens of metres far off;
-    // by edges and LOD over the last twelfth. Flowers fade in at their full height instead: tall bright heads shooting
-    // up out of the ground caught the eye
-    float rise = saturate(min((input.edge1.w - input.vertex.z) * input.kinds.z, keep * 12.0) + 0.05);
-    b.height = height * lerp(0.35, 1.0, edge) * (b.isFlower > 0.0 ? 1.0 : rise);
-    b.fade = b.isFlower > 0.0 ? rise : 1.0;
+    // by edges and LOD over the last twelfth. They rose out of the ground before: a whole clump growing up with each
+    // step caught the eye
+    b.height = height * lerp(0.35, 1.0, edge);
+    b.fade = saturate(min((input.edge1.w - input.vertex.z) * input.kinds.z, keep * 12.0) + 0.05);
     // As wide as tall or so (CardTex's clumps are half as wide as tall, the blades spread); wider far off, where
     // fewer of them stand (twice past 30 m for the half CardKept left out)
     float width = height * (b.isGrass * 0.85 + b.isWeed * 0.75 + b.isPlant * 1.1) * vec4Blade.y;

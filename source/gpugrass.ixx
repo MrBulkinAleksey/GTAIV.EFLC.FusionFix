@@ -194,9 +194,9 @@ namespace GpuGrass
         return 0.5f * std::clamp((fRange - d) / (std::max)(fRange - fFullRange, 0.5f), 0.0f, 1.0f);
     }
 
-    // 1 / the share of a piece's blades over which the last ones kept rise out of the ground (GpuGrass.fx MakeBlade):
-    // what the share grows by over kRiseDistance as the camera comes nearer, so a blade rises over that much of the
-    // way at any distance; BladeShare's slopes blend around GpuGrassFullRange so no blade jumps in height there
+    // 1 / the share of a piece's blades over which the last ones kept fade in (GpuGrass.fx MakeCard):
+    // what the share grows by over kRiseDistance as the camera comes nearer, so a card fades in over that much of the
+    // way at any distance; BladeShare's slopes blend around GpuGrassFullRange so no card jumps in its fade there
     float RiseScale(float distance, float pieceShare)
     {
         constexpr float kRiseDistance = 2.0f;
