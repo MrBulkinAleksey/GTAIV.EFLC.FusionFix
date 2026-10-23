@@ -6,12 +6,14 @@ module;
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <format>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 #include "FusionLog.hpp"
@@ -313,14 +315,14 @@ namespace GpuGrass
         return t.surface != 0;
     }
 
-    void AddPieces(const float* a, const float* b, const float* c, const Look& look, int depth)
+    void AddPieces(std::vector<Piece>& out, const float* a, const float* b, const float* c, const Look& look, int depth)
     {
         const float e1[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
         const float e2[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
         const float n[3] = { e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0] };
         const float twice = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
         const float area = 0.5f * twice;
-        if (!(area > 1e-3f) || pieces.size() >= kMaxPieces)
+        if (!(area > 1e-3f) || out.size() >= kMaxPieces)
             return;
         if (area > kPieceArea && depth < 16)
         {
@@ -333,20 +335,20 @@ namespace GpuGrass
             if (ab >= ac && ab >= bc)
             {
                 mid(a, b, m);
-                AddPieces(a, m, c, look, depth + 1);
-                AddPieces(m, b, c, look, depth + 1);
+                AddPieces(out, a, m, c, look, depth + 1);
+                AddPieces(out, m, b, c, look, depth + 1);
             }
             else if (ac >= bc)
             {
                 mid(a, c, m);
-                AddPieces(a, b, m, look, depth + 1);
-                AddPieces(m, b, c, look, depth + 1);
+                AddPieces(out, a, b, m, look, depth + 1);
+                AddPieces(out, m, b, c, look, depth + 1);
             }
             else
             {
                 mid(b, c, m);
-                AddPieces(a, b, m, look, depth + 1);
-                AddPieces(a, m, c, look, depth + 1);
+                AddPieces(out, a, b, m, look, depth + 1);
+                AddPieces(out, a, m, c, look, depth + 1);
             }
             return;
         }
@@ -363,7 +365,7 @@ namespace GpuGrass
         p.share = look.share * (std::min)(area / kPieceArea, 1.0f);
         p.seed = Hash(p.centre[0], p.centre[1]);
         p.look = look;
-        pieces.push_back(p);
+        out.push_back(p);
     }
 
     // Smooth value noise of the world, 0..1
@@ -421,51 +423,38 @@ namespace GpuGrass
             }
     }
 
-    // The pieces of the grassy triangles, when the manager's set changed
-    void MakePieces(const float* camera)
+    // The pieces and the edges are made on a thread of their own (Builder), from the grassy triangles and their looks
+    // as they were when it began: moving, the manager's set changes nearly every frame, and making them all again took
+    // 12-13 ms of the render thread a frame (GpuGrassLog), which then drew at half the rate it did standing still. The
+    // render thread hands it a set at most every kRebuildSeconds and takes what it made once done; meanwhile it draws
+    // the last one.
+    constexpr double kRebuildSeconds = 0.2;
+    struct Grassy { ProceduralGround::Triangle triangle; Look look; };
+    struct Build
     {
-        std::vector<ProceduralGround::Triangle> triangles;
-        {
-            std::lock_guard lock(groundMutex);
-            if (piecesVersion == groundVersion)
-                return;
-            piecesVersion = groundVersion;
-            triangles.reserve(ground.size());
-            for (auto it = ground.begin(); it != ground.end();)
-            {
-                const auto& t = it->second;
-                const float dx = t.corner[0][0] - camera[0], dy = t.corner[0][1] - camera[1];
-                if (dx * dx + dy * dy > kForgetDistance * kForgetDistance)
-                {
-                    it = ground.erase(it);
-                    continue;
-                }
-                if (tagShare[t.tag] > 0.0f || t.surface)
-                    triangles.push_back(t);
-                ++it;
-            }
-        }
-        pieces.clear();
+        std::vector<Grassy> grassy;
+        float camera[3] = {};
+        std::vector<Piece> pieces;
+        std::vector<float> edgeField;
+        float edgeOrigin[2] = {};
+    };
+
+    // The pieces of `build.grassy` and the edge field round `build.camera`
+    void MakePieces(Build& build)
+    {
+        const float* camera = build.camera;
+        build.pieces.clear();
         // In whole cells of the world: a grid following the camera by fractions of a cell marked other cells of the same
         // triangles each time, and the blades at an edge came and went as the camera moved
         const float originX = std::floor((camera[0] - kEdgeReach) / kEdgeCell) * kEdgeCell;
         const float originY = std::floor((camera[1] - kEdgeReach) / kEdgeCell) * kEdgeCell;
-        static std::vector<float> distance;     // in cells; 0 where no grass grows
+        static std::vector<float> distance;     // in cells; 0 where no grass grows (the builder's thread only)
         distance.assign(size_t(kEdgeSide) * kEdgeSide, 0.0f);
-        for (const auto& t : triangles)
+        for (const auto& [t, look] : build.grassy)
         {
-            // Ground facing up: not walls or steep banks
-            const float e1[3] = { t.corner[1][0] - t.corner[0][0], t.corner[1][1] - t.corner[0][1], t.corner[1][2] - t.corner[0][2] };
-            const float e2[3] = { t.corner[2][0] - t.corner[0][0], t.corner[2][1] - t.corner[0][1], t.corner[2][2] - t.corner[0][2] };
-            const float n[3] = { e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0] };
-            const float length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
-            Look look;
-            if (!(length > 0.0f) || std::abs(n[2]) / length < 0.6f || !LookOf(t, look))
-                continue;
-            AddPieces(t.corner[0], t.corner[1], t.corner[2], look, 0);
+            AddPieces(build.pieces, t.corner[0], t.corner[1], t.corner[2], look, 0);
             MarkGrass(t, originX, originY, distance);
         }
-        logGrassTriangles = triangles.size();
 
         // Each marked cell's distance to an unmarked one (chamfer, 1 and sqrt 2), then the pieces' corners
         constexpr float kBig = 1e6f, kDiagonal = 1.41421356f;
@@ -521,6 +510,7 @@ namespace GpuGrass
                 }
             }
         }
+        auto& edgeField = build.edgeField;
         edgeField.assign(distance.size(), 0.0f);
         for (int y = 0; y < kEdgeSide; ++y)
             for (int x = 0; x < kEdgeSide; ++x)
@@ -541,9 +531,90 @@ namespace GpuGrass
                     e = std::clamp((metres + wobble) / kEdgeFade, 0.0f, 1.0f);
                 }
             }
-        edgeOrigin[0] = originX;
-        edgeOrigin[1] = originY;
-        edgeDirty = true;
+        build.edgeOrigin[0] = originX;
+        build.edgeOrigin[1] = originY;
+    }
+
+    // The builder's thread: one Build at a time, handed over and taken back under its mutex
+    namespace Builder
+    {
+        std::mutex mutex;
+        std::condition_variable wake;
+        Build build;
+        bool started = false, busy = false, done = false;
+        std::chrono::steady_clock::time_point lastStart{};
+
+        void Run()
+        {
+            std::unique_lock lock(mutex);
+            for (;;)
+            {
+                wake.wait(lock, [] { return busy && !done; });
+                lock.unlock();
+                MakePieces(build);
+                lock.lock();
+                done = true;
+            }
+        }
+    }
+
+    // Render thread: what the builder made last taken in; a new build begun once the manager's set changed, the last
+    // one is taken and kRebuildSeconds have passed (at once while there are no pieces yet)
+    void UpdatePieces(const float* camera)
+    {
+        using namespace Builder;
+        std::unique_lock lock(mutex);
+        if (busy && done)
+        {
+            pieces.swap(build.pieces);
+            edgeField.swap(build.edgeField);
+            edgeOrigin[0] = build.edgeOrigin[0];
+            edgeOrigin[1] = build.edgeOrigin[1];
+            edgeDirty = true;
+            logGrassTriangles = build.grassy.size();
+            busy = done = false;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (busy || (!pieces.empty() && std::chrono::duration<double>(now - lastStart).count() < kRebuildSeconds))
+            return;
+        {
+            std::lock_guard groundLock(groundMutex);
+            if (piecesVersion == groundVersion)
+                return;
+            piecesVersion = groundVersion;
+            build.grassy.clear();
+            build.grassy.reserve(ground.size());
+            for (auto it = ground.begin(); it != ground.end();)
+            {
+                const auto& t = it->second;
+                const float dx = t.corner[0][0] - camera[0], dy = t.corner[0][1] - camera[1];
+                if (dx * dx + dy * dy > kForgetDistance * kForgetDistance)
+                {
+                    it = ground.erase(it);
+                    continue;
+                }
+                // Ground facing up (not walls or steep banks) with grass of its own
+                const float e1[3] = { t.corner[1][0] - t.corner[0][0], t.corner[1][1] - t.corner[0][1], t.corner[1][2] - t.corner[0][2] };
+                const float e2[3] = { t.corner[2][0] - t.corner[0][0], t.corner[2][1] - t.corner[0][1], t.corner[2][2] - t.corner[0][2] };
+                const float n[3] = { e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0] };
+                const float length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+                Look look;
+                if (length > 0.0f && std::abs(n[2]) / length >= 0.6f && LookOf(t, look))
+                    build.grassy.push_back({ t, look });
+                ++it;
+            }
+        }
+        for (int k = 0; k < 3; ++k)
+            build.camera[k] = camera[k];
+        lastStart = now;
+        busy = true;
+        if (!started)
+        {
+            started = true;
+            std::thread(Run).detach();
+        }
+        lock.unlock();
+        wake.notify_one();
     }
 
     // EdgeTex: made once where the GPU reads filtered R16F vertex textures, filled again when the edges were made anew.
@@ -1112,7 +1183,7 @@ export namespace GpuGrass
             -(v._41 * v._21 + v._42 * v._22 + v._43 * v._23),
             -(v._41 * v._31 + v._42 * v._32 + v._43 * v._33),
         };
-        MakePieces(eye);
+        UpdatePieces(eye);
         const bool edgeTextureReady = UpdateEdgeTexture(pDevice);
 
         // The view's planes (row vectors: clip = p M), each (n, d) with n.p + d >= 0 inside
