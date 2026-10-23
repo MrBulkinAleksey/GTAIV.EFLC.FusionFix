@@ -2078,6 +2078,10 @@ private:
         ProfilerMark(pDevice, kProfGI, true);
         RenderIndirectLight();
         ProfilerMark(pDevice, kProfGI, false);
+        // FusedLightingPasses: contact shadows the indirect light's passes did not take
+        ProfilerMark(pDevice, kProfContact, true);
+        FinishContactShadows();
+        ProfilerMark(pDevice, kProfContact, false);
         // deferred_lighting draws after this; BindSSRTexture bound last frame's results.
         if (pDevice)
         {

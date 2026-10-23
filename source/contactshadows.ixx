@@ -52,6 +52,79 @@ using namespace PostFxPass;
 
 // Contact shadows towards the sun (SSR.fx's contact passes) for deferred lighting.
 
+// The march's result (raw) smoothed, accumulated over frames and brought up to full size (width, height) when it
+// was marched at half size, into ContactResult. The effect holds the march's depth, depth range and target size.
+static void ContactPostChain(IDirect3DDevice9* pDevice, rage::grcViewport* vp, IDirect3DTexture9* raw, bool accumWasValid,
+                             bool half, bool smooth, bool temporal, float width, float height)
+{
+    auto& R = PostFxResources;
+    auto& h = R.SSREffectHandles;
+    ID3DXEffect* effect = R.SSREffect;
+    const D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
+    const float passWidth = half ? float(DWORD(width) / 2) : width;
+    const float passHeight = half ? float(DWORD(height) / 2) : height;
+
+    // The same depth aware smoothing SSR uses; the raw result has alpha 1 everywhere, so
+    // it is a plain weighted blur. The radius is in full size pixels.
+    IDirect3DTexture9* result = raw;
+    if (smooth && R.fSSRDenoiseRadius > 0.0f && h.techSSRDenoise)
+    {
+        effect->SetTexture(h.SSRResultTex2D, result);
+        effect->SetFloat(h.fDenoiseRadius, half ? R.fSSRDenoiseRadius * 0.5f : R.fSSRDenoiseRadius);
+        effect->SetFloat(h.fDenoiseSSROnly, 0.0f);
+        DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.ContactSurf, passWidth, passHeight, kProfContactDenoise);
+        result = R.ContactTex->mD3DTexture;
+    }
+
+    if (temporal && smooth)
+    {
+        // Without a history to reproject the blend is 0, any camera does
+        D3DXMATRIX prevViewProj;
+        if (accumWasValid)
+            prevViewProj = FrameHistory::Previous().ViewProjection;
+        else
+            MatrixMultiply(prevViewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
+        D3DXVECTOR4 reprojRows[4];
+        ViewToClipRows(vp, prevViewProj, reprojRows);
+        // Last frame's fog pass copied its depth; this frame's has not run yet.
+        const bool prevDepth = R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
+
+        const int prev = R.nContactAccumIndex, next = prev ^ 1;
+        effect->SetTexture(h.SSRResultTex2D, result);
+        effect->SetTexture(h.SSRAccumTex2D, R.ContactAccumTex[prev]->mD3DTexture);
+        effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
+        effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
+        SetPrevDepthRange(effect, h);
+        effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
+        BindMotionVectors(effect, accumWasValid);
+        effect->SetFloat(h.fTemporalBlend, accumWasValid ? R.fContactTemporalBlend : 0.0f);
+        DrawEffectPass(pDevice, effect, h.techContactTemporal, R.ContactAccumSurf[next], passWidth, passHeight, kProfContactTemporal);
+
+        result = R.ContactAccumTex[next]->mD3DTexture;
+        R.nContactAccumIndex = next;
+        R.nContactAccumFrame = FrameHistory::Frame();
+    }
+
+    if (half)
+    {
+        SetTargetSize(effect, h, proj, width, height);
+        effect->SetTexture(h.SSRResultTex2D, result);
+        DrawEffectPass(pDevice, effect, h.techContactUpsample, R.ContactRawSurf, width, height, kProfContactUpsample);
+        result = R.ContactRawTex->mD3DTexture;
+    }
+    R.ContactResult = result;
+
+    if (R.SSRDebugMode() == R.kContactDebugMode && R.SSRDebugSurf && h.techSSRDebug)
+    {
+        effect->SetTexture(h.SSRResultTex2D, result);
+        effect->SetFloat(h.fDebugMode, float(R.kContactDebugMode));
+        DrawEffectPass(pDevice, effect, h.techSSRDebug, R.SSRDebugSurf, width, height);
+        R.bSSRDebugValid = true;
+    }
+
+    R.bContactValid = true;
+}
+
 // Before deferred lighting, next to SSR: contact shadows towards the sun, smoothed into
 // ContactTex and accumulated over frames into ContactAccumTex, for deferred_lighting (see
 // BindLightingInputs). Independent of SSR being on.
@@ -60,6 +133,7 @@ export void RenderContactShadows()
     auto& R = PostFxResources;
     R.bContactValid = false;
     R.ContactResult = nullptr;
+    R.ContactPending = nullptr;
     // The history stays usable only if this frame accumulates too; any return below drops it.
     const bool accumWasValid = FrameHistory::CanReproject(R.nContactAccumFrame);
     R.nContactAccumFrame = 0;
@@ -172,63 +246,48 @@ export void RenderContactShadows()
         SetTargetSize(effect, h, proj, passWidth, passHeight);
     DrawEffectPass(pDevice, effect, h.techContactShadows, half ? R.ContactRawHalfSurf : R.ContactRawSurf, passWidth, passHeight, kProfContactMarch);
 
-    // The same depth aware smoothing SSR uses; the raw result has alpha 1 everywhere, so
-    // it is a plain weighted blur. The radius is in full size pixels.
-    IDirect3DTexture9* result = half ? R.ContactRawHalfTex->mD3DTexture : R.ContactRawTex->mD3DTexture;
-    if (smooth && R.fSSRDenoiseRadius > 0.0f && h.techSSRDenoise)
+    IDirect3DTexture9* raw = half ? R.ContactRawHalfTex->mD3DTexture : R.ContactRawTex->mD3DTexture;
+    // FusedLightingPasses: the rest waits for the indirect light's passes, which take both (RenderIndirectLight),
+    // or for FinishContactShadows when those do not run
+    if (half && temporal && R.bFusedLightingPasses && R.fSSRDenoiseRadius > 0.0f && h.techSSRDenoise && h.techGIContactDenoise &&
+        h.techGIContactTemporal && h.techGIContactUpsample && R.SSRDebugMode() != R.kContactDebugMode)
     {
-        effect->SetTexture(h.SSRResultTex2D, result);
-        effect->SetFloat(h.fDenoiseRadius, half ? R.fSSRDenoiseRadius * 0.5f : R.fSSRDenoiseRadius);
-        effect->SetFloat(h.fDenoiseSSROnly, 0.0f);
-        DrawEffectPass(pDevice, effect, h.techSSRDenoise, R.ContactSurf, passWidth, passHeight, kProfContactDenoise);
-        result = R.ContactTex->mD3DTexture;
+        R.ContactPending = raw;
+        R.bContactPendingHistory = accumWasValid;
+        return;
     }
+    ContactPostChain(pDevice, vp, raw, accumWasValid, half, smooth, temporal, width, height);
+}
 
-    if (temporal && smooth)
-    {
-        // Without a history to reproject the blend is 0, any camera does
-        D3DXMATRIX prevViewProj;
-        if (accumWasValid)
-            prevViewProj = FrameHistory::Previous().ViewProjection;
-        else
-            MatrixMultiply(prevViewProj, *(const D3DXMATRIX*)vp->mViewMatrix, *(const D3DXMATRIX*)vp->mProjectionMatrix);
-        D3DXVECTOR4 reprojRows[4];
-        ViewToClipRows(vp, prevViewProj, reprojRows);
-        // Last frame's fog pass copied its depth; this frame's has not run yet.
-        const bool prevDepth = R.PreAlphaDepthCopyRT && R.PreAlphaDepthCopyRT->mD3DTexture;
+// FusedLightingPasses: contact shadows marched and left waiting that the indirect light's passes did not take (it is
+// off, or had no last frame's scene to gather): smoothed, accumulated and brought up to full size on their own.
+export void FinishContactShadows()
+{
+    auto& R = PostFxResources;
+    IDirect3DTexture9* raw = R.ContactPending;
+    R.ContactPending = nullptr;
+    IDirect3DDevice9* pDevice = rage::grcDevice::GetD3DDevice();
+    rage::grcViewport* vp = rage::GetCurrentViewport();
+    ID3DXEffect* effect = R.SSREffect;
+    if (!raw || !pDevice || !vp || !effect)
+        return;
+    auto& h = R.SSREffectHandles;
+    const float width = float(RenderScale::ToRenderWidth(uint32_t(vp->mWidth)));
+    const float height = float(RenderScale::ToRenderHeight(uint32_t(vp->mHeight)));
+    const D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
+    effect->SetTexture(h.DepthTex2D, LightingDepth());
+    SetDepthRange(effect, h, vp->mNearClip, vp->mFarClip);
+    SetTargetSize(effect, h, proj, float(DWORD(width) / 2), float(DWORD(height) / 2));
 
-        const int prev = R.nContactAccumIndex, next = prev ^ 1;
-        effect->SetTexture(h.SSRResultTex2D, result);
-        effect->SetTexture(h.SSRAccumTex2D, R.ContactAccumTex[prev]->mD3DTexture);
-        effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
-        effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
-        SetPrevDepthRange(effect, h);
-        effect->SetVectorArray(h.vec4ViewToPrevClip, reprojRows, 4);
-        BindMotionVectors(effect, accumWasValid);
-        effect->SetFloat(h.fTemporalBlend, accumWasValid ? R.fContactTemporalBlend : 0.0f);
-        DrawEffectPass(pDevice, effect, h.techContactTemporal, R.ContactAccumSurf[next], passWidth, passHeight, kProfContactTemporal);
-
-        result = R.ContactAccumTex[next]->mD3DTexture;
-        R.nContactAccumIndex = next;
-        R.nContactAccumFrame = FrameHistory::Frame();
-    }
-
-    if (half)
-    {
-        SetTargetSize(effect, h, proj, width, height);
-        effect->SetTexture(h.SSRResultTex2D, result);
-        DrawEffectPass(pDevice, effect, h.techContactUpsample, R.ContactRawSurf, width, height, kProfContactUpsample);
-        result = R.ContactRawTex->mD3DTexture;
-    }
-    R.ContactResult = result;
-
-    if (R.SSRDebugMode() == R.kContactDebugMode && R.SSRDebugSurf && h.techSSRDebug)
-    {
-        effect->SetTexture(h.SSRResultTex2D, result);
-        effect->SetFloat(h.fDebugMode, float(R.kContactDebugMode));
-        DrawEffectPass(pDevice, effect, h.techSSRDebug, R.SSRDebugSurf, width, height);
-        R.bSSRDebugValid = true;
-    }
-
-    R.bContactValid = true;
+    SavedVertexInput savedVertexInput(pDevice);
+    SavedTargets savedTargets(pDevice);
+    SavedTextures savedTextures(pDevice);
+    SavedShaderConstants savedConstants(pDevice);
+    AppliedRenderStates renderStates(pDevice, kSSRRenderStates);
+    AppliedSamplerStates samplerStates(pDevice);
+    pDevice->SetDepthStencilSurface(nullptr);
+    pDevice->SetStreamSource(0, nullptr, 0, 0);
+    pDevice->SetVertexDeclaration(nullptr);
+    pDevice->SetFVF(kScreenVertexFVF);
+    ContactPostChain(pDevice, vp, raw, R.bContactPendingHistory, true, true, true, width, height);
 }

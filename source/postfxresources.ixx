@@ -351,6 +351,7 @@ public:
         D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
         D3DXHANDLE SceneTex2D, SkinIDTex2D, SkinLightTex2D, vec4SkinStep, fSkinStrength;
         D3DXHANDLE techSkinLight, techSkinScatter, techSkinScatterFinal, techSkinDebug;
+        D3DXHANDLE techGIContactDenoise, techGIContactTemporal, techGIContactUpsample, ContactInTex2D, ContactHistTex2D, fContactBlend;
     } SSREffectHandles = {};
 
     // PREF_SSR: 0 off, 1 half resolution, 2 full resolution.
@@ -818,6 +819,9 @@ public:
     // ContactShadowsHalfResolution: the march runs at half size into ContactRawHalfTex and
     // ContactUpsample_PS brings it to full size, weighing by depth, before the smoothing.
     bool bContactShadowsHalfRes = true;
+    // FusedLightingPasses: indirect light and contact shadows, both marched at half size, smoothed, accumulated and
+    // brought up to full size by three passes for both (two targets each) instead of three each
+    bool bFusedLightingPasses = true;
     // Contact shadows from street lights and headlights, marched in the light shaders
     // themselves (shaders/patches/local_light_contact_shadows.patch); they follow the Contact
     // Shadows menu toggle.
@@ -957,6 +961,11 @@ public:
     float fContactTemporalBlend = 0.8f;
     // What deferred_lighting gets on s9: ContactTex, or the accumulation.
     IDirect3DTexture9* ContactResult = nullptr;
+    // FusedLightingPasses: contact shadows marched at half size and left for the indirect light's passes to smooth,
+    // accumulate and bring up to full size along with its own (RenderIndirectLight), or FinishContactShadows when
+    // those did not run; null when none waits. bContactPendingHistory: whether their accumulation had a history.
+    IDirect3DTexture9* ContactPending = nullptr;
+    bool bContactPendingHistory = false;
     bool bContactValid = false;
     bool bContactBound = false;
     static constexpr int kContactDebugMode = 7;
@@ -1666,6 +1675,12 @@ public:
                 h.techSSGI = SSREffect->GetTechniqueByName("SSGI");
                 h.fGIMaxBrightness = SSREffect->GetParameterByName(nullptr, "fGIMaxBrightness");
                 h.techGIUpsample = SSREffect->GetTechniqueByName("GIUpsample");
+                h.techGIContactDenoise = SSREffect->GetTechniqueByName("GIContactDenoise");
+                h.techGIContactTemporal = SSREffect->GetTechniqueByName("GIContactTemporal");
+                h.techGIContactUpsample = SSREffect->GetTechniqueByName("GIContactUpsample");
+                h.ContactInTex2D = SSREffect->GetParameterByName(nullptr, "ContactInTex2D");
+                h.ContactHistTex2D = SSREffect->GetParameterByName(nullptr, "ContactHistTex2D");
+                h.fContactBlend = SSREffect->GetParameterByName(nullptr, "fContactBlend");
                 h.AlbedoTex2D = SSREffect->GetParameterByName(nullptr, "AlbedoTex2D");
                 h.AlbedoLinearTex2D = SSREffect->GetParameterByName(nullptr, "AlbedoLinearTex2D");
                 h.GIPrevTex2D = SSREffect->GetParameterByName(nullptr, "GIPrevTex2D");
@@ -1945,6 +1960,7 @@ public:
             IniFloat("NIGHTSHADOWS", "PedBoneShoulderWidth", &PostFxResource::fPedBoneShoulderWidth, 0.8f, 0.3f, 1.2f),
             IniFlag("NIGHTSHADOWS", "PedBoneShadowsFollowDraw", &PostFxResource::bPedBoneShadowsFollowDraw, 1),
             IniFlag("NIGHTSHADOWS", "ShapeGroups", &PostFxResource::bShapeGroups, 1),
+            IniFlag("PERFORMANCE", "FusedLightingPasses", &PostFxResource::bFusedLightingPasses, 1),
             IniFlag("NIGHTSHADOWS", "PropShapeShadows", &PostFxResource::bPropShapeShadows, 1),
             IniFloat("NIGHTSHADOWS", "PropShapeDistance", &PostFxResource::fPropShapeDistance, 80.0f, 10.0f, 200.0f),
             IniFloat("NIGHTSHADOWS", "PropShapePostRadius", &PostFxResource::fPropShapePostRadius, 0.12f, 0.03f, 0.5f),
