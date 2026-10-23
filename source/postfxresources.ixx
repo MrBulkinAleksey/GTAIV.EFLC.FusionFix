@@ -822,6 +822,9 @@ public:
     // FusedLightingPasses: indirect light and contact shadows, both marched at half size, smoothed, accumulated and
     // brought up to full size by three passes for both (two targets each) instead of three each
     bool bFusedLightingPasses = true;
+    // DepthBoundsLights: each light of the main view drawn only where the scene's depth lies within its sphere
+    // (the depth bounds test, see SetLightDepthBounds in postfx.ixx)
+    bool bDepthBoundsLights = true;
     // Contact shadows from street lights and headlights, marched in the light shaders
     // themselves (shaders/patches/local_light_contact_shadows.patch); they follow the Contact
     // Shadows menu toggle.
@@ -1961,6 +1964,7 @@ public:
             IniFlag("NIGHTSHADOWS", "PedBoneShadowsFollowDraw", &PostFxResource::bPedBoneShadowsFollowDraw, 1),
             IniFlag("NIGHTSHADOWS", "ShapeGroups", &PostFxResource::bShapeGroups, 1),
             IniFlag("PERFORMANCE", "FusedLightingPasses", &PostFxResource::bFusedLightingPasses, 1),
+            IniFlag("PERFORMANCE", "DepthBoundsLights", &PostFxResource::bDepthBoundsLights, 1),
             IniFlag("NIGHTSHADOWS", "PropShapeShadows", &PostFxResource::bPropShapeShadows, 1),
             IniFloat("NIGHTSHADOWS", "PropShapeDistance", &PostFxResource::fPropShapeDistance, 80.0f, 10.0f, 200.0f),
             IniFloat("NIGHTSHADOWS", "PropShapePostRadius", &PostFxResource::fPropShapePostRadius, 0.12f, 0.03f, 0.5f),

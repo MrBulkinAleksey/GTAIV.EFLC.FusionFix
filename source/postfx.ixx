@@ -2116,6 +2116,77 @@ private:
     // + 0x28, its flags at edi + 0x20), contact shadows go off for those lights and back on after.
     static inline SafetyHookMid shLocalContactLight{};
 
+    // DepthBoundsLights: each light of the main view drawn only where the scene's depth lies within its sphere, by the
+    // depth bounds test (the 'NVDB' render states, which DXVK takes): the pixels of its circle on the screen with a wall
+    // far behind it or something right in front of the camera are left before its shader runs. The game does this
+    // itself (CE 0xac2fc0, 0x420f90), but with the plain projected depth, and FusionFix stores the logarithmic depth
+    // the shaders write (log2(z / near) / log2(far / near), c209): its calls are left out (shaders.ixx) and the bounds
+    // are worked out here in that depth.
+    static inline int nDepthBoundsSupport = -1;     // -1 not asked yet, else whether the device takes 'NVDB'
+    static inline bool bDepthBoundsOn = false;
+
+    static void SetRenderStateBoth(IDirect3DDevice9* device, D3DRENDERSTATETYPE state, DWORD value)
+    {
+        device->SetRenderState(state, value);
+        if (auto real = RealDevice(device); real != device)
+            real->SetRenderState(state, value);
+    }
+
+    static void DepthBoundsOff(IDirect3DDevice9* pDevice)
+    {
+        if (!bDepthBoundsOn || !pDevice)
+            return;
+        SetRenderStateBoth(pDevice, D3DRS_ADAPTIVETESS_X, 0);
+        bDepthBoundsOn = false;
+    }
+
+    static bool DepthBoundsSupported(IDirect3DDevice9* pDevice)
+    {
+        if (nDepthBoundsSupport < 0)
+        {
+            nDepthBoundsSupport = 0;
+            IDirect3D9* d3d = nullptr;
+            if (SUCCEEDED(RealDevice(pDevice)->GetDirect3D(&d3d)) && d3d)
+            {
+                nDepthBoundsSupport = SUCCEEDED(d3d->CheckDeviceFormat(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0,
+                    D3DRTYPE_SURFACE, static_cast<D3DFORMAT>(MAKEFOURCC('N', 'V', 'D', 'B')))) ? 1 : 0;
+                d3d->Release();
+            }
+            FusionLog::Write("PostFx", "DepthBounds", "the device %s the depth bounds test ('NVDB')", nDepthBoundsSupport ? "takes" : "does not take");
+        }
+        return nDepthBoundsSupport > 0;
+    }
+
+    static void SetLightDepthBounds(IDirect3DDevice9* pDevice, const rage::CLightSource& light)
+    {
+        auto& R = PostFxResources;
+        auto* vp = rage::GetCurrentViewport();
+        const bool sphere = light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED;
+        if (!R.bDepthBoundsLights || !vp || !sphere || !(light.mRadius > 0.0f) || !(vp->mNearClip > 0.0f) ||
+            !(vp->mFarClip > vp->mNearClip) || !DepthBoundsSupported(pDevice))
+        {
+            DepthBoundsOff(pDevice);
+            return;
+        }
+        // The light's distance along the view: the camera looks down the view inverse's -z
+        const float (&inv)[4][4] = vp->mViewInverseMatrix;
+        const float dx = light.mPosition.x - inv[3][0], dy = light.mPosition.y - inv[3][1], dz = light.mPosition.z - inv[3][2];
+        const float along = -(dx * inv[2][0] + dy * inv[2][1] + dz * inv[2][2]);
+        // A little more than its radius: the depth is stored in 24 bits
+        const float reach = light.mRadius * 1.02f + 0.1f;
+        const float nearClip = vp->mNearClip, farClip = vp->mFarClip;
+        const float scale = 1.0f / std::log2(farClip / nearClip);
+        auto depth = [&](float z) { return std::clamp(std::log2((std::max)(z, nearClip) / nearClip) * scale, 0.0f, 1.0f); };
+        const float lo = depth(along - reach), hi = depth(along + reach);
+        SetRenderStateBoth(pDevice, D3DRS_ADAPTIVETESS_Z, std::bit_cast<DWORD>(lo));
+        SetRenderStateBoth(pDevice, D3DRS_ADAPTIVETESS_W, std::bit_cast<DWORD>(hi));
+        if (!bDepthBoundsOn)
+        {
+            SetRenderStateBoth(pDevice, D3DRS_ADAPTIVETESS_X, MAKEFOURCC('N', 'V', 'D', 'B'));
+            bDepthBoundsOn = true;
+        }
+    }
+
     // c206 for the light about to be drawn: a headlight's (a spot light of 8 m or more with the
     // vehicle flag, as InstallShaftHooks tells them) the car's level right and half its lamps'
     // spacing, from which the shaders take its highlight as one from each lamp; other lights none.
@@ -2230,6 +2301,7 @@ private:
             if (nLightingStage == 1)
                 SetLightingStage(rage::grcDevice::GetD3DDevice(), 2);
             const auto& light = *reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28);
+            SetLightDepthBounds(rage::grcDevice::GetD3DDevice(), light);
             SetLightGGXShape(light);
             CollectGlintLight(light);
             auto pDevice = rage::grcDevice::GetD3DDevice();
@@ -2291,6 +2363,7 @@ private:
         shShaftLoopStart = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&)
         {
             auto pDevice = rage::grcDevice::GetD3DDevice();
+            DepthBoundsOff(pDevice);
             if (nLightingStage > 0)
                 SetLightingStage(pDevice, 3);
             // Every light of the main view is drawn by now, and its target is still the lit scene.
@@ -2773,6 +2846,7 @@ public:
         pDevice->SetPixelShaderConstantF(203, noLocalContactShadows, 1);
         R.bLocalContactPass = false;
         VehicleBoxShadows::Off(pDevice);
+        DepthBoundsOff(pDevice);
         pDevice->SetPixelShaderConstantF(201, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(205, noLocalContactShadows, 1);
         pDevice->SetPixelShaderConstantF(197, noLocalContactShadows, 1);
