@@ -1384,11 +1384,15 @@ export struct VehicleBoxShadows
     }
 
     // The light shaders read a light's shapes in kShapeGroups groups, each only where the way from the pixel to the
-    // light passes near the sphere round it (zz_shape_groups.patch): the player's bones one, the props the rest, put
-    // together by where they stand (each group about a seed, the seeds as far apart as they come). The shapes are
-    // reordered by group; spheres gets each group's centre and radius, ends where each group ends.
-    static constexpr int kShapeGroups = 4;
-    static void GroupShapes(Shape* shapes, int count, int bodyShapes, float (&spheres)[kShapeGroups][4], float (&ends)[kShapeGroups])
+    // light passes near the sphere round it (zz_shape_groups.patch): the player's bones one; the props within a metre
+    // of the light (its own post, what hangs under it), which every way to the light passes, one, that the others stay
+    // apart from the light; the other props the rest, put together by where they stand (each group about a seed, the
+    // seeds as far apart as they come). With four groups the post shared a group with props further out, and that
+    // group was read everywhere. The shapes are reordered by group; spheres gets each group's centre and radius, ends
+    // where each group ends.
+    static constexpr int kShapeGroups = 8;
+    static void GroupShapes(Shape* shapes, int count, int bodyShapes, const float light[3], float (&spheres)[kShapeGroups][4],
+                            float (&ends)[kShapeGroups])
     {
         float centres[kShapesPerLight][3], radii[kShapesPerLight];
         for (int i = 0; i < count; ++i)
@@ -1397,16 +1401,34 @@ export struct VehicleBoxShadows
         int groups = 0;
         if (bodyShapes > 0)
             groups = 1;
-        const int props = count - bodyShapes;
-        const int seedsWanted = (std::min)(kShapeGroups - groups, props);
+        // Near the light
+        const int nearGroup = groups;
+        bool atLight[kShapesPerLight] = {};
+        int farProps = 0;
+        for (int i = bodyShapes; i < count; ++i)
+        {
+            const float dx = centres[i][0] - light[0], dy = centres[i][1] - light[1], dz = centres[i][2] - light[2];
+            atLight[i] = std::sqrt(dx * dx + dy * dy + dz * dz) - radii[i] < 1.0f;
+            if (atLight[i])
+                group[i] = nearGroup;
+            else
+                ++farProps;
+        }
+        if (farProps < count - bodyShapes)
+            ++groups;
+        // The others about seeds
+        const int seedsWanted = (std::min)(kShapeGroups - groups, farProps);
         int seeds[kShapeGroups] = {};
         int seedCount = 0;
         if (seedsWanted > 0)
         {
-            seeds[seedCount++] = bodyShapes;
             float nearest[kShapesPerLight];
             for (int i = bodyShapes; i < count; ++i)
+            {
                 nearest[i] = 1.0e30f;
+                if (!atLight[i] && !seedCount)
+                    seeds[seedCount++] = i;
+            }
             while (seedCount < seedsWanted)
             {
                 const float* c = centres[seeds[seedCount - 1]];
@@ -1414,6 +1436,8 @@ export struct VehicleBoxShadows
                 float most = 0.25f; // within half a metre of a seed: no seed of its own
                 for (int i = bodyShapes; i < count; ++i)
                 {
+                    if (atLight[i])
+                        continue;
                     const float dx = centres[i][0] - c[0], dy = centres[i][1] - c[1], dz = centres[i][2] - c[2];
                     nearest[i] = (std::min)(nearest[i], dx * dx + dy * dy + dz * dz);
                     if (nearest[i] > most)
@@ -1427,13 +1451,10 @@ export struct VehicleBoxShadows
                 seeds[seedCount++] = farthest;
             }
         }
-        for (int i = 0; i < count; ++i)
+        for (int i = bodyShapes; i < count; ++i)
         {
-            if (i < bodyShapes)
-            {
-                group[i] = 0;
+            if (atLight[i])
                 continue;
-            }
             int best = 0;
             float bestD2 = 1.0e30f;
             for (int j = 0; j < seedCount; ++j)
@@ -1907,7 +1928,10 @@ export struct VehicleBoxShadows
             int bodyShapes = 0;
             propsUsed = ShapesForLight(light, hasMap, shapes, bodyShapes);
             if (propsUsed)
-                GroupShapes(shapes, propsUsed, bodyShapes, shapeSpheres, shapeEnds);
+            {
+                const float at[3] = { light.mPosition.x, light.mPosition.y, light.mPosition.z };
+                GroupShapes(shapes, propsUsed, bodyShapes, at, shapeSpheres, shapeEnds);
+            }
             // ShapeGroups 0: every group read everywhere, as before, to compare
             if (!R.bShapeGroups)
                 for (auto& sphere : shapeSpheres)
@@ -1951,10 +1975,16 @@ export struct VehicleBoxShadows
         const float capsule[4] = { R.fPedCapsuleRadius, -(R.fPedCapsuleRadius + 0.3f), pedLightSize, R.fPedCapsuleBaseSoftness };
         pDevice->SetPixelShaderConstantF(150, peds[0], kPedsPerLight);
         pDevice->SetPixelShaderConstantF(154, capsule, 1);
-        // c115: the shapes' count and where the first three groups end (zz_shape_groups.patch), c125-c128 the groups' spheres
-        const float shapeCount[4] = { float(propsUsed), propsUsed ? shapeEnds[0] : 0.0f, propsUsed ? shapeEnds[1] : 0.0f, propsUsed ? shapeEnds[2] : 0.0f };
+        // The shapes' groups (zz_shape_groups.patch): c115 their count and where groups 0-2 end, c129 where groups 3-6
+        // end; the groups' spheres in c125-c128, c116, c117, c119 and c120
+        auto end = [&](int g) { return propsUsed ? shapeEnds[g] : 0.0f; };
+        const float shapeCount[4] = { float(propsUsed), end(0), end(1), end(2) };
+        const float shapeEndsMore[4] = { end(3), end(4), end(5), end(6) };
         pDevice->SetPixelShaderConstantF(115, shapeCount, 1);
-        pDevice->SetPixelShaderConstantF(125, &shapeSpheres[0][0], kShapeGroups);
+        pDevice->SetPixelShaderConstantF(129, shapeEndsMore, 1);
+        pDevice->SetPixelShaderConstantF(125, &shapeSpheres[0][0], 4);
+        pDevice->SetPixelShaderConstantF(116, &shapeSpheres[4][0], 2);
+        pDevice->SetPixelShaderConstantF(119, &shapeSpheres[6][0], 2);
         constantsOn = true;
         float strongest = 0.0f;
         for (int i = 0; i < used; ++i)

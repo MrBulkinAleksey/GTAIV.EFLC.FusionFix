@@ -1,14 +1,14 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 91b2217..cd78399 100644
+index 91b2217..7d41d66 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-@@ -631,23 +631,91 @@
+@@ -631,23 +631,167 @@
        // --- FusionFix prop shape shadows (PropShapeShadows in vehicleboxshadows.ixx): c115.x shapes of lamp posts and other props
        // --- near this light in s7, two texels each: a capsule (one end, radius; the other end, -1) or a box turned about the
        // --- vertical (centre, half length; forward xy, half width, half height); not faded with the boxes by c149.w
-+      // --- FusionFix: zz_shape_groups.patch: the shapes in four groups, each a sphere round them in c125-c128 (centre, radius) and
-+      // --- its end in c115.y, z, w and x (the last): a group's shapes are read only where the way to the light passes within
-+      // --- its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
++      // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
++      // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
 +      add r13.z, c154.z, c154.w
 +      max r13.z, r13.z, r12.x
 +      max r13.z, r13.z, c138.w
@@ -91,6 +91,82 @@ index 91b2217..cd78399 100644
 +      if_ge r20.w, c138.x
 +        mad r14.x, r13.x, c139.z, c139.w
 +        rep i3
++          break_ge r13.x, c129.x
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.x
++      mov r20, c116
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.y
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.y
++      mov r20, c117
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.z
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.z
++      mov r20, c119
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.w
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.w
++      mov r20, c120
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
 +          break_ge r13.x, c115.x
 +          texldl r18, r14, s7
 +          add r14.x, r14.x, c140.x
@@ -108,7 +184,7 @@ index 91b2217..cd78399 100644
        min r31.w, r31.w, r17.w // FusionFix: local_light_with_shadow_blend.patch: the darker of the contact shadow and the boxes, not both
      endif
      // --- FusionFix: local_light_with_shadow_blend.patch: the darkest of the shadow map, the contact shadow and the boxes, rather than all three
-@@ -742,6 +810,21 @@
+@@ -742,6 +886,21 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -131,16 +207,16 @@ index 91b2217..cd78399 100644
      // --- way to the light r16), into r17.w
      label l6
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index 6485479..d2b5fdd 100644
+index 6485479..cedf752 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-@@ -449,23 +449,91 @@
+@@ -449,23 +449,167 @@
        // --- FusionFix prop shape shadows (PropShapeShadows in vehicleboxshadows.ixx): c115.x shapes of lamp posts and other props
        // --- near this light in s7, two texels each: a capsule (one end, radius; the other end, -1) or a box turned about the
        // --- vertical (centre, half length; forward xy, half width, half height); not faded with the boxes by c149.w
-+      // --- FusionFix: zz_shape_groups.patch: the shapes in four groups, each a sphere round them in c125-c128 (centre, radius) and
-+      // --- its end in c115.y, z, w and x (the last): a group's shapes are read only where the way to the light passes within
-+      // --- its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
++      // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
++      // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
 +      add r13.z, c154.z, c154.w
 +      max r13.z, r13.z, r12.x
 +      max r13.z, r13.z, c138.w
@@ -223,6 +299,82 @@ index 6485479..d2b5fdd 100644
 +      if_ge r20.w, c138.x
 +        mad r14.x, r13.x, c139.z, c139.w
 +        rep i3
++          break_ge r13.x, c129.x
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.x
++      mov r20, c116
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.y
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.y
++      mov r20, c117
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.z
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.z
++      mov r20, c119
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.w
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.w
++      mov r20, c120
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
 +          break_ge r13.x, c115.x
 +          texldl r18, r14, s7
 +          add r14.x, r14.x, c140.x
@@ -240,7 +392,7 @@ index 6485479..d2b5fdd 100644
        min r31.w, r31.w, r17.w // FusionFix: local_light_with_shadow_blend.patch: the darker of the contact shadow and the boxes, not both
      endif
      mul r26.xyz, r26, r31.w
-@@ -555,6 +623,21 @@
+@@ -555,6 +699,21 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -263,16 +415,16 @@ index 6485479..d2b5fdd 100644
      // --- way to the light r16), into r17.w
      label l6
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index a037a8a..41474fc 100644
+index a037a8a..12d9857 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-@@ -647,23 +647,91 @@
+@@ -647,23 +647,167 @@
        // --- FusionFix prop shape shadows (PropShapeShadows in vehicleboxshadows.ixx): c115.x shapes of lamp posts and other props
        // --- near this light in s7, two texels each: a capsule (one end, radius; the other end, -1) or a box turned about the
        // --- vertical (centre, half length; forward xy, half width, half height); not faded with the boxes by c149.w
-+      // --- FusionFix: zz_shape_groups.patch: the shapes in four groups, each a sphere round them in c125-c128 (centre, radius) and
-+      // --- its end in c115.y, z, w and x (the last): a group's shapes are read only where the way to the light passes within
-+      // --- its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
++      // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
++      // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
 +      add r13.z, c154.z, c154.w
 +      max r13.z, r13.z, r12.x
 +      max r13.z, r13.z, c138.w
@@ -355,6 +507,82 @@ index a037a8a..41474fc 100644
 +      if_ge r20.w, c138.x
 +        mad r14.x, r13.x, c139.z, c139.w
 +        rep i3
++          break_ge r13.x, c129.x
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.x
++      mov r20, c116
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.y
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.y
++      mov r20, c117
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.z
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.z
++      mov r20, c119
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.w
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.w
++      mov r20, c120
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
 +          break_ge r13.x, c115.x
 +          texldl r18, r14, s7
 +          add r14.x, r14.x, c140.x
@@ -372,7 +600,7 @@ index a037a8a..41474fc 100644
        min r31.w, r31.w, r17.w // FusionFix: local_light_with_shadow_blend.patch: the darker of the contact shadow and the boxes, not both
      endif
      // --- FusionFix: local_light_with_shadow_blend.patch: the darkest of the shadow map, the contact shadow and the boxes, rather than all three
-@@ -758,6 +826,21 @@
+@@ -758,6 +902,21 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -395,16 +623,16 @@ index a037a8a..41474fc 100644
      // --- way to the light r16), into r17.w
      label l6
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index ee8abf9..ad25235 100644
+index ee8abf9..f4c8911 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-@@ -415,23 +415,91 @@
+@@ -415,23 +415,167 @@
        // --- FusionFix prop shape shadows (PropShapeShadows in vehicleboxshadows.ixx): c115.x shapes of lamp posts and other props
        // --- near this light in s7, two texels each: a capsule (one end, radius; the other end, -1) or a box turned about the
        // --- vertical (centre, half length; forward xy, half width, half height); not faded with the boxes by c149.w
-+      // --- FusionFix: zz_shape_groups.patch: the shapes in four groups, each a sphere round them in c125-c128 (centre, radius) and
-+      // --- its end in c115.y, z, w and x (the last): a group's shapes are read only where the way to the light passes within
-+      // --- its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
++      // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
++      // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
 +      add r13.z, c154.z, c154.w
 +      max r13.z, r13.z, r12.x
 +      max r13.z, r13.z, c138.w
@@ -487,6 +715,82 @@ index ee8abf9..ad25235 100644
 +      if_ge r20.w, c138.x
 +        mad r14.x, r13.x, c139.z, c139.w
 +        rep i3
++          break_ge r13.x, c129.x
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.x
++      mov r20, c116
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.y
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.y
++      mov r20, c117
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.z
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.z
++      mov r20, c119
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.w
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.w
++      mov r20, c120
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
 +          break_ge r13.x, c115.x
 +          texldl r18, r14, s7
 +          add r14.x, r14.x, c140.x
@@ -504,7 +808,7 @@ index ee8abf9..ad25235 100644
        mul r31.w, r31.w, r17.w
      endif
      mul r26.xyz, r26, r31.w
-@@ -521,6 +589,21 @@
+@@ -521,6 +665,21 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -527,16 +831,16 @@ index ee8abf9..ad25235 100644
      // --- way to the light r16), into r17.w
      label l6
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 3438d39..f467c79 100644
+index 3438d39..64921e9 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-@@ -424,23 +424,91 @@
+@@ -424,23 +424,167 @@
        // --- FusionFix prop shape shadows (PropShapeShadows in vehicleboxshadows.ixx): c115.x shapes of lamp posts and other props
        // --- near this light in s7, two texels each: a capsule (one end, radius; the other end, -1) or a box turned about the
        // --- vertical (centre, half length; forward xy, half width, half height); not faded with the boxes by c149.w
-+      // --- FusionFix: zz_shape_groups.patch: the shapes in four groups, each a sphere round them in c125-c128 (centre, radius) and
-+      // --- its end in c115.y, z, w and x (the last): a group's shapes are read only where the way to the light passes within
-+      // --- its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
++      // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
++      // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
 +      add r13.z, c154.z, c154.w
 +      max r13.z, r13.z, r12.x
 +      max r13.z, r13.z, c138.w
@@ -619,6 +923,82 @@ index 3438d39..f467c79 100644
 +      if_ge r20.w, c138.x
 +        mad r14.x, r13.x, c139.z, c139.w
 +        rep i3
++          break_ge r13.x, c129.x
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.x
++      mov r20, c116
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.y
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.y
++      mov r20, c117
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.z
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.z
++      mov r20, c119
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.w
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.w
++      mov r20, c120
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
 +          break_ge r13.x, c115.x
 +          texldl r18, r14, s7
 +          add r14.x, r14.x, c140.x
@@ -636,7 +1016,7 @@ index 3438d39..f467c79 100644
        mul r31.w, r31.w, r17.w
      endif
      mul r26.xyz, r26, r31.w
-@@ -530,6 +598,21 @@
+@@ -530,6 +674,21 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -659,16 +1039,16 @@ index 3438d39..f467c79 100644
      // --- way to the light r16), into r17.w
      label l6
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 913feec..56ee2e4 100644
+index 913feec..fd0f583 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-@@ -426,23 +426,91 @@
+@@ -426,23 +426,167 @@
        // --- FusionFix prop shape shadows (PropShapeShadows in vehicleboxshadows.ixx): c115.x shapes of lamp posts and other props
        // --- near this light in s7, two texels each: a capsule (one end, radius; the other end, -1) or a box turned about the
        // --- vertical (centre, half length; forward xy, half width, half height); not faded with the boxes by c149.w
-+      // --- FusionFix: zz_shape_groups.patch: the shapes in four groups, each a sphere round them in c125-c128 (centre, radius) and
-+      // --- its end in c115.y, z, w and x (the last): a group's shapes are read only where the way to the light passes within
-+      // --- its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
++      // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
++      // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
 +      add r13.z, c154.z, c154.w
 +      max r13.z, r13.z, r12.x
 +      max r13.z, r13.z, c138.w
@@ -751,6 +1131,82 @@ index 913feec..56ee2e4 100644
 +      if_ge r20.w, c138.x
 +        mad r14.x, r13.x, c139.z, c139.w
 +        rep i3
++          break_ge r13.x, c129.x
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.x
++      mov r20, c116
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.y
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.y
++      mov r20, c117
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.z
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.z
++      mov r20, c119
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.w
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.w
++      mov r20, c120
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
 +          break_ge r13.x, c115.x
 +          texldl r18, r14, s7
 +          add r14.x, r14.x, c140.x
@@ -768,7 +1224,7 @@ index 913feec..56ee2e4 100644
        mul r31.w, r31.w, r17.w
      endif
      mul r26.xyz, r26, r31.w
-@@ -532,6 +600,21 @@
+@@ -532,6 +676,21 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -791,16 +1247,16 @@ index 913feec..56ee2e4 100644
      // --- way to the light r16), into r17.w
      label l6
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index f3f7eed..fa29885 100644
+index f3f7eed..d2a061d 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-@@ -428,23 +428,91 @@
+@@ -428,23 +428,167 @@
        // --- FusionFix prop shape shadows (PropShapeShadows in vehicleboxshadows.ixx): c115.x shapes of lamp posts and other props
        // --- near this light in s7, two texels each: a capsule (one end, radius; the other end, -1) or a box turned about the
        // --- vertical (centre, half length; forward xy, half width, half height); not faded with the boxes by c149.w
-+      // --- FusionFix: zz_shape_groups.patch: the shapes in four groups, each a sphere round them in c125-c128 (centre, radius) and
-+      // --- its end in c115.y, z, w and x (the last): a group's shapes are read only where the way to the light passes within
-+      // --- its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
++      // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
++      // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
 +      add r13.z, c154.z, c154.w
 +      max r13.z, r13.z, r12.x
 +      max r13.z, r13.z, c138.w
@@ -883,6 +1339,82 @@ index f3f7eed..fa29885 100644
 +      if_ge r20.w, c138.x
 +        mad r14.x, r13.x, c139.z, c139.w
 +        rep i3
++          break_ge r13.x, c129.x
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.x
++      mov r20, c116
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.y
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.y
++      mov r20, c117
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.z
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.z
++      mov r20, c119
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.w
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.w
++      mov r20, c120
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
 +          break_ge r13.x, c115.x
 +          texldl r18, r14, s7
 +          add r14.x, r14.x, c140.x
@@ -900,7 +1432,7 @@ index f3f7eed..fa29885 100644
        mul r31.w, r31.w, r17.w
      endif
      mul r26.xyz, r26, r31.w
-@@ -534,6 +602,21 @@
+@@ -534,6 +678,21 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
