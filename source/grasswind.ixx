@@ -81,6 +81,13 @@ export namespace GrassShared
 // modulo 64 m; from the window's corner, clamped, edge texels empty) for the G-buffer pass; c243 = 1 / 64 m, the
 // strength (0 = off), the texture coordinate's offset. Needs vertex textures (DXVK has them).
 //
+// Bush Shake ([PROCEDURAL] BushShake): the bushes (models drawn with gta_trees, up to 3.5 m tall) a person or a car goes
+// through part away from them and shake while it moves, harder the faster it goes (shaders/patches/tree_bush_shake.patch,
+// gta_trees and gta_trees_extended deferred_draw VS0). Around the G-buffer draw of a model that short with a body
+// reaching it b13 is set, c248-c251 get the bodies as for the grass and c241 the model's height, the push and the shake at
+// its top and the shake's phase. Other shaders don't read b13, so the flag on a short model of another shader does
+// nothing. Needs the same bodies as Grass Bending.
+//
 // GrassWindDebug (Graphics > Debug) sways four times as hard, to see which draws take it. GrassWindLog = 1 ([DEBUG])
 // writes the wind and the grass draws to GTAIV.EFLC.FusionFix.GrassWind.log every 600 G-buffer passes.
 class GrassWind
@@ -92,6 +99,7 @@ class GrassWind
     static constexpr DWORD kTrampleSampler = D3DVERTEXTEXTURESAMPLER1;  // vs s1
     static constexpr int kBodyRegister = 248;       // c248-c251: two bodies (centre, forward; half length, half width, 1 / reach, strength)
     static constexpr int kSwayFlag = 12;            // b12 (vertex shader)
+    static constexpr int kBushFlag = 13;            // b13 (vertex shader): a bush with bodies in c248-c251, c241 its push and shake
     static constexpr float kPushPerHeight = 0.75f;  // a body's push at the tip, of the plant's height
 
     static constexpr float kDirection[2] = { 0.929f, 0.370f };
@@ -99,6 +107,12 @@ class GrassWind
     // FOGGY, LIGHTNING
     static constexpr float kWeatherWind[8] = { 0.15f, 0.25f, 0.8f, 0.2f, 0.5f, 0.3f, 0.1f, 1.0f };
     static constexpr float kGustWavelength = 5.0f;  // metres between gusts along the wind
+
+    // Bushes: models up to this tall (m) from their origin; the push at the top (m, of the height, up to 0.4 m); the shake at
+    // the top (m) at full speed, the speed that gives it (m/s), the shake's frequency (Hz)
+    static constexpr float kBushMaxHeight = 3.5f;
+    static constexpr float kBushPushPerHeight = 0.2f, kBushMaxPush = 0.4f;
+    static constexpr float kBushShake = 0.07f, kBushShakeSpeed = 3.0f, kBushShakeHz = 5.0f;
 
     // Downwash: from a helicopter's position (about a metre over its skids) above the prop, gone at 30 m
     static constexpr float kRotorLow = 0.3f, kRotorHigh = 30.0f;
@@ -110,7 +124,7 @@ class GrassWind
     static constexpr float kHeightWrap = 64.0f;         // the ground's height in the texture, modulo this
     static constexpr float kStampRange = 30.0f;         // bodies this near the player trample
 
-    static inline bool bWind = true, bBending = true, bTrample = true;
+    static inline bool bWind = true, bBending = true, bTrample = true, bBush = true;
     static inline float fStrength = 1.0f;
     static inline float fTrampleSeconds = 12.0f;
     static inline bool bLog = false;
@@ -129,6 +143,8 @@ class GrassWind
     static inline float fBendPerHeight = 0.0f, fFlutterPerHeight = 0.0f, fPushPerHeight = 0.0f;
     static inline std::vector<NearbyBodies::Body> bodies;
     static inline bool bBodiesBound = false;
+    static inline bool bBendingPass = false, bBushPass = false, bBushBound = false;
+    static inline double bushPhase = 0.0;
     static inline float rotorPulse = 1.0f;
 
     // Trample grid, render thread: by world cell modulo kCells
@@ -139,14 +155,15 @@ class GrassWind
     static inline int trampleSupport = -1;                    // vertex textures: -1 not checked yet, 0 none, 1 there
     static inline bool trampleAny = false, trampleUploaded = false, bTrampleBound = false;
 
-    // By model index: the hash the entry was made for and the model's height, 0 if not grass
-    struct ModelEntry { uint32_t hash = 0; float height = -1.0f; };
+    // By model index: the hash the entry was made for, the model's height (0 if not grass) and its height above its origin
+    // if it is short enough for a bush (else 0)
+    struct ModelEntry { uint32_t hash = 0; float height = -1.0f; float bushHeight = 0.0f; };
     static inline std::vector<ModelEntry> models;
     static inline std::unordered_map<uint32_t, int> grassHashes; // the kind, as GrassShared::GrassKind
 
     // GrassWindLog
     static inline uint32_t logPasses = 0;
-    static inline uint64_t logGrassDraws = 0, logCheckedDraws = 0, logPressedDraws = 0;
+    static inline uint64_t logGrassDraws = 0, logCheckedDraws = 0, logPressedDraws = 0, logBushDraws = 0;
     static inline size_t logBodies = 0, logTrampled = 0;
     static inline std::unordered_set<uint16_t> logModels;
 
@@ -214,6 +231,7 @@ class GrassWind
         bWind = iniReader.ReadInteger("PROCEDURAL", "GrassWind", 1) != 0;
         bBending = iniReader.ReadInteger("PROCEDURAL", "GrassBending", 1) != 0;
         bTrample = iniReader.ReadInteger("PROCEDURAL", "GrassTrample", 1) != 0;
+        bBush = iniReader.ReadInteger("PROCEDURAL", "BushShake", 1) != 0;
         fStrength = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GrassWindStrength", 1.0f), 0.0f, 4.0f);
         fTrampleSeconds = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GrassTrampleSeconds", 12.0f), 1.0f, 300.0f);
         bLog = iniReader.ReadInteger("DEBUG", "GrassWindLog", 0) != 0;
@@ -236,6 +254,9 @@ class GrassWind
         {
             entry.hash = hash;
             entry.height = 0.0f;
+            // The bounding box's top above the origin (+0x38, the box from +0x20)
+            const float top = *reinterpret_cast<const float*>(info + 0x38);
+            entry.bushHeight = std::isfinite(top) && top > 0.3f && top <= kBushMaxHeight ? top : 0.0f;
             if (grassHashes.contains(hash))
             {
                 // The props stand on their origin: the bounding sphere's centre is half way up; a model centred on its
@@ -247,6 +268,12 @@ class GrassWind
             }
         }
         return entry.height;
+    }
+
+    // The model's height above its origin if it is short enough to be a bush, else 0; after GrassHeight
+    static float BushHeight(uint16_t model)
+    {
+        return models.empty() ? 0.0f : models[model].bushHeight;
     }
 
     static float WeatherWind()
@@ -486,7 +513,7 @@ class GrassWind
         const bool windOn = bWind && fStrength > 0.0f;
         const bool bending = bBending;
         const bool trampling = bTrample;
-        const bool on = (windOn || bending || trampling) && EntityClass::Installed();
+        const bool on = (windOn || bending || trampling || bBush) && EntityClass::Installed();
         const float scale = on && windOn ? fStrength * (Pref(debugPref, 0) ? 4.0f : 1.0f) : 0.0f;
         fBendPerHeight = scale * (0.03f + 0.22f * fWind);
         fFlutterPerHeight = scale * (0.012f + 0.045f * fWind);
@@ -495,7 +522,7 @@ class GrassWind
         bodies.clear();
         float focus[3] = {};
         bool haveBodies = false;
-        if (on && (bending || trampling))
+        if (on && (bending || trampling || bBush))
         {
             NearbyBodies::Want();
             haveBodies = NearbyBodies::Copy(bodies, focus);
@@ -503,7 +530,10 @@ class GrassWind
                 bodies.clear();
         }
         const bool trample = on && trampling && haveBodies && UpdateTrample(pDevice, focus, dt);
-        if (!bending)
+        bBendingPass = bending;
+        bBushPass = on && bBush && !bodies.empty();
+        bushPhase = std::fmod(bushPhase + dt * kBushShakeHz, 1.0);
+        if (!bending && !bBushPass)
             bodies.clear();
         // The downwash pulses with the blades
         rotorPulse = 0.8f + 0.12f * std::sin(now * 0.0215f) + 0.08f * std::sin(now * 0.0347f);
@@ -520,7 +550,7 @@ class GrassWind
         GrassShared::FlutterPhase = static_cast<float>(flutterPhase);
         GrassShared::Direction[0] = kDirection[0], GrassShared::Direction[1] = kDirection[1];
         GrassShared::GustWavelength = kGustWavelength;
-        GrassShared::Bodies = &bodies;
+        GrassShared::Bodies = bending ? &bodies : nullptr;
         GrassShared::PushPerHeight = fPushPerHeight;
         GrassShared::RotorPulse = rotorPulse;
         GrassShared::TrampleTexture = trample ? trampleTexture : nullptr;
@@ -534,6 +564,7 @@ class GrassWind
         if (trample)
             BindTrample(pDevice, true);
         SetFlag(pDevice, false);
+        SetBushFlag(pDevice, false);
         ClearBodies(pDevice);
         lastModel = -1;
         bInGBuffer = on;
@@ -543,12 +574,12 @@ class GrassWind
             std::string heights;
             for (const auto model : logModels)
                 heights += std::format(" {:08x}:{:.2f}", models[model].hash, models[model].height);
-            FusionLog::Write("GrassWind", "Stats", "wind %.2f (weather %.2f) scale %.2f, per pass: %.1f grass draws of %.1f building and prop draws, %.1f pressed by %.1f bodies near, %.1f trampled cells (trample %s); %zu grass models (hash:height m):%s\n",
-                fWind, target, scale, double(logGrassDraws) / logPasses, double(logCheckedDraws) / logPasses, double(logPressedDraws) / logPasses,
+            FusionLog::Write("GrassWind", "Stats", "wind %.2f (weather %.2f) scale %.2f, per pass: %.1f grass draws of %.1f building and prop draws, %.1f bush draws shaken, %.1f pressed by %.1f bodies near, %.1f trampled cells (trample %s); %zu grass models (hash:height m):%s\n",
+                fWind, target, scale, double(logGrassDraws) / logPasses, double(logCheckedDraws) / logPasses, double(logBushDraws) / logPasses, double(logPressedDraws) / logPasses,
                 double(logBodies) / logPasses, double(logTrampled) / logPasses,
                 trampleSupport < 0 ? "not asked" : trampleSupport ? "on" : "no vertex textures", logModels.size(), heights.c_str());
             logPasses = 0;
-            logGrassDraws = logCheckedDraws = logPressedDraws = 0;
+            logGrassDraws = logCheckedDraws = logPressedDraws = logBushDraws = 0;
             logBodies = logTrampled = 0;
             logModels.clear();
         }
@@ -561,49 +592,48 @@ class GrassWind
         bBodiesBound = false;
     }
 
-    // The two bodies nearest the prop that reach it and stand on its ground, to c248-c251
-    static void SetBodies(IDirect3DDevice9* pDevice, uint16_t model, const float* place, float height)
+    // The two bodies nearest the model that reach it and stand on its ground; false if none
+    static bool FindBodies(uint16_t model, const float* place, float height, const NearbyBodies::Body* (&nearest)[2])
     {
-        const NearbyBodies::Body* nearest[2] = {};
+        nearest[0] = nearest[1] = nullptr;
         float nearestGap[2] = { FLT_MAX, FLT_MAX };
-        if (!bodies.empty())
+        if (bodies.empty())
+            return false;
+        const auto info = EntityClass::ModelInfo(model);
+        // How far the model's blades reach from its origin: the bounding sphere's radius plus its centre's offset
+        const auto sphere = info ? reinterpret_cast<const float*>(info + 0x10) : nullptr;
+        const float radius = sphere ? std::clamp(sphere[3] + std::sqrt(sphere[0] * sphere[0] + sphere[1] * sphere[1]), 0.0f, 8.0f) : 2.0f;
+        for (const auto& body : bodies)
         {
-            const auto info = EntityClass::ModelInfo(model);
-            // How far the model's blades reach from its origin: the bounding sphere's radius plus its centre's offset
-            const auto sphere = info ? reinterpret_cast<const float*>(info + 0x10) : nullptr;
-            const float radius = sphere ? std::clamp(sphere[3] + std::sqrt(sphere[0] * sphere[0] + sphere[1] * sphere[1]), 0.0f, 8.0f) : 2.0f;
-            for (const auto& body : bodies)
+            if (body.kind == NearbyBodies::Body::Rotor)
             {
-                if (body.kind == NearbyBodies::Body::Rotor)
-                {
-                    const float above = body.bottom - place[2];
-                    if (above < kRotorLow || above > kRotorHigh)
-                        continue;
-                }
-                else if (std::abs(place[2] - body.bottom) > height + 1.0f)
+                const float above = body.bottom - place[2];
+                if (above < kRotorLow || above > kRotorHigh)
                     continue;
-                const float dx = place[0] - body.centre[0], dy = place[1] - body.centre[1];
-                const float along = std::abs(dx * body.forward[0] + dy * body.forward[1]) - body.halfLength;
-                const float across = std::abs(dx * body.forward[1] - dy * body.forward[0]) - body.halfWidth;
-                const float a = (std::max)(along, 0.0f), c = (std::max)(across, 0.0f);
-                const float gap = std::sqrt(a * a + c * c);
-                if (gap > Reach(body, place) + radius)
-                    continue;
-                if (gap < nearestGap[0])
-                {
-                    nearest[1] = nearest[0], nearestGap[1] = nearestGap[0];
-                    nearest[0] = &body, nearestGap[0] = gap;
-                }
-                else if (gap < nearestGap[1])
-                    nearest[1] = &body, nearestGap[1] = gap;
             }
+            else if (std::abs(place[2] - body.bottom) > height + 1.0f)
+                continue;
+            const float dx = place[0] - body.centre[0], dy = place[1] - body.centre[1];
+            const float along = std::abs(dx * body.forward[0] + dy * body.forward[1]) - body.halfLength;
+            const float across = std::abs(dx * body.forward[1] - dy * body.forward[0]) - body.halfWidth;
+            const float a = (std::max)(along, 0.0f), c = (std::max)(across, 0.0f);
+            const float gap = std::sqrt(a * a + c * c);
+            if (gap > Reach(body, place) + radius)
+                continue;
+            if (gap < nearestGap[0])
+            {
+                nearest[1] = nearest[0], nearestGap[1] = nearestGap[0];
+                nearest[0] = &body, nearestGap[0] = gap;
+            }
+            else if (gap < nearestGap[1])
+                nearest[1] = &body, nearestGap[1] = gap;
         }
-        if (!nearest[0])
-        {
-            if (bBodiesBound)
-                ClearBodies(pDevice);
-            return;
-        }
+        return nearest[0] != nullptr;
+    }
+
+    // The bodies to c248-c251
+    static void UploadBodies(IDirect3DDevice9* pDevice, const NearbyBodies::Body* const* nearest, const float* place)
+    {
         float values[16] = {};
         for (int i = 0; i < 2; ++i)
         {
@@ -625,8 +655,50 @@ class GrassWind
         }
         pDevice->SetVertexShaderConstantF(kBodyRegister, values, 4);
         bBodiesBound = true;
+    }
+
+    // The two bodies nearest the prop that reach it and stand on its ground, to c248-c251; none clears them
+    static void SetBodies(IDirect3DDevice9* pDevice, uint16_t model, const float* place, float height)
+    {
+        const NearbyBodies::Body* nearest[2];
+        if (!bBendingPass || !FindBodies(model, place, height, nearest))
+        {
+            if (bBodiesBound)
+                ClearBodies(pDevice);
+            return;
+        }
+        UploadBodies(pDevice, nearest, place);
         if (bLog)
             ++logPressedDraws;
+    }
+
+    static void SetBushFlag(IDirect3DDevice9* pDevice, bool on)
+    {
+        const BOOL flag = on;
+        pDevice->SetVertexShaderConstantB(kBushFlag, &flag, 1);
+        bBushBound = on;
+    }
+
+    // A short model with a body in it: the bodies, its push and shake, b13. The shake grows with the faster body's speed.
+    static void BeforeBushDraw(IDirect3DDevice9* pDevice, uint16_t model, const float* place)
+    {
+        const float height = BushHeight(model);
+        const NearbyBodies::Body* nearest[2];
+        if (height <= 0.0f || !FindBodies(model, place, height, nearest))
+            return;
+        float speed = 0.0f;
+        for (const auto* body : nearest)
+            if (body && body->kind != NearbyBodies::Body::Rotor)
+                speed = (std::max)(speed, std::sqrt(body->velocity[0] * body->velocity[0] + body->velocity[1] * body->velocity[1]));
+        const bool rotor = nearest[0]->kind == NearbyBodies::Body::Rotor || (nearest[1] && nearest[1]->kind == NearbyBodies::Body::Rotor);
+        const float shake = kBushShake * (rotor ? 1.0f : std::clamp(speed / kBushShakeSpeed, 0.0f, 1.0f));
+        const float params[4] = { 1.0f / height, (std::min)(height * kBushPushPerHeight, kBushMaxPush), shake, static_cast<float>(bushPhase) };
+        UploadBodies(pDevice, nearest, place);
+        pDevice->SetVertexShaderConstantF(kModelRegister, params, 1);
+        lastModel = -1;
+        SetBushFlag(pDevice, true);
+        if (bLog)
+            ++logBushDraws;
     }
 
     // How far past its box a body moves the grass of a prop at `place`: a helicopter's downwash spreads as it climbs
@@ -645,6 +717,8 @@ class GrassWind
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (pDevice && bBound)
             SetFlag(pDevice, false);
+        if (pDevice && bBushBound)
+            SetBushFlag(pDevice, false);
         if (pDevice && bTrampleBound)
             BindTrample(pDevice, false);
     }
@@ -662,7 +736,12 @@ class GrassWind
             ++logCheckedDraws;
         const float height = GrassHeight(model);
         if (height <= 0.0f)
+        {
+            if (bBushPass)
+                if (auto pDevice = rage::grcDevice::GetD3DDevice())
+                    BeforeBushDraw(pDevice, model, place);
             return;
+        }
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
@@ -674,6 +753,8 @@ class GrassWind
         }
         if (fPushPerHeight > 0.0f)
             SetBodies(pDevice, model, place, height);
+        else if (bBodiesBound)
+            ClearBodies(pDevice);
         SetFlag(pDevice, true);
         if (bLog)
         {
@@ -684,10 +765,15 @@ class GrassWind
 
     static void AfterEntityDraw(EntityClass::Kind)
     {
-        if (!bBound)
+        if (!bBound && !bBushBound)
             return;
         if (auto pDevice = rage::grcDevice::GetD3DDevice())
-            SetFlag(pDevice, false);
+        {
+            if (bBound)
+                SetFlag(pDevice, false);
+            if (bBushBound)
+                SetBushFlag(pDevice, false);
+        }
     }
 
 public:
@@ -735,6 +821,7 @@ public:
         {
             bInGBuffer = false;
             bBound = false;
+            bBushBound = false;
             bTrampleBound = false;
         };
     }

@@ -36,13 +36,16 @@ import comvars;
 import d3dx9_43;
 import inireload;
 import natives;
+import postfxprofiler;
+import profiler;
 
 // [DEBUG] DebugServerPort: a server on 127.0.0.1 that a tool (tools/gta4-live-mcp in the recomp's repository) reaches
 // through an SSH tunnel, to look into the running game from another machine: memory (read, search, signatures, and
 // writes with DebugServerAllowWrite), the loaded modules, the ini (read, write and read again as Ctrl+Shift+F10 does)
 // and the logs (and FusionFix's other files next to it: files, file), and over time: values read each frame (watch_start) and the hits of an instruction or a piece of
 // memory (trace_start: a mid-hook or a debug register, with registers, callers and reads; trace_read, trace_stop,
-// trace_list). One client at a time; a request is a JSON object on one line ({"id": 1, "cmd": "read", ...}), the
+// trace_list), the GPU time of FusionFix's passes and the game's (profiler: PostFxProfiler's next block), and where the
+// threads spend their CPU time (cpu_profile: a session of the sampling profiler, Profiler). One client at a time; a request is a JSON object on one line ({"id": 1, "cmd": "read", ...}), the
 // answer one line ({"id": 1, "ok": true, ...}), the same protocol as the recomp's debug server. Bytes travel as hex in
 // memory order (little-endian here), addresses as "0x..." strings.
 namespace DebugServer
@@ -494,6 +497,64 @@ namespace DebugServer
         return Object({{"mime", Quote("image/png")}, {"width", std::to_string(capture.width)},
             {"height", std::to_string(capture.height)}, {"file", Quote(Utf8(path))},
             {"data", Quote(Base64(capture.png.data(), capture.png.size()))}});
+    }
+
+    // ---- the GPU profiler (PostFxProfiler): on for the request, a block started afresh, its rows when it is written
+
+    std::string GpuProfiler(const Request& request)
+    {
+        const int seconds = std::clamp(int(request.Number("timeout", 30)), 1, 120);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+        struct Waiting
+        {
+            Waiting() { PostFxProfiler::bRemoteReset = true; ++PostFxProfiler::nRemoteRequests; }
+            ~Waiting() { --PostFxProfiler::nRemoteRequests; }
+        } waiting;
+        const auto wait = [&](auto done, const char* what)
+        {
+            while (!done())
+            {
+                if (std::chrono::steady_clock::now() > deadline)
+                    throw std::runtime_error(std::string("no profiler block within ") + std::to_string(seconds) + " s: " + what);
+                Sleep(20);
+            }
+        };
+        wait([] { return !PostFxProfiler::bRemoteReset; }, "no frame reached post processing (minimized, loading?)");
+        const uint32_t started = PostFxProfiler::BlocksWritten();
+        wait([started] { return PostFxProfiler::BlocksWritten() > started; }, "the frames did not come back (no timestamp queries on this device?)");
+        std::vector<PostFxProfiler::ProfilerRow> rows;
+        int frames = 0;
+        PostFxProfiler::LastBlock(rows, frames);
+        std::vector<std::string> items;
+        for (const auto& row : rows)
+        {
+            char ms[32];
+            snprintf(ms, sizeof(ms), "%.3f", row.ms);
+            items.push_back(Object({{"name", Quote(row.name)}, {"depth", std::to_string(row.depth)}, {"ms", ms}}));
+        }
+        return Object({{"frames", std::to_string(frames)}, {"rows", Array(items)}});
+    }
+
+    // ---- the sampling profiler (Profiler): a session of some seconds, its report as text
+
+    std::string CpuProfile(const Request& request)
+    {
+        Profiler::SessionSettings settings;
+        const auto number = [&](const char* key, int fallback, int low, int high)
+        {
+            return std::clamp(int((std::min)(request.Number(key, uint64_t(fallback)), uint64_t(high))), low, high);
+        };
+        settings.seconds = number("seconds", settings.seconds, 1, 300);
+        settings.rate = number("rate", settings.rate, 50, 4000);
+        settings.threads = number("threads", settings.threads, 1, 32);
+        settings.spikeMs = number("spike_ms", settings.spikeMs, 0, 2000);
+        settings.functions = number("functions", settings.functions, 5, 500);
+        settings.stacks = number("stacks", settings.stacks, 0, 1000);
+        settings.spikes = number("spikes", settings.spikes, 0, 100);
+        const std::string report = Profiler::Session(settings);
+        return Object({{"seconds", std::to_string(settings.seconds)}, {"rate", std::to_string(settings.rate)},
+            {"threads", std::to_string(settings.threads)}, {"folded", Quote(Utf8(FusionLog::PathFor("Profiler", L".folded")))},
+            {"report", Quote(report)}});
     }
 
     // ---- the scene: script natives, which run only in the game's own frame, so a request waits for the next one
@@ -1998,6 +2059,8 @@ namespace DebugServer
         if (command == "trace_stop") return TraceStop(request);
         if (command == "trace_list") return TraceList();
         if (command == "nearby") return Nearby(request);
+        if (command == "profiler") return GpuProfiler(request);
+        if (command == "cpu_profile") return CpuProfile(request);
         throw std::runtime_error("unknown command '" + command + "'");
     }
 

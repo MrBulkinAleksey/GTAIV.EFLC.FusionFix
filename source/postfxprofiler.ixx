@@ -2,6 +2,8 @@ module;
 
 #include <common.hxx>
 #include <algorithm>
+#include <atomic>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -20,6 +22,31 @@ namespace PostFxProfiler
 {
     // PostFxProfiler in the ini, live: Ctrl+Shift+F10 turns it on and off in game. Off, no query is made.
     export inline bool bEnabled = false;
+
+    // The debug server's requests (DebugServer "profiler"): while any is waiting the profiler runs whatever the ini
+    // says, its first block starting afresh, and as the last one ends it is as the ini had it. Each block written is
+    // kept (LastBlock) for them: its rows (name, depth in the tree, -1 for the frame, milliseconds per frame) and how
+    // many frames it averages, numbered from 1.
+    export inline std::atomic<int> nRemoteRequests = 0;
+    export inline std::atomic<bool> bRemoteReset = false;   // set by a request: the next frame starts a block afresh, then false
+    export struct ProfilerRow { std::string name; int depth; double ms; };
+    static std::mutex lastBlockMutex;
+    static std::vector<ProfilerRow> lastBlockRows;
+    static int nLastBlockFrames = 0;
+    static std::atomic<uint32_t> nBlocksWritten = 0;
+
+    export uint32_t BlocksWritten()
+    {
+        return nBlocksWritten;
+    }
+
+    export uint32_t LastBlock(std::vector<ProfilerRow>& rows, int& frames)
+    {
+        std::lock_guard lock(lastBlockMutex);
+        rows = lastBlockRows;
+        frames = nLastBlockFrames;
+        return nBlocksWritten;
+    }
 
     // PostFxProfiler: GPU time of FusionFix's passes, from timestamp queries. Each frame's queries
     // are read kProfilerFrames frames later, without waiting on the GPU, and every 120 frames the
@@ -182,40 +209,39 @@ namespace PostFxProfiler
     }
 
     // A section, its passes below it, then what they leave of it.
-    static void WriteProfilerSection(FusionLog::Block& log, int section, int depth, double n)
+    static void AddProfilerSection(std::vector<ProfilerRow>& rows, int section, int depth, double n)
     {
-        log.Printf("%*s%-*s %6.2f\n", 2 + depth * 2, "", 34 - depth * 2, kProfilerSectionInfo[section].name, profilerSums[section] / n);
+        rows.push_back({ kProfilerSectionInfo[section].name, depth, profilerSums[section] / n });
         double children = 0.0;
         bool any = false;
         for (int i = 0; i < kProfSections; ++i)
         {
             if (kProfilerSectionInfo[i].parent != section || profilerSums[i] <= 0.0)
                 continue;
-            WriteProfilerSection(log, i, depth + 1, n);
+            AddProfilerSection(rows, i, depth + 1, n);
             children += profilerSums[i];
             any = true;
         }
         if (any)
-            log.Printf("%*s%-*s %6.2f\n", 4 + depth * 2, "", 32 - depth * 2, "other", (std::max)(profilerSums[section] - children, 0.0) / n);
+            rows.push_back({ "other", depth + 1, (std::max)(profilerSums[section] - children, 0.0) / n });
     }
 
     static void WriteProfilerBlock()
     {
         {
-            FusionLog::Block log("PostFx", "Profiler");
+            std::vector<ProfilerRow> rows;
             const double n = double(nProfilerSamples);
-            log.Printf("GPU milliseconds per frame, averaged over %d frames\n", nProfilerSamples);
-            log.Printf("%-36s %6.2f\n", "frame", profilerFrameSum / n);
+            rows.push_back({ "frame", -1, profilerFrameSum / n });
             double sections = 0.0;
             for (int i = 0; i < kProfSections; ++i)
             {
                 if (kProfilerSectionInfo[i].parent >= 0 || profilerSums[i] <= 0.0)
                     continue;
-                WriteProfilerSection(log, i, 0, n);
+                AddProfilerSection(rows, i, 0, n);
                 sections += profilerSums[i];
             }
             const double game = (std::max)(profilerFrameSum - sections, 0.0);
-            log.Printf("  %-34s %6.2f\n", "the game's other passes", game / n);
+            rows.push_back({ "the game's other passes", 0, game / n });
             // By the target the game drew into, the most expensive first; what is left over is time no target
             // accounts for, such as the GPU waiting on the game.
             int order[kProfilerTargets];
@@ -229,11 +255,20 @@ namespace PostFxProfiler
                 const double t = profilerSums[kProfSections + order[i]];
                 if (t / n < 0.005)
                     continue;
-                log.Printf("    %-32s %6.2f\n", profilerTargetNames[order[i]].c_str(), t / n);
+                rows.push_back({ profilerTargetNames[order[i]], 1, t / n });
                 targets += t;
             }
             if (targets > 0.0)
-                log.Printf("    %-32s %6.2f\n", "other", (std::max)(game - targets, 0.0) / n);
+                rows.push_back({ "other", 1, (std::max)(game - targets, 0.0) / n });
+
+            FusionLog::Block log("PostFx", "Profiler");
+            log.Printf("GPU milliseconds per frame, averaged over %d frames\n", nProfilerSamples);
+            for (const auto& row : rows)
+                log.Printf("%*s%-*s %6.2f\n", 2 + row.depth * 2, "", 34 - row.depth * 2, row.name.c_str(), row.ms);
+            std::lock_guard lock(lastBlockMutex);
+            lastBlockRows = std::move(rows);
+            nLastBlockFrames = nProfilerSamples;
+            ++nBlocksWritten;
         }
         ResetProfilerSums();
     }
@@ -288,6 +323,25 @@ namespace PostFxProfiler
     {
         if (!pDevice)
             return;
+        // The debug server's requests: on while any waits, as before once none does
+        static bool remote = false, enabledBefore = false;
+        if (nRemoteRequests > 0)
+        {
+            if (!remote)
+            {
+                remote = true;
+                enabledBefore = bEnabled;
+                ResetProfilerSums();
+            }
+            bEnabled = true;
+            if (bRemoteReset.exchange(false))
+                ResetProfilerSums();
+        }
+        else if (remote)
+        {
+            remote = false;
+            bEnabled = enabledBefore;
+        }
         if (!bEnabled)
         {
             if (bProfilerRunning)
