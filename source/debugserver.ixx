@@ -1905,8 +1905,9 @@ namespace DebugServer
     // Pools by their CE globals (CPools::ms_pBuildingPool 0x12bd0e8, ms_pObjectPool 0x1632c60): the building pool's
     // signature holds the 500 that procedural.ixx raises at start, so a search for it after that found nothing.
     // Distances are to the model's bounding box placed in the world (0 inside it), so a 30 m row of bushes or a map
-    // section whose origin is far off counts from its nearest part. A model whose drawable is in (entity +0x34 -> its
-    // reference -> the rmcDrawable) gives its shaders: drawable +8 the grmShaderGroup, +8/+0xC its shaders and their
+    // section whose origin is far off counts from its nearest part. A model whose drawable is in (as CDrawEntityDC's
+    // execute CE 0x8dcbf0 takes it: model info +8, a fragment type, its +0xB4, else what +0xC points to) gives its
+    // shaders: drawable +8 the grmShaderGroup, +8/+0xC its shaders and their
     // count; a grmShaderFx has its parameters' data at +0x14, their count at +0x1C, their types at +0x24 (0 a texture,
     // its name at +0x14, "pack:/name.dds"), the effect's name at +0x44 and the preset's (.sps) at +0x48.
 
@@ -1950,12 +1951,14 @@ namespace DebugServer
     }
 
     // A model's shaders: per shader its preset (or effect) and textures, as "gta_cutout.sps: cj_stalk1, cj_flower_256"
-    std::vector<std::string> ModelShaders(uint32_t entity)
+    std::vector<std::string> ModelShaders(uint32_t info)
     {
         std::vector<std::string> shaders;
-        uint32_t reference = 0, drawable = 0, group = 0, array = 0;
+        uint32_t fragType = 0, slot = 0, drawable = 0, group = 0, array = 0;
         uint16_t count = 0;
-        if (!ReadValue(entity + 0x34, reference) || !ReadValue(reference, drawable) || !ReadValue(drawable + 8, group) ||
+        if (!ReadValue(info + 8, fragType) ||
+            !(fragType ? ReadValue(fragType + 0xB4, drawable) : ReadValue(info + 0xC, slot) && ReadValue(slot, drawable)) ||
+            !ReadValue(drawable + 8, group) ||
             !ReadValue(group + 8, array) || !ReadValue(group + 0xC, count) || !count || count > 64)
             return shaders;
         for (uint32_t i = 0; i < count; ++i)
@@ -2101,7 +2104,7 @@ namespace DebugServer
                     continue;
                 if (details && !model.shadersRead)
                 {
-                    model.shaders = ModelShaders(entity);
+                    model.shaders = ModelShaders(model.info);
                     model.shadersRead = !model.shaders.empty();
                 }
                 if (!shaderWanted.empty() || !textureWanted.empty())
