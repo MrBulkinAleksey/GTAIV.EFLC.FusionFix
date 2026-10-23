@@ -993,7 +993,7 @@ namespace DebugServer
         if (size > kMaxFileBytes)
             throw std::runtime_error(name + " is over 16 MB");
         std::ifstream file(path, std::ios::binary);
-        std::vector<uint8_t> bytes(size_t(size));
+        std::vector<uint8_t> bytes(static_cast<size_t>(size));
         if (!file.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(bytes.size())))
             throw std::runtime_error("cannot read " + name);
         return Object({{"name", Quote(name)}, {"size", std::to_string(size)}, {"data", Quote(Base64(bytes.data(), bytes.size()))}});
