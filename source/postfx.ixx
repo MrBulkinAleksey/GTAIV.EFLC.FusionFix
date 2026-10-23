@@ -1625,9 +1625,10 @@ private:
                         R.fVehicleBoxShadowLightSize, R.fVehicleBoxShadowRounding, int(R.bVehicleBoxShadowsFromCarLights), int(R.bVehicleBoxShadowsWithSlots),
                         R.fVehicleBoxShadowScale[0], R.fVehicleBoxShadowScale[1], R.fVehicleBoxShadowScale[2], R.fVehicleBoxShadowFollowLight,
                         R.fVehicleBoxShadowLowLightNarrow);
-                log.Printf("ped capsule shadows: %s, %u people shaded by lights since the last log; radius %.2f, height %.2f, foot %.2f below the position\n",
+                log.Printf("ped capsule shadows: %s, %u people shaded by lights since the last log; radius %.2f, height %.2f, foot %.2f below the position; the player by bones %s, by %u lights\n",
                         R.bPedCapsuleShadows ? "on" : "off", VehicleBoxShadows::pedsWithShadows.exchange(0),
-                        R.fPedCapsuleRadius, R.fPedCapsuleHeight, R.fPedCapsuleFootBelow);
+                        R.fPedCapsuleRadius, R.fPedCapsuleHeight, R.fPedCapsuleFootBelow, R.bPedBoneShadows ? "on" : "off",
+                        VehicleBoxShadows::bodiesWithShadows.exchange(0));
                 log.Printf("prop shape shadows: %s, %u shapes given to lights since the last log; up to %d a light, within %.0f m\n",
                         R.bPropShapeShadows ? "on" : "off", VehicleBoxShadows::propsWithShadows.exchange(0),
                         R.nPropShapesPerLight, R.fPropShapeDistance);

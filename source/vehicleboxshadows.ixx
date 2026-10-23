@@ -83,6 +83,7 @@ export struct VehicleBoxShadows
         bool post;      // a lamp post, which no lamp's map ever shows
     };
     static constexpr int kProps = 512, kShapesPerLight = 32, kShapeTexels = kShapesPerLight * 2;
+    static constexpr int kBodyShapes = 16;
     struct List
     {
         std::atomic<uintptr_t> lights{0}; // the light list these boxes go with
@@ -97,6 +98,10 @@ export struct VehicleBoxShadows
         float peds[kPeds][3];
         int propCount = 0;
         Prop props[kProps];
+        // PedBoneShadows: the player's capsules along the bones (BodyShapes), a sphere round them to pick them by
+        int bodyCount = 0;
+        Shape body[kBodyShapes];
+        float bodyCentre[3] = {}, bodyReach = 0.0f;
     };
     static inline List lists[kLists]{};
     static inline int nextList = 0;
@@ -145,6 +150,7 @@ export struct VehicleBoxShadows
     static inline IDirect3DTexture9* shapesTexture = nullptr; // on the real device, released when it is lost
     static inline bool shapesBound = false;
     static inline std::atomic<uint32_t> propsWithShadows{0};
+    static inline std::atomic<uint32_t> bodiesWithShadows{0}; // lights given the player's bones (PedBoneShadows)
     // The lamps and the cars they keep boxes for (VehicleBoxShadowsUntilLeaving), gathered as a frame's lights are
     // drawn and handed to the night shadow slots on the next; render thread, main thread copies.
     static constexpr int kPairs = 256;
@@ -426,6 +432,91 @@ export struct VehicleBoxShadows
             list.props[i] = found[i].second;
     }
 
+    // PedBoneShadows: the player as 16 capsules between the bones as posed this frame (CPed::GetBoneMatrix), into
+    // list.body; none where a bone is missing or stands off the ped (another skeleton, a ped not yet posed). Each
+    // capsule's other end carries -2 for -1: the light shaders leave such shapes out on peds' and the player's own
+    // pixels, as they would shadow the body they stand in (zz_ped_capsule_look.patch).
+    static void BodyShapes(List& list, uintptr_t ped, const float position[3])
+    {
+        list.bodyCount = 0;
+        if (!CPed::GetBoneMatrix || !ped)
+            return;
+        enum { Pelvis, Head, LThigh, LCalf, LFoot, RThigh, RCalf, RFoot, LUpper, LFore, LHand, RUpper, RFore, RHand, Bones };
+        static constexpr uint32_t ids[Bones] = { 0x1A1, 0x4B5, 0x1A2, 0x1A3, 0x1A4, 0x1A7, 0x1A8, 0x1A9, 0x4C1, 0x4C2, 0x4C3, 0x4C8, 0x4C9, 0x4D0 };
+        float at[Bones][3];
+        for (int i = 0; i < Bones; ++i)
+        {
+            float m[16]{};
+            CPed::GetBoneMatrix(ped, nullptr, m, ids[i]);
+            const float dx = m[12] - position[0], dy = m[13] - position[1], dz = m[14] - position[2];
+            if (!std::isfinite(dx + dy + dz) || dx * dx + dy * dy + dz * dz > 2.0f * 2.0f)
+                return;
+            at[i][0] = m[12]; at[i][1] = m[13]; at[i][2] = m[14];
+        }
+        const auto capsule = [&list](const float a[3], const float b[3], float radius)
+        {
+            auto& shape = list.body[list.bodyCount++];
+            std::copy_n(a, 3, shape.t0);
+            shape.t0[3] = radius;
+            std::copy_n(b, 3, shape.t1);
+            shape.t1[3] = -2.0f;
+        };
+        // the way from the pelvis to the head: the body's up, which the neck and the head's middle lie along
+        float up[3] = { at[Head][0] - at[Pelvis][0], at[Head][1] - at[Pelvis][1], at[Head][2] - at[Pelvis][2] };
+        const float upLength = std::sqrt(up[0] * up[0] + up[1] * up[1] + up[2] * up[2]);
+        if (!(upLength > 0.2f))
+            return;
+        for (auto& v : up)
+            v /= upLength;
+        const auto along = [](const float from[3], const float way[3], float metres, float out[3])
+        {
+            for (int k = 0; k < 3; ++k)
+                out[k] = from[k] + way[k] * metres;
+        };
+        float neck[3], headLow[3], headHigh[3], hips[3];
+        along(at[Head], up, -0.08f, neck);
+        along(at[Head], up, 0.03f, headLow);
+        along(at[Head], up, 0.11f, headHigh);
+        along(at[Pelvis], up, 0.05f, hips);
+        capsule(hips, neck, 0.14f);                    // the body
+        capsule(at[LUpper], at[RUpper], 0.08f);        // the shoulders
+        capsule(at[LThigh], at[RThigh], 0.1f);         // the hips
+        capsule(headLow, headHigh, 0.1f);              // the head
+        // the feet forward from the ankles, low: the way from the thigh's knee over the ankle gives no forward, the ped's
+        // matrix does
+        const float* m = CEntity::GetMatrix(ped);
+        float forward[3] = { m ? m[4] : 0.0f, m ? m[5] : 0.0f, 0.0f };
+        const float forwardLength = std::sqrt(forward[0] * forward[0] + forward[1] * forward[1]);
+        if (forwardLength > 0.1f)
+            forward[0] /= forwardLength, forward[1] /= forwardLength;
+        for (const int side : { 0, 1 })
+        {
+            const int thigh = side ? RThigh : LThigh, calf = side ? RCalf : LCalf, foot = side ? RFoot : LFoot;
+            const int upper = side ? RUpper : LUpper, fore = side ? RFore : LFore, hand = side ? RHand : LHand;
+            capsule(at[thigh], at[calf], 0.085f);
+            capsule(at[calf], at[foot], 0.06f);
+            float toe[3];
+            along(at[foot], forward, 0.14f, toe);
+            toe[2] -= 0.05f;
+            capsule(at[foot], toe, 0.045f);
+            capsule(at[upper], at[fore], 0.055f);
+            capsule(at[fore], at[hand], 0.045f);
+            // the hand on from the wrist, the way the forearm points
+            float way[3] = { at[hand][0] - at[fore][0], at[hand][1] - at[fore][1], at[hand][2] - at[fore][2] };
+            const float wayLength = std::sqrt(way[0] * way[0] + way[1] * way[1] + way[2] * way[2]);
+            if (wayLength > 0.05f)
+            {
+                for (auto& v : way)
+                    v /= wayLength;
+                float tip[3];
+                along(at[hand], way, 0.09f, tip);
+                capsule(at[hand], tip, 0.045f);
+            }
+        }
+        std::copy_n(at[Pelvis], 3, list.bodyCentre);
+        list.bodyReach = 1.3f;
+    }
+
     static void Capture()
     {
         auto& list = lists[nextList];
@@ -553,13 +644,19 @@ export struct VehicleBoxShadows
         list.count = (std::min)(n, kBoxes);
         for (int i = 0; i < list.count; ++i)
             list.boxes[i] = found[i].second;
-        // People on foot within 80 m of the player, the player too; one inside a car's box sits in it, in its shadow.
+        // People on foot within 80 m of the player, the player too unless as bones (PedBoneShadows); one inside a car's
+        // box sits in it, in its shadow.
         list.pedCount = 0;
+        list.bodyCount = 0;
+        const uintptr_t player = CPlayer::getLocalPlayerPed();
+        if (PostFxResources.bPedCapsuleShadows && PostFxResources.bPedBoneShadows && !CPlayer::findPlayerCar())
+            BodyShapes(list, player, focus);
         if (PostFxResources.bPedCapsuleShadows)
             CPed::ForEachPed([&](uintptr_t ped)
             {
                 float p[3];
-                if (list.pedCount >= kPeds || !CEntity::GetPosition(ped, p) || !std::isfinite(p[0] + p[1] + p[2]))
+                if (list.pedCount >= kPeds || (ped == player && list.bodyCount) || !CEntity::GetPosition(ped, p) ||
+                    !std::isfinite(p[0] + p[1] + p[2]))
                     return;
                 const float x = p[0] - focus[0], y = p[1] - focus[1], z = p[2] - focus[2];
                 if (x * x + y * y + z * z > 80.0f * 80.0f)
@@ -1003,7 +1100,7 @@ export struct VehicleBoxShadows
     static int ShapesForLight(const rage::CLightSource& light, bool hasMap, Shape (&shapes)[kShapesPerLight])
     {
         const auto& R = PostFxResources;
-        if (!drawn || !drawn->propCount)
+        if (!drawn || (!drawn->propCount && !drawn->bodyCount))
             return 0;
         // Its light far from the camera: none, as the boxes
         if (R.fVehicleBoxShadowsMaxDistance > 0.0f)
@@ -1014,7 +1111,6 @@ export struct VehicleBoxShadows
                 if (std::sqrt(ex * ex + ey * ey + ez * ez) - light.mRadius > R.fVehicleBoxShadowsMaxDistance)
                     return 0;
             }
-        const int most = std::clamp(R.nPropShapesPerLight, 1, kShapesPerLight);
         float planes[5][4];
         const auto* viewport = rage::GetCurrentViewport();
         const int planeCount = viewport && R.bPropShapeViewCulling ? FrustumPlanes(*viewport, planes) : 0;
@@ -1029,9 +1125,33 @@ export struct VehicleBoxShadows
         const float* dir = &light.mDirection.x;
         const float dirLength = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
         const float cone = spot ? std::acos(light.mOuterConeAngle) : 0.0f;
+        // PedBoneShadows: the player's capsules first, under a light without a map this frame (whose map shows the
+        // player) that reaches them, nor one of ours on a facade unless PedCapsuleAddedLights; the props take the room
+        // left
+        int used = 0;
+        if (drawn->bodyCount && !hasMap && (R.bPedCapsuleAddedLights || !VehicleBoxShadowsBridge::AddedLight ||
+            !VehicleBoxShadowsBridge::AddedLight(key, light.mFlags)))
+        {
+            const float* c = drawn->bodyCentre;
+            const float dx = c[0] - at[0], dy = c[1] - at[1], dz = c[2] - at[2];
+            const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            bool reached = d - drawn->bodyReach < light.mRadius && dz < -0.3f;
+            if (reached && spot && dirLength > 0.5f && d > drawn->bodyReach)
+            {
+                const float off = std::acos(std::clamp((dx * dir[0] + dy * dir[1] + dz * dir[2]) / (dirLength * d), -1.0f, 1.0f));
+                reached = off <= cone + std::asin((std::min)(drawn->bodyReach / d, 1.0f)) + 0.1f;
+            }
+            const float falloff = std::clamp(1.0f - (std::max)(d - drawn->bodyReach, 0.0f) / (std::max)(light.mRadius, 0.1f), 0.0f, 1.0f);
+            if (reached && falloff * falloff >= R.fVehicleBoxShadowsMinLight)
+                for (int j = 0; j < drawn->bodyCount; ++j)
+                    if (ShapeDistance(drawn->body[j], at) > 0.2f)
+                        shapes[used++] = drawn->body[j];
+            bodiesWithShadows.fetch_add(used ? 1u : 0u, std::memory_order_relaxed);
+        }
+        const int most = (std::min)(std::clamp(R.nPropShapesPerLight, 1, kShapesPerLight), kShapesPerLight - used);
         std::pair<float, const Prop*> chosen[kShapesPerLight] = {};
         int taken = 0;
-        for (int i = 0; i < drawn->propCount; ++i)
+        for (int i = 0; i < (R.bPropShapeShadows ? drawn->propCount : 0); ++i)
         {
             const auto& p = drawn->props[i];
             // In this light's own map already. Its map of this frame shows every object but the posts: the caster loop
@@ -1072,19 +1192,19 @@ export struct VehicleBoxShadows
             chosen[place] = { score, &p };
         }
         last = {};
-        int used = 0;
-        for (int i = 0; i < taken && used < most; ++i)
+        const int bodyUsed = used;
+        for (int i = 0; i < taken && used - bodyUsed < most; ++i)
         {
             const auto& p = *chosen[i].second;
             last[i] = p.entity;
             // The lamp's own post (the light's key is the entity's address and the effect's place in it): its post
             // throws a shadow from the lamp out on the arm, the arm over the lamp none
             const int count = key - static_cast<uint32_t>(p.entity) < 0x320 ? 1 : p.shapeCount;
-            for (int j = 0; j < count && used < most; ++j)
+            for (int j = 0; j < count && used - bodyUsed < most; ++j)
                 if (ShapeDistance(p.shapes[j], at) > 0.2f)
                     shapes[used++] = p.shapes[j];
         }
-        propsWithShadows.fetch_add(uint32_t(used), std::memory_order_relaxed);
+        propsWithShadows.fetch_add(uint32_t(used - bodyUsed), std::memory_order_relaxed);
         return used;
     }
 
@@ -1498,8 +1618,9 @@ export struct VehicleBoxShadows
                 c[3] = (std::min)(c[3], 15.9f) + 16.0f * std::round(std::clamp(boxStrength[i], 0.0f, 1.0f) * 15.0f);
             }
         }
-        // Props for car lights too: a post's shadow from the headlights is the one most often seen
-        if (R.VehicleBoxShadowsEnabled() && R.bPropShapeShadows && lightListDrawn &&
+        // Props for car lights too: a post's shadow from the headlights is the one most often seen; the player's bones
+        // (PedBoneShadows) go with them
+        if (R.VehicleBoxShadowsEnabled() && (R.bPropShapeShadows || (R.bPedCapsuleShadows && R.bPedBoneShadows)) && lightListDrawn &&
             (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
         {
             FindDrawn();

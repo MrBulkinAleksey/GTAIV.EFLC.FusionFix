@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 744537d9..46fd0b9c 100644
+index 744537d9..1aeda0b0 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -66,6 +66,10 @@
@@ -13,7 +13,19 @@ index 744537d9..46fd0b9c 100644
      defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
-@@ -644,19 +648,46 @@
+@@ -564,6 +568,11 @@
+     add r25.x, r15.z, -r25.x
+     cmp r25.w, r25.x, r25.w, c138.y
+     cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+@@ -644,19 +653,46 @@
      rcp r21.y, r21.y
      mul_sat r24.x, -r21.x, r21.y
      mad r22.xyz, r16, r24.x, r15
@@ -66,7 +78,7 @@ index 744537d9..46fd0b9c 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index cfe5b855..bfa68acf 100644
+index cfe5b855..c5357379 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -69,6 +69,10 @@
@@ -80,7 +92,19 @@ index cfe5b855..bfa68acf 100644
      defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
-@@ -653,19 +657,46 @@
+@@ -573,6 +577,11 @@
+     add r25.x, r15.z, -r25.x
+     cmp r25.w, r25.x, r25.w, c138.y
+     cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+@@ -653,19 +662,46 @@
      rcp r21.y, r21.y
      mul_sat r24.x, -r21.x, r21.y
      mad r22.xyz, r16, r24.x, r15
@@ -133,7 +157,7 @@ index cfe5b855..bfa68acf 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 58972675..8a57085e 100644
+index 58972675..b1173a67 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -69,6 +69,10 @@
@@ -147,7 +171,19 @@ index 58972675..8a57085e 100644
      defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
-@@ -655,19 +659,46 @@
+@@ -575,6 +579,11 @@
+     add r25.x, r15.z, -r25.x
+     cmp r25.w, r25.x, r25.w, c138.y
+     cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+@@ -655,19 +664,46 @@
      rcp r21.y, r21.y
      mul_sat r24.x, -r21.x, r21.y
      mad r22.xyz, r16, r24.x, r15
@@ -200,7 +236,7 @@ index 58972675..8a57085e 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index dfaffe50..9fb6cb88 100644
+index dfaffe50..1661bbf6 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -69,6 +69,10 @@
@@ -214,7 +250,19 @@ index dfaffe50..9fb6cb88 100644
      defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
-@@ -657,19 +661,46 @@
+@@ -577,6 +581,11 @@
+     add r25.x, r15.z, -r25.x
+     cmp r25.w, r25.x, r25.w, c138.y
+     cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+@@ -657,19 +666,46 @@
      rcp r21.y, r21.y
      mul_sat r24.x, -r21.x, r21.y
      mad r22.xyz, r16, r24.x, r15
@@ -267,7 +315,7 @@ index dfaffe50..9fb6cb88 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 67cd84cc..e4ab439f 100644
+index 67cd84cc..b03b93ca 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -101,6 +101,10 @@
@@ -281,7 +329,19 @@ index 67cd84cc..e4ab439f 100644
      defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
-@@ -865,19 +869,46 @@
+@@ -785,6 +789,11 @@
+     add r25.x, r15.z, -r25.x
+     cmp r25.w, r25.x, r25.w, c138.y
+     cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+@@ -865,19 +874,46 @@
      rcp r21.y, r21.y
      mul_sat r24.x, -r21.x, r21.y
      mad r22.xyz, r16, r24.x, r15
@@ -334,7 +394,7 @@ index 67cd84cc..e4ab439f 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index cad5264c..d0e4184a 100644
+index cad5264c..dc5faaac 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -71,6 +71,10 @@
@@ -348,7 +408,19 @@ index cad5264c..d0e4184a 100644
      defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
-@@ -678,19 +682,46 @@
+@@ -598,6 +602,11 @@
+     add r25.x, r15.z, -r25.x
+     cmp r25.w, r25.x, r25.w, c138.y
+     cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+@@ -678,19 +687,46 @@
      rcp r21.y, r21.y
      mul_sat r24.x, -r21.x, r21.y
      mad r22.xyz, r16, r24.x, r15
@@ -401,7 +473,7 @@ index cad5264c..d0e4184a 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index b7aad4d1..6e0a189c 100644
+index b7aad4d1..0e4abda5 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -103,6 +103,10 @@
@@ -415,7 +487,19 @@ index b7aad4d1..6e0a189c 100644
      defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
      dcl_texcoord v0
      dcl vPos.xy
-@@ -881,19 +885,46 @@
+@@ -801,6 +805,11 @@
+     add r25.x, r15.z, -r25.x
+     cmp r25.w, r25.x, r25.w, c138.y
+     cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+@@ -881,19 +890,46 @@
      rcp r21.y, r21.y
      mul_sat r24.x, -r21.x, r21.y
      mad r22.xyz, r16, r24.x, r15

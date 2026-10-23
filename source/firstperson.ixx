@@ -114,15 +114,11 @@ namespace FirstPerson
         return vehicleActive && CTimer::m_frameCount && *CTimer::m_frameCount - seatFrame <= 1;
     }
 
-    // CPed::GetBoneMatrix (CE 0x9E70B0, also behind GET_PED_BONE_POSITION): the bone as posed by the
-    // animation, in the world.
-    static void (__fastcall* GetBoneMatrix)(uintptr_t ped, void*, float* matrix, uint32_t bone) = nullptr;
-
     static bool HeadBonePosition(uintptr_t ped, float (&head)[3])
     {
-        if (!GetBoneMatrix || !ped) return false;
+        if (!CPed::GetBoneMatrix || !ped) return false;
         float m[16]{};
-        GetBoneMatrix(ped, nullptr, m, HeadBone);
+        CPed::GetBoneMatrix(ped, nullptr, m, HeadBone);
         if (!std::isfinite(m[12]) || !std::isfinite(m[13]) || !std::isfinite(m[14]) ||
             (m[12] == 0.0f && m[13] == 0.0f && m[14] == 0.0f))
             return false;
@@ -716,11 +712,6 @@ public:
             };
             readOffsets(iniReader);
             IniReload::Add(readOffsets);
-
-            // CPed::GetBoneMatrix: push edi / mov edi, ecx / mov eax, [edi] / call [eax+A0] / ...
-            auto bones = hook::pattern("57 8B F9 8B 07 FF 90 A0 00 00 00 85 C0 74 16 8B 07 8B CF FF 90 A0 00 00 00 8B 10 8B C8 FF 92 E0 00 00 00 EB 06 8B 87 00 01 00 00 85 C0 0F 84");
-            if (!bones.empty())
-                FirstPerson::GetBoneMatrix = bones.get_first<void(__fastcall)(uintptr_t, void*, float*, uint32_t)>(0);
 
             // lea eax, [esp+30] / push eax / mov ecx, ebx / call 0x4319B0 / movss xmm0, [esi+54]
             auto finalSite = hook::pattern("8D 44 24 30 50 8B CB E8 ? ? ? ? F3 0F 10 46 54");
