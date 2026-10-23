@@ -1082,9 +1082,13 @@ namespace PlayerShadowAllocation
             if(wholeShadow && rankedSquared>=0) rankedSquared/=uncachedLampAdvantage*uncachedLampAdvantage;
             if(gain==SlotGain::None) ++lampsWithoutCasters;
             else if(gain==SlotGain::OffScreen) ++lightsOffScreen;
-            // AddedLightsLast: those lights (AddedLight), cached or not, whether their light reaches you or not
+            // AddedLightsLast: those lights (AddedLight), cached or not, unless their light reaches you. One that does
+            // ranks off screen (StreetLampsFirst), below the street lamps with someone in their light, but as a last
+            // resort it also gave way to cached lamps 45-65 m off with nobody under them, lifted off screen only for
+            // their props (CachedLampViewSlots), and your shadow under it went from its map to the bone capsules and
+            // back as the camera turned.
             bool lastResort=false;
-            if(addedLightsLast && kind==budget::Kind::Lamp) {
+            if(addedLightsLast && kind==budget::Kind::Lamp && !lightsPlayer) {
                 lastResort=AddedLight(key,flags);
                 if(lastResort) ++addedLightsLastResort;
             }
