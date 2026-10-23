@@ -24,6 +24,7 @@ module;
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include "FusionLog.hpp"
 
@@ -1900,24 +1901,102 @@ namespace DebugServer
     }
 
     // ---- what is near a place: the buildings (map models, procedural props) and objects within a radius
+    //
+    // Pools by their CE globals (CPools::ms_pBuildingPool 0x12bd0e8, ms_pObjectPool 0x1632c60): the building pool's
+    // signature holds the 500 that procedural.ixx raises at start, so a search for it after that found nothing.
+    // Distances are to the model's bounding box placed in the world (0 inside it), so a 30 m row of bushes or a map
+    // section whose origin is far off counts from its nearest part. A model whose drawable is in (entity +0x34 -> its
+    // reference -> the rmcDrawable) gives its shaders: drawable +8 the grmShaderGroup, +8/+0xC its shaders and their
+    // count; a grmShaderFx has its parameters' data at +0x14, their count at +0x1C, their types at +0x24 (0 a texture,
+    // its name at +0x14, "pack:/name.dds"), the effect's name at +0x44 and the preset's (.sps) at +0x48.
 
     struct PoolHeader { uint32_t storage, flags; int32_t size, stride; };
 
     // The pool a global points to, read safely; false where it does not look like one.
-    bool ReadPool(uint32_t global, PoolHeader& pool)
+    bool ReadPool(uintptr_t global, PoolHeader& pool)
     {
         uint32_t address = 0;
-        if (!global || !SafeCopy(&address, reinterpret_cast<const void*>(uintptr_t(global)), 4) || address < 0x10000 ||
+        if (!global || !SafeCopy(&address, reinterpret_cast<const void*>(global), 4) || address < 0x10000 ||
             !SafeCopy(&pool, reinterpret_cast<const void*>(uintptr_t(address)), sizeof(pool)))
             return false;
         return pool.storage >= 0x10000 && pool.flags >= 0x10000 && pool.size > 0 && pool.size <= 200000 && pool.stride >= 0x24 &&
             pool.stride <= 0x10000;
     }
 
-    uint32_t PoolGlobal(const char* signature)
+    template <typename T>
+    bool ReadValue(uintptr_t address, T& value)
     {
-        auto pattern = hook::pattern(signature);
-        return pattern.empty() ? 0 : *pattern.get_first<uint32_t>(2);
+        return address >= 0x10000 && SafeCopy(&value, reinterpret_cast<const void*>(address), sizeof(T));
+    }
+
+    // A short C string from game memory (printable ASCII only, up to 63 characters), read a few bytes at a time so the
+    // end of a committed page does not fail it; empty when there is none
+    std::string ReadName(uintptr_t address)
+    {
+        std::string text;
+        char chunk[16];
+        while (text.size() < 63 && ReadValue(address + text.size(), chunk))
+        {
+            for (char c : chunk)
+            {
+                if (!c)
+                    return text;
+                if (uint8_t(c) < 0x20 || uint8_t(c) >= 0x7F || text.size() >= 63)
+                    return {};
+                text += c;
+            }
+        }
+        return {};
+    }
+
+    // A model's shaders: per shader its preset (or effect) and textures, as "gta_cutout.sps: cj_stalk1, cj_flower_256"
+    std::vector<std::string> ModelShaders(uint32_t entity)
+    {
+        std::vector<std::string> shaders;
+        uint32_t reference = 0, drawable = 0, group = 0, array = 0;
+        uint16_t count = 0;
+        if (!ReadValue(entity + 0x34, reference) || !ReadValue(reference, drawable) || !ReadValue(drawable + 8, group) ||
+            !ReadValue(group + 8, array) || !ReadValue(group + 0xC, count) || !count || count > 64)
+            return shaders;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            uint32_t shader = 0, data = 0, types = 0, names[2] = {};
+            int32_t parameters = 0;
+            if (!ReadValue(array + i * 4, shader) || !ReadValue(shader + 0x14, data) || !ReadValue(shader + 0x1C, parameters) ||
+                !ReadValue(shader + 0x24, types) || !ReadValue(shader + 0x44, names))
+                continue;
+            std::string line = ReadName(names[1]);
+            if (line.empty())
+                line = ReadName(names[0]);
+            if (line.empty())
+                continue;
+            std::string textures;
+            for (int32_t p = 0; p < (std::min)(parameters, 32); ++p)
+            {
+                uint8_t type = 0xFF;
+                uint32_t texture = 0, name = 0;
+                if (!ReadValue(types + p, type) || type != 0 || !ReadValue(data + p * 4, texture) || !ReadValue(texture + 0x14, name))
+                    continue;
+                std::string text = ReadName(name);
+                if (text.starts_with("pack:/"))
+                    text.erase(0, 6);
+                if (text.ends_with(".dds"))
+                    text.erase(text.size() - 4);
+                if (!text.empty())
+                    textures += (textures.empty() ? ": " : ", ") + text;
+            }
+            line += textures;
+            if (std::find(shaders.begin(), shaders.end(), line) == shaders.end())
+                shaders.push_back(line);
+        }
+        return shaders;
+    }
+
+    std::string Lower(std::string text)
+    {
+        for (auto& c : text)
+            c = char(tolower(uint8_t(c)));
+        return text;
     }
 
     std::string Nearby(const Request& request)
@@ -1925,15 +2004,34 @@ namespace DebugServer
         const float x = std::stof(request.Get("x")), y = std::stof(request.Get("y")), z = std::stof(request.Get("z"));
         const float radius = std::stof(request.Get("radius", "10"));
         const size_t limit = (std::min)(size_t(request.Number("max", 100)), size_t(1000));
-        // (as procedural.ixx and comvars.ixx find them: props and map models are buildings)
-        static const uint32_t buildings = PoolGlobal("8B 0D ? ? ? ? E8 ? ? ? ? 3D F4 01 00 00");
-        static const uint32_t objects = PoolGlobal("8B 0D ? ? ? ? 83 C4 ? 50 E8 ? ? ? ? 85 C0 74");
+        const std::string kindFilter = request.Get("kind", "all");
+        // model: an index (decimal) or a hash (0x...); shader / texture: parts of their names, any case
+        const std::string modelText = request.Get("model", "");
+        const bool modelIsHash = modelText.starts_with("0x") || modelText.starts_with("0X");
+        const uint32_t modelWanted = modelText.empty() ? 0 : uint32_t(std::stoul(modelText, nullptr, modelIsHash ? 16 : 10));
+        const std::string shaderWanted = Lower(request.Get("shader", "")), textureWanted = Lower(request.Get("texture", ""));
+        const float minTop = std::stof(request.Get("min_top", "-1e9")), maxTop = std::stof(request.Get("max_top", "1e9"));
+        const bool group = request.Get("group", "false") == "true";
+        const bool details = request.Get("shaders", "true") == "true" || !shaderWanted.empty() || !textureWanted.empty();
         const uintptr_t modelInfos = GameBase() + 0xE95CD8;   // CE 0x1295cd8, model infos by index
-        struct Found { float distance; std::string json; };
+
+        struct Model { bool read = false; uint32_t hash = 0, info = 0; float sphere[4] = {}, box[8] = {}; std::vector<std::string> shaders; bool shadersRead = false; };
+        std::unordered_map<int16_t, Model> models;
+        struct Found
+        {
+            float distance, originDistance;
+            const char* kind;
+            uint32_t entity, flags210, lodParent;
+            int16_t index;
+            float position[3], up;
+            uint8_t alpha;
+        };
         std::vector<Found> found;
-        const std::pair<const char*, uint32_t> pools[] = { { "building", buildings }, { "object", objects } };
+        const std::pair<const char*, uintptr_t> pools[] = { { "building", GameBase() + 0xEBD0E8 }, { "object", GameBase() + 0x1232C60 } };
         for (const auto& [kind, global] : pools)
         {
+            if (kindFilter != "all" && kindFilter != kind)
+                continue;
             PoolHeader pool;
             if (!ReadPool(global, pool))
                 continue;
@@ -1945,45 +2043,135 @@ namespace DebugServer
                 if (flags[i] & 0x80)
                     continue;
                 const uint32_t entity = pool.storage + uint32_t(i) * uint32_t(pool.stride);
-                uint8_t head[0x30];
-                uint32_t matrixAddress = 0;
-                float matrix[16];
+                uint8_t head[0x70];
                 if (!SafeCopy(head, reinterpret_cast<const void*>(uintptr_t(entity)), sizeof(head)))
-                    continue;
-                memcpy(&matrixAddress, head + 0x20, 4);
-                float position[3];
-                if (matrixAddress >= 0x10000 && SafeCopy(matrix, reinterpret_cast<const void*>(uintptr_t(matrixAddress)), sizeof(matrix)))
-                    memcpy(position, matrix + 12, sizeof(position));
-                else
-                {
-                    memcpy(position, head + 0x10, sizeof(position));
-                    matrixAddress = 0;
-                }
-                const float dx = position[0] - x, dy = position[1] - y, dz = position[2] - z;
-                const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-                if (!(distance <= radius))
                     continue;
                 int16_t index = -1;
                 memcpy(&index, head + 0x2E, 2);
-                uint32_t info = 0, hash = 0, entityFlags = 0;
-                float bounds[8] = {};
-                if (index >= 0 && index < 31000 && SafeCopy(&info, reinterpret_cast<const void*>(modelInfos + uintptr_t(index) * 4), 4) && info >= 0x10000)
+                if (index < 0 || index >= 31000)
+                    continue;
+                auto& model = models[index];
+                if (!model.read)
                 {
-                    SafeCopy(bounds, reinterpret_cast<const void*>(uintptr_t(info + 0x20)), sizeof(bounds));
-                    SafeCopy(&hash, reinterpret_cast<const void*>(uintptr_t(info + 0x3C)), 4);
+                    model.read = true;
+                    if (ReadValue(modelInfos + uintptr_t(index) * 4, model.info) && model.info >= 0x10000)
+                    {
+                        SafeCopy(model.sphere, reinterpret_cast<const void*>(uintptr_t(model.info + 0x10)), sizeof(model.sphere));
+                        SafeCopy(model.box, reinterpret_cast<const void*>(uintptr_t(model.info + 0x20)), sizeof(model.box));
+                        ReadValue(model.info + 0x3C, model.hash);
+                    }
                 }
-                SafeCopy(&entityFlags, reinterpret_cast<const void*>(uintptr_t(entity + 0x210)), 4);
-                const float size[3] = { bounds[4] - bounds[0], bounds[5] - bounds[1], bounds[6] - bounds[2] };
-                found.push_back({ distance, Object({{"kind", Quote(kind)}, {"entity", Hex32(entity)}, {"model", std::to_string(index)},
-                    {"hash", Hex32(hash)}, {"info", Hex32(info)}, {"pos", Array({Float(position[0]), Float(position[1]), Float(position[2])})},
-                    {"distance", Float(distance)}, {"size", Array({Float(size[0]), Float(size[1]), Float(size[2])})},
-                    {"up", Float(matrixAddress ? matrix[10] : 1.0f)}, {"flags210", Hex32(entityFlags)}}) });
+                if (!model.info || (modelIsHash ? model.hash != modelWanted : !modelText.empty() && uint32_t(index) != modelWanted))
+                    continue;
+                if (!(model.box[6] >= minTop && model.box[6] <= maxTop))
+                    continue;
+                // The position (+0x10) and heading (+0x1C), or the matrix (+0x20) where there is one
+                uint32_t matrixAddress = 0;
+                memcpy(&matrixAddress, head + 0x20, 4);
+                float matrix[16];
+                const bool hasMatrix = matrixAddress >= 0x10000 && SafeCopy(matrix, reinterpret_cast<const void*>(uintptr_t(matrixAddress)), sizeof(matrix));
+                float position[3], heading = 0.0f;
+                memcpy(position, hasMatrix ? matrix + 12 : reinterpret_cast<const float*>(head + 0x10), sizeof(position));
+                memcpy(&heading, head + 0x1C, 4);
+                const float dx = position[0] - x, dy = position[1] - y, dz = position[2] - z;
+                const float originDistance = std::sqrt(dx * dx + dy * dy + dz * dz);
+                const float reach = std::abs(model.sphere[3]) + std::sqrt(model.sphere[0] * model.sphere[0] + model.sphere[1] * model.sphere[1] + model.sphere[2] * model.sphere[2]);
+                if (!(originDistance <= radius + reach))
+                    continue;
+                // The place in the model's space (the matrix's rows as its axes, or turned by the heading)
+                float local[3];
+                if (hasMatrix)
+                    for (int k = 0; k < 3; ++k)
+                        local[k] = -(dx * matrix[k * 4] + dy * matrix[k * 4 + 1] + dz * matrix[k * 4 + 2]);
+                else
+                {
+                    const float c = std::cos(heading), s = std::sin(heading);
+                    local[0] = -(dx * c + dy * s);
+                    local[1] = -(-dx * s + dy * c);
+                    local[2] = -dz;
+                }
+                float outside = 0.0f;
+                for (int k = 0; k < 3; ++k)
+                {
+                    const float d = (std::max)((std::max)(model.box[k] - local[k], local[k] - model.box[4 + k]), 0.0f);
+                    outside += d * d;
+                }
+                const float distance = std::sqrt(outside);
+                if (!(distance <= radius))
+                    continue;
+                if (details && !model.shadersRead)
+                {
+                    model.shaders = ModelShaders(entity);
+                    model.shadersRead = !model.shaders.empty();
+                }
+                if (!shaderWanted.empty() || !textureWanted.empty())
+                {
+                    bool match = false;
+                    for (const auto& line : model.shaders)
+                    {
+                        const auto lower = Lower(line);
+                        const auto colon = lower.find(':');
+                        const auto shaderPart = lower.substr(0, colon), texturePart = colon == std::string::npos ? std::string() : lower.substr(colon);
+                        if ((shaderWanted.empty() || shaderPart.find(shaderWanted) != std::string::npos) &&
+                            (textureWanted.empty() || texturePart.find(textureWanted) != std::string::npos))
+                            match = true;
+                    }
+                    if (!match)
+                        continue;
+                }
+                Found item{ distance, originDistance, kind, entity, 0, 0, index, { position[0], position[1], position[2] }, hasMatrix ? matrix[10] : 1.0f, head[0x63] };
+                memcpy(&item.lodParent, head + 0x4C, 4);
+                ReadValue(entity + 0x210, item.flags210);
+                found.push_back(item);
             }
         }
-        std::sort(found.begin(), found.end(), [](const Found& a, const Found& b) { return a.distance < b.distance; });
+        std::sort(found.begin(), found.end(), [](const Found& a, const Found& b) { return a.distance < b.distance || (a.distance == b.distance && a.originDistance < b.originDistance); });
+
+        auto modelFields = [&](int16_t index) -> Fields
+        {
+            const auto& model = models[index];
+            std::vector<std::string> shaders;
+            for (const auto& line : model.shaders)
+                shaders.push_back(Quote(line));
+            return { {"model", std::to_string(index)}, {"hash", Hex32(model.hash)}, {"info", Hex32(model.info)},
+                {"size", Array({Float(model.box[4] - model.box[0]), Float(model.box[5] - model.box[1]), Float(model.box[6] - model.box[2])})},
+                {"top", Float(model.box[6])}, {"bottom", Float(model.box[2])}, {"shaders", Array(shaders)} };
+        };
         std::vector<std::string> items;
+        if (group)
+        {
+            // One row per model, nearest first: how many, the nearest one's distance and entity
+            std::vector<int16_t> order;
+            std::unordered_map<int16_t, std::pair<size_t, const Found*>> counts;
+            for (const auto& item : found)
+            {
+                auto& entry = counts[item.index];
+                if (!entry.first++)
+                {
+                    entry.second = &item;
+                    order.push_back(item.index);
+                }
+            }
+            for (size_t i = 0; i < order.size() && i < limit; ++i)
+            {
+                const auto& [count, nearest] = counts[order[i]];
+                auto fields = modelFields(order[i]);
+                fields.insert(fields.begin(), { {"kind", Quote(nearest->kind)}, {"count", std::to_string(count)}, {"distance", Float(nearest->distance)},
+                    {"entity", Hex32(nearest->entity)}, {"pos", Array({Float(nearest->position[0]), Float(nearest->position[1]), Float(nearest->position[2])})} });
+                items.push_back(Object(fields));
+            }
+            return Object({{"total", std::to_string(found.size())}, {"models", std::to_string(order.size())}, {"entities", Array(items)}});
+        }
         for (size_t i = 0; i < found.size() && i < limit; ++i)
-            items.push_back(found[i].json);
+        {
+            const auto& item = found[i];
+            auto fields = modelFields(item.index);
+            fields.insert(fields.begin(), { {"kind", Quote(item.kind)}, {"entity", Hex32(item.entity)}, {"distance", Float(item.distance)},
+                {"origin_distance", Float(item.originDistance)},
+                {"pos", Array({Float(item.position[0]), Float(item.position[1]), Float(item.position[2])})}, {"up", Float(item.up)},
+                {"flags210", Hex32(item.flags210)}, {"lod_parent", Hex32(item.lodParent)}, {"alpha", std::to_string(item.alpha)} });
+            items.push_back(Object(fields));
+        }
         return Object({{"total", std::to_string(found.size())}, {"entities", Array(items)}});
     }
 
