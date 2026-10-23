@@ -57,6 +57,7 @@ import waterreflections;
 import sharpening;
 import inireload;
 import skytrace;
+import timecycext;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -1213,7 +1214,11 @@ private:
                     }
 
                     static auto refSunShafts = FusionFixSettings.GetRef("PREF_SUNSHAFTS");
-                    if (refSunShafts->get())
+                    // Nothing to add with the timecycle's shafts at 0 and no flare of a sun above the horizon (as at
+                    // night): the four half and full size passes, 0.6 ms on an iGPU, drew nothing into the frame
+                    static auto refSunFlare = FusionFixSettings.GetRef("PREF_SUN_FLARE");
+                    const bool flareSeen = refSunFlare && refSunFlare->get() && !(RenderSkip::SunElevation() < 0.0f);
+                    if (refSunShafts->get() && (CTimeCycleExt::GetSSIntensity() > 0.0f || flareSeen))
                     {
                         // 2 passes at half res
                         if (PostFxResources.SSPrepass_PS && PostFxResources.SSDraw_PS)
