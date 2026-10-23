@@ -122,6 +122,11 @@ export namespace EntityClass
 
     // A model index's model info (its name's hash at +0x3c, bounding sphere centre +0x10 and radius +0x1c), 0 if none.
     uintptr_t ModelInfo(uint16_t model);
+
+    // One hook (Water Far Layer): called before each entity, fragment and fragment type command with its model and
+    // place, in a pass not left out; false leaves the command out. It may bind other targets for it. Set at init.
+    using CommandHook = bool (*)(Kind kind, uint16_t model, const float* place);
+    void SetCommandHook(CommandHook hook);
 }
 
 namespace
@@ -140,6 +145,7 @@ namespace
     bool bInstalled = false;
     // The command being executed, while the hooks run (render thread)
     void* currentDc = nullptr;
+    EntityClass::CommandHook commandHook = nullptr;
 
     std::vector<std::pair<EntityClass::DrawHook, EntityClass::DrawHook>>& Hooks()
     {
@@ -820,6 +826,14 @@ namespace
             return;
         }
 
+        if (commandHook && (source == FromEntity || source == FromFrag || source == FromFragType))
+        {
+            uint16_t model;
+            const float* place;
+            if (ModelAndPlace(dc, source, model, place) && !commandHook(kind, model, place))
+                return;
+        }
+
         const auto& hooks = Hooks();
         currentDc = dc;
         currentSource = source;
@@ -1148,6 +1162,11 @@ namespace EntityClass
     bool CurrentModel(uint16_t& model, const float*& place)
     {
         return currentDc && ModelAndPlace(currentDc, currentSource, model, place);
+    }
+
+    void SetCommandHook(CommandHook hook)
+    {
+        commandHook = hook;
     }
 
     uintptr_t ModelInfo(uint16_t model)

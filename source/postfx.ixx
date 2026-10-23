@@ -52,6 +52,7 @@ import pbrsky;
 import wetground;
 import headlightglints;
 import gpugrass;
+import waterfarlayer;
 import waterreflections;
 import sharpening;
 import inireload;
@@ -369,6 +370,7 @@ private:
         if (PostFxResources.HeadlightGlintsEffect)
             PostFxResources.HeadlightGlintsEffect->OnLostDevice();
         GpuGrass::OnDeviceLost();
+        WaterFarLayer::OnDeviceLost();
         PostFxResources.ReleaseWetCopies();
         ReleaseProfiler();
 
@@ -469,6 +471,7 @@ private:
             PostFxResources.WetGroundEffect->OnResetDevice();
         if (PostFxResources.HeadlightGlintsEffect)
             PostFxResources.HeadlightGlintsEffect->OnResetDevice();
+        WaterFarLayer::OnDeviceReset();
 
         for (auto i = 0; i < PostFxResources.nAmbientOcclusionMaxMipLevel; ++i)
             SAFE_RELEASE(PostFxResources.AOCamDepthSurf[i]);

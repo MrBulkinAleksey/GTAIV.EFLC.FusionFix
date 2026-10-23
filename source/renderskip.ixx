@@ -83,6 +83,9 @@ export namespace RenderSkip
     int64_t WaterPixelsSeen();
     // Render thread: called before each device draw that is not dropped (carmirrors.ixx's frame capture); set once at init
     void (*pDrawObserver)(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT primitives) = nullptr;
+    // Render thread: called as the water's reflection target is unlocked, before the game resolves it, with whether its
+    // draws were left out (Water Far Layer's composite); set once at init
+    void (*pBeforeWaterUnlock)(bool leftOut) = nullptr;
 }
 
 namespace RenderSkip
@@ -682,6 +685,8 @@ namespace RenderSkip
     // Unlocked while still counted: a resolve the game makes then goes with its pass
     void __fastcall UnlockTarget(void* factory, void*, uint32_t index, void* resolveFlags, int32_t unused)
     {
+        if (pBeforeWaterUnlock && index == 0 && depth > 0 && stack[depth - 1].kind == WaterReflection)
+            pBeforeWaterUnlock(stack[depth - 1].drop != Drop::Nothing);
         pfnUnlock(factory, index, resolveFlags, unused);
         if (index != 0 || depth == 0)
             return;
