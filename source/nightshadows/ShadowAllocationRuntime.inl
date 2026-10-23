@@ -257,6 +257,16 @@ namespace PlayerShadowAllocation
         KeyOwner owner{};
         return FindKeyOwner(key, owner) && owner.kind == 1;
     }
+    // AddedLightsLast's lights: traffic signals, and facades' model and glow lights with a shadow of ours (the light's
+    // key in a building: street lamps such as bm_nylamp1 have no shadow in their 2dfx either and shadow only through
+    // ours, but stand as objects); also VehicleBoxShadowsBridge::AddedLight
+    static bool AddedLight(uint32_t key, uint32_t flags) noexcept
+    {
+        using Trace = fusionfix::shadows::ShadowSlotTrace;
+        if ((flags & rage::LF_TRAFFIC) && !(flags & rage::LF_MAP)) return true;
+        const auto origin = lightOrigin ? lightOrigin(key) : static_cast<uint8_t>(Trace::OriginGame);
+        return (origin == Trace::OriginModelLight || origin == Trace::OriginCorona) && BuildingLight(key);
+    }
     static std::string DescribeKeyOwner(uint32_t key)
     {
         KeyOwner owner{};
@@ -1072,15 +1082,10 @@ namespace PlayerShadowAllocation
             if(wholeShadow && rankedSquared>=0) rankedSquared/=uncachedLampAdvantage*uncachedLampAdvantage;
             if(gain==SlotGain::None) ++lampsWithoutCasters;
             else if(gain==SlotGain::OffScreen) ++lightsOffScreen;
-            // AddedLightsLast: traffic signals, and facades' model and glow lights with a shadow of ours (the light's
-            // key in a building: street lamps such as bm_nylamp1 have no shadow in their 2dfx either and shadow only
-            // through ours, but stand as objects), cached or not, whether their light reaches you or not
+            // AddedLightsLast: those lights (AddedLight), cached or not, whether their light reaches you or not
             bool lastResort=false;
             if(addedLightsLast && kind==budget::Kind::Lamp) {
-                const auto origin=lightOrigin ? lightOrigin(key) : static_cast<uint8_t>(fusionfix::shadows::ShadowSlotTrace::OriginGame);
-                lastResort=((flags&rage::LF_TRAFFIC) && !(flags&rage::LF_MAP)) ||
-                    ((origin==fusionfix::shadows::ShadowSlotTrace::OriginModelLight || origin==fusionfix::shadows::ShadowSlotTrace::OriginCorona) &&
-                     BuildingLight(key));
+                lastResort=AddedLight(key,flags);
                 if(lastResort) ++addedLightsLastResort;
             }
             labRelevant[index]=relevant?1:0; state.nativeCandidates[index]=state.continuity.Observe(

@@ -876,6 +876,12 @@ public:
     // of that radius and height, its foot that far below the ped's position (see VehicleBoxShadows)
     bool bPedCapsuleShadows = true;
     float fPedCapsuleRadius = 0.25f, fPedCapsuleHeight = 1.75f, fPedCapsuleFootBelow = 1.0f;
+    // PedCapsuleAddedLights: capsules under lights whose shadow is ours, not the map's (facades' model and glow lights,
+    // traffic signals: AddedLightsLast's), which hardly ever take a slot; 0 leaves them out. PedCapsuleLightSize: the
+    // light's size for the capsule's penumbra, PedCapsuleSoftening that much more for each metre the light stands over
+    // 2 m above the ped's foot (a high light's shadow came out as sharp as a lamp's at head height)
+    bool bPedCapsuleAddedLights = false;
+    float fPedCapsuleLightSize = 0.5f, fPedCapsuleSoftening = 0.12f;
     // PropShapeShadows: props within PropShapeDistance of the player get the shadow of a capsule or a box from the
     // lights near them, up to PropShapesPerLight shapes a light (see VehicleBoxShadows); a lamp post's post is
     // PropShapePostRadius thick, its arm PropShapeArmRadius
@@ -1915,6 +1921,9 @@ public:
             IniFloat("NIGHTSHADOWS", "PedCapsuleRadius", &PostFxResource::fPedCapsuleRadius, 0.25f, 0.05f, 1.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleHeight", &PostFxResource::fPedCapsuleHeight, 1.75f, 0.5f, 3.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleFootBelow", &PostFxResource::fPedCapsuleFootBelow, 1.0f, -1.0f, 2.0f),
+            IniFlag("NIGHTSHADOWS", "PedCapsuleAddedLights", &PostFxResource::bPedCapsuleAddedLights, 0),
+            IniFloat("NIGHTSHADOWS", "PedCapsuleLightSize", &PostFxResource::fPedCapsuleLightSize, 0.5f, 0.0f, 4.0f),
+            IniFloat("NIGHTSHADOWS", "PedCapsuleSoftening", &PostFxResource::fPedCapsuleSoftening, 0.12f, 0.0f, 1.0f),
             IniFlag("NIGHTSHADOWS", "PropShapeShadows", &PostFxResource::bPropShapeShadows, 1),
             IniFloat("NIGHTSHADOWS", "PropShapeDistance", &PostFxResource::fPropShapeDistance, 80.0f, 10.0f, 200.0f),
             IniFloat("NIGHTSHADOWS", "PropShapePostRadius", &PostFxResource::fPropShapePostRadius, 0.12f, 0.03f, 0.5f),

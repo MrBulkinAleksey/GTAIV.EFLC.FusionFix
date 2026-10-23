@@ -1048,6 +1048,7 @@ namespace Lighting20
             VehicleBoxShadowsBridge::LampPair = Pairs::PairOf;
         }
         PlayerShadowAllocation::prepareSources = PrepareSources;
+        VehicleBoxShadowsBridge::AddedLight = PlayerShadowAllocation::AddedLight;
         OwnHeadlightCaster::lampOwner = LampOwner;
         log.Name("NightShadows", "Lighting20");
     }

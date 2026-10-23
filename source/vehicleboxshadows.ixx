@@ -1148,6 +1148,7 @@ export struct VehicleBoxShadows
         // c150-c153: up to four people near the light, the foot of each and its height (0 for none)
         float peds[kPedsPerLight][4] = {};
         int pedsUsed = 0;
+        float pedLightSize = 0.0f;
         if (R.VehicleBoxShadowsEnabled() && lightListDrawn &&
             (R.bVehicleBoxShadowsFromCarLights || !(light.mFlags & rage::LF_VEHICLE)) &&
             (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
@@ -1351,7 +1352,11 @@ export struct VehicleBoxShadows
             used = strength > 0.0f ? nextCount : 0;
             // PedCapsuleShadows: the people nearest the light, weighed by how near the player they stand, as the cars;
             // not under a light whose map is drawn this frame, which shows them
-            if (R.bPedCapsuleShadows && strength > 0.0f && drawn && !mapped)
+            // PedCapsuleAddedLights 0: nor under a light whose shadow is ours, not the map's, which hardly ever takes a
+            // slot: a facade's light floating in the air over the pavement left a blob under you with no lamp to be seen
+            const bool pedLight = R.bPedCapsuleAddedLights || !VehicleBoxShadowsBridge::AddedLight ||
+                !VehicleBoxShadowsBridge::AddedLight(uint32_t(light.mCastShadows), light.mFlags);
+            if (R.bPedCapsuleShadows && strength > 0.0f && drawn && !mapped && pedLight)
             {
                 std::pair<float, const float*> chosen[kPedsPerLight] = {};
                 for (int i = 0; i < drawn->pedCount; ++i)
@@ -1381,6 +1386,11 @@ export struct VehicleBoxShadows
                     const float* p = chosen[i].second;
                     peds[i][0] = p[0]; peds[i][1] = p[1]; peds[i][2] = p[2] - R.fPedCapsuleFootBelow; peds[i][3] = R.fPedCapsuleHeight;
                 }
+                // PedCapsuleSoftening: the higher the light over the nearest one's foot, the larger it is taken, as the
+                // shader's penumbra grows with the part of the way to the light the capsule stands at, small under a
+                // high light
+                if (pedsUsed)
+                    pedLightSize = R.fPedCapsuleLightSize + R.fPedCapsuleSoftening * (std::max)(light.mPosition.z - peds[0][2] - 2.0f, 0.0f);
                 pedsWithShadows.fetch_add(uint32_t(pedsUsed), std::memory_order_relaxed);
             }
             if (R.bVehicleBoxShadowsLog && drawn && drawn->watched)
@@ -1525,7 +1535,7 @@ export struct VehicleBoxShadows
         pDevice->SetPixelShaderConstantF(143, constants[0], 6);
         pDevice->SetPixelShaderConstantF(149, lamp, 1);
         pDevice->SetPixelShaderConstantF(121, constants[6], 4);
-        const float capsule[4] = { R.fPedCapsuleRadius, -(R.fPedCapsuleRadius + 0.3f), 0.0f, 0.0f };
+        const float capsule[4] = { R.fPedCapsuleRadius, -(R.fPedCapsuleRadius + 0.3f), pedLightSize, 0.0f };
         pDevice->SetPixelShaderConstantF(150, peds[0], kPedsPerLight);
         pDevice->SetPixelShaderConstantF(154, capsule, 1);
         const float shapeCount[4] = { float(propsUsed), 0.0f, 0.0f, 0.0f };

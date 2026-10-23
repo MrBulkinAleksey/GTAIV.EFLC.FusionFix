@@ -2359,6 +2359,9 @@ export namespace VehicleBoxShadowsBridge
     uint32_t (*SharedMapKey)(uint32_t key) = nullptr;
     // Render thread: for either lamp of a pair on one post, the point between them and their spacing; false otherwise.
     bool (*LampPair)(uint32_t key, float between[3], float& spacing) = nullptr;
+    // Render thread: whether a light's shadow is ours rather than the map's, AddedLightsLast's lights (facades' model and
+    // glow lights, traffic signals)
+    bool (*AddedLight)(uint32_t key, uint32_t flags) = nullptr;
 }
 
 export namespace CPlayerPed
