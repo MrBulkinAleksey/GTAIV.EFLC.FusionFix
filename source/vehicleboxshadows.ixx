@@ -1535,7 +1535,7 @@ export struct VehicleBoxShadows
         pDevice->SetPixelShaderConstantF(143, constants[0], 6);
         pDevice->SetPixelShaderConstantF(149, lamp, 1);
         pDevice->SetPixelShaderConstantF(121, constants[6], 4);
-        const float capsule[4] = { R.fPedCapsuleRadius, -(R.fPedCapsuleRadius + 0.3f), pedLightSize, 0.0f };
+        const float capsule[4] = { R.fPedCapsuleRadius, -(R.fPedCapsuleRadius + 0.3f), pedLightSize, R.fPedCapsuleBaseSoftness };
         pDevice->SetPixelShaderConstantF(150, peds[0], kPedsPerLight);
         pDevice->SetPixelShaderConstantF(154, capsule, 1);
         const float shapeCount[4] = { float(propsUsed), 0.0f, 0.0f, 0.0f };

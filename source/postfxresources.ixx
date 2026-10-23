@@ -879,9 +879,10 @@ public:
     // PedCapsuleAddedLights: capsules under lights whose shadow is ours, not the map's (facades' model and glow lights,
     // traffic signals: AddedLightsLast's), which hardly ever take a slot; 0 leaves them out. PedCapsuleLightSize: the
     // light's size for the capsule's penumbra, PedCapsuleSoftening that much more for each metre the light stands over
-    // 2 m above the ped's foot (a high light's shadow came out as sharp as a lamp's at head height)
+    // 2 m above the ped's foot (a high light's shadow came out as sharp as a lamp's at head height); PedCapsuleBaseSoftness
+    // the least penumbra, in metres, also at the feet, where it shrank to 5 cm and drew the shadow's foot square
     bool bPedCapsuleAddedLights = false;
-    float fPedCapsuleLightSize = 0.5f, fPedCapsuleSoftening = 0.12f;
+    float fPedCapsuleLightSize = 0.5f, fPedCapsuleSoftening = 0.12f, fPedCapsuleBaseSoftness = 0.12f;
     // PropShapeShadows: props within PropShapeDistance of the player get the shadow of a capsule or a box from the
     // lights near them, up to PropShapesPerLight shapes a light (see VehicleBoxShadows); a lamp post's post is
     // PropShapePostRadius thick, its arm PropShapeArmRadius
@@ -1924,6 +1925,7 @@ public:
             IniFlag("NIGHTSHADOWS", "PedCapsuleAddedLights", &PostFxResource::bPedCapsuleAddedLights, 0),
             IniFloat("NIGHTSHADOWS", "PedCapsuleLightSize", &PostFxResource::fPedCapsuleLightSize, 0.5f, 0.0f, 4.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleSoftening", &PostFxResource::fPedCapsuleSoftening, 0.12f, 0.0f, 1.0f),
+            IniFloat("NIGHTSHADOWS", "PedCapsuleBaseSoftness", &PostFxResource::fPedCapsuleBaseSoftness, 0.12f, 0.01f, 1.0f),
             IniFlag("NIGHTSHADOWS", "PropShapeShadows", &PostFxResource::bPropShapeShadows, 1),
             IniFloat("NIGHTSHADOWS", "PropShapeDistance", &PostFxResource::fPropShapeDistance, 80.0f, 10.0f, 200.0f),
             IniFloat("NIGHTSHADOWS", "PropShapePostRadius", &PostFxResource::fPropShapePostRadius, 0.12f, 0.03f, 0.5f),
