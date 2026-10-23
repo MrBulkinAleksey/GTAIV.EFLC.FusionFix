@@ -1516,8 +1516,11 @@ private:
         // took two full screen copies and a full screen pass, and a target of another size
         // had both mask copies released and created again, even with no water on screen.
         // Only the main scene's water gets reflections, once a frame.
+        // Nor while the last answer of RenderSkip's water query (WaterReflectionWhenSeen, a frame or few old) saw no
+        // water: the game draws it whenever it is near, behind the houses too, and the copies and the pass over the
+        // whole screen took 1-1.5 ms on an iGPU in a street with no water in sight. With no answer known it runs.
         const bool mainScene = !bDeviceLost && R.SSREnabled() && R.SSREffect && R.fSSRWaterIntensity > 0.0f &&
-                               !R.bWaterDoneThisFrame && RenderTargetIsScreenSized();
+                               !R.bWaterDoneThisFrame && RenderSkip::WaterPixelsSeen() != 0 && RenderTargetIsScreenSized();
         R.bWaterMaskCaptured = mainScene && CopyRenderTargetToWaterMask(0);
         ProfilerMark(pProfileDevice, kProfWaterGame, true);
         // The water seen, for WaterReflectionWhenSeen: the game's own draws alone
