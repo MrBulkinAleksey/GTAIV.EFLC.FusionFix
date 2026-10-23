@@ -877,11 +877,12 @@ public:
     bool bPedCapsuleShadows = true;
     float fPedCapsuleRadius = 0.25f, fPedCapsuleHeight = 1.75f, fPedCapsuleFootBelow = 1.0f;
     // PedCapsuleAddedLights: capsules under lights whose shadow is ours, not the map's (facades' model and glow lights,
-    // traffic signals: AddedLightsLast's), which hardly ever take a slot; 0 leaves them out. PedCapsuleLightSize: the
-    // light's size for the capsule's penumbra, PedCapsuleSoftening that much more for each metre the light stands over
-    // 2 m above the ped's foot (a high light's shadow came out as sharp as a lamp's at head height); PedCapsuleBaseSoftness
-    // the least penumbra, in metres, also at the feet, where it shrank to 5 cm and drew the shadow's foot square
-    bool bPedCapsuleAddedLights = false;
+    // traffic signals: AddedLightsLast's), which hardly ever take a slot; 0 leaves them out (a blob with no lamp to be
+    // seen, before the player's shadow followed the bones). PedCapsuleLightSize: the light's size for the capsule's
+    // penumbra, PedCapsuleSoftening that much more for each metre the light stands over 2 m above the ped's foot (a high
+    // light's shadow came out as sharp as a lamp's at head height); PedCapsuleBaseSoftness the least penumbra, in metres,
+    // also at the feet, where it shrank to 5 cm and drew the shadow's foot square
+    bool bPedCapsuleAddedLights = true;
     float fPedCapsuleLightSize = 0.5f, fPedCapsuleSoftening = 0.12f, fPedCapsuleBaseSoftness = 0.12f;
     // PedBoneShadows: the player's shadow from 16 capsules along the bones (legs, feet, hips, body, shoulders, arms,
     // hands, head), posed each frame, in place of the one standing capsule, with the props' shapes
@@ -1925,7 +1926,7 @@ public:
             IniFloat("NIGHTSHADOWS", "PedCapsuleRadius", &PostFxResource::fPedCapsuleRadius, 0.25f, 0.05f, 1.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleHeight", &PostFxResource::fPedCapsuleHeight, 1.75f, 0.5f, 3.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleFootBelow", &PostFxResource::fPedCapsuleFootBelow, 1.0f, -1.0f, 2.0f),
-            IniFlag("NIGHTSHADOWS", "PedCapsuleAddedLights", &PostFxResource::bPedCapsuleAddedLights, 0),
+            IniFlag("NIGHTSHADOWS", "PedCapsuleAddedLights", &PostFxResource::bPedCapsuleAddedLights, 1),
             IniFloat("NIGHTSHADOWS", "PedCapsuleLightSize", &PostFxResource::fPedCapsuleLightSize, 0.5f, 0.0f, 4.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleSoftening", &PostFxResource::fPedCapsuleSoftening, 0.12f, 0.0f, 1.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleBaseSoftness", &PostFxResource::fPedCapsuleBaseSoftness, 0.12f, 0.01f, 1.0f),
