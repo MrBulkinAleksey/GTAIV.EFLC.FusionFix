@@ -121,6 +121,10 @@ export namespace EntityClass
 
     // A model index's model info (its name's hash at +0x3c, bounding sphere centre +0x10 and radius +0x1c), 0 if none.
     uintptr_t ModelInfo(uint16_t model);
+
+    // The model's rmcDrawable as CDrawEntityDC's execute (CE 0x8dcbf0) takes it: a fragment type's (+8) at +0xb4, else
+    // the one +0xc points to; 0 while it is not loaded. Its grmShaderGroup is at +8 (shaders +8, their count +0xc).
+    uintptr_t ModelDrawable(uint16_t model);
 }
 
 namespace
@@ -1131,6 +1135,17 @@ namespace EntityClass
     uintptr_t ModelInfo(uint16_t model)
     {
         return modelInfos ? *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4) : 0;
+    }
+
+    uintptr_t ModelDrawable(uint16_t model)
+    {
+        const auto info = ModelInfo(model);
+        if (!info)
+            return 0;
+        if (const auto fragType = *reinterpret_cast<const uintptr_t*>(info + 8))
+            return *reinterpret_cast<const uintptr_t*>(fragType + 0xb4);
+        const auto slot = *reinterpret_cast<const uintptr_t*>(info + 0xc);
+        return slot ? *reinterpret_cast<const uintptr_t*>(slot) : 0;
     }
 
     Kind OfEntity(void* entity)

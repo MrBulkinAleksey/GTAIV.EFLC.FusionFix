@@ -81,12 +81,15 @@ export namespace GrassShared
 // modulo 64 m; from the window's corner, clamped, edge texels empty) for the G-buffer pass; c243 = 1 / 64 m, the
 // strength (0 = off), the texture coordinate's offset. Needs vertex textures (DXVK has them).
 //
-// Bush Shake ([PROCEDURAL] BushShake): the bushes (models drawn with gta_trees, up to 5.5 m tall) a person or a car goes
-// through part away from them and shake while it moves, harder the faster it goes (shaders/patches/tree_bush_shake.patch,
-// gta_trees and gta_trees_extended deferred_draw VS0). Around the G-buffer draw of a model that short with a body
-// reaching it b13 is set, c248-c251 get the bodies as for the grass and c241 the model's height, the push and the shake at
-// its top and the shake's phase. Other shaders don't read b13, so the flag on a short model of another shader does
-// nothing. Needs the same bodies as Grass Bending.
+// Bush Shake ([PROCEDURAL] BushShake): the bushes (up to 5.5 m tall) a person or a car goes through part away from them
+// and shake while it moves, harder the faster it goes. A bush is a model drawn with gta_trees (tree_bush_shake.patch,
+// gta_trees and gta_trees_extended deferred_draw VS0) or with gta_default (gta_cutout.sps and the like, as the park's
+// bushes are; zz_bush_shake_default.patch, VS4/VS5) with a texture whose name holds one of the words of
+// [PROCEDURAL] BushTextures (hidden): gta_default draws benches and fences too. Each model is looked at once, the first
+// time it is drawn with a body near, from its drawable's shaders (EntityClass::ModelDrawable). Around the G-buffer draw
+// of a bush with a body reaching it b13 is set, c248-c251 get the bodies as for the grass and c241 the model's height,
+// the push and the shake at its top and the shake's phase. Needs the same bodies as Grass Bending. GrassWindLog writes
+// each model looked at, bush or not, with its shaders and textures.
 //
 // GrassWindDebug (Graphics > Debug) sways four times as hard, to see which draws take it. GrassWindLog = 1 ([DEBUG])
 // writes the wind and the grass draws to GTAIV.EFLC.FusionFix.GrassWind.log every 600 G-buffer passes.
@@ -114,6 +117,8 @@ class GrassWind
     static constexpr float kBushMaxHeight = 5.5f;
     static constexpr float kBushPushPerHeight = 0.2f, kBushMaxPush = 0.4f;
     static constexpr float kBushShake = 0.07f, kBushShakeSpeed = 3.0f, kBushShakeHz = 5.0f;
+    // A gta_default model is a bush if one of its textures' names holds one of these
+    static constexpr const char* kBushTextures = "bush, hedge, shrub, leaf, leaves, foliage, ivy, plant, fern, flower, vine, creeper, conifer, grass, weed";
 
     // Downwash: from a helicopter's position (about a metre over its skids) above the prop, gone at 30 m
     static constexpr float kRotorLow = 0.3f, kRotorHigh = 30.0f;
@@ -129,9 +134,11 @@ class GrassWind
     static inline float fStrength = 1.0f;
     static inline float fTrampleSeconds = 12.0f;
     static inline bool bLog = false;
-    // GrassWindModels, read on the ini's thread; the list is made again on the render thread
+    // GrassWindModels and BushTextures, read on the ini's thread; the lists are made again on the render thread
     static inline std::mutex extraModelsMutex;
     static inline std::string sExtraModels;
+    static inline std::string sBushTextures;
+    static inline std::vector<std::string> bushWords;   // render thread, lower case
     static inline std::atomic<bool> bRemakeList = true;
 
     // Render thread
@@ -157,8 +164,8 @@ class GrassWind
     static inline bool trampleAny = false, trampleUploaded = false, bTrampleBound = false;
 
     // By model index: the hash the entry was made for, the model's height (0 if not grass) and its height above its origin
-    // if it is short enough for a bush (else 0)
-    struct ModelEntry { uint32_t hash = 0; float height = -1.0f; float bushHeight = 0.0f; };
+    // if it is short enough for a bush (else 0), and whether it is a bush (-1 not looked at yet)
+    struct ModelEntry { uint32_t hash = 0; float height = -1.0f; float bushHeight = 0.0f; int8_t bush = -1; };
     static inline std::vector<ModelEntry> models;
     static inline std::unordered_map<uint32_t, int> grassHashes; // the kind, as GrassShared::GrassKind
 
@@ -216,6 +223,20 @@ class GrassWind
                 AddName(name);
             pos = end + 1;
         }
+        bushWords.clear();
+        for (size_t pos = 0; pos < sBushTextures.size();)
+        {
+            size_t end = sBushTextures.find(',', pos);
+            if (end == std::string::npos)
+                end = sBushTextures.size();
+            std::string word;
+            for (const char c : std::string_view(sBushTextures).substr(pos, end - pos))
+                if (c != ' ')
+                    word += char(tolower(uint8_t(c)));
+            if (!word.empty())
+                bushWords.push_back(word);
+            pos = end + 1;
+        }
         models.assign(65536, {});
     }
 
@@ -239,6 +260,7 @@ class GrassWind
         {
             std::lock_guard lock(extraModelsMutex);
             sExtraModels = iniReader.ReadString("PROCEDURAL", "GrassWindModels", "");
+            sBushTextures = iniReader.ReadString("PROCEDURAL", "BushTextures", kBushTextures);
         }
         bRemakeList = true;
     }
@@ -255,6 +277,7 @@ class GrassWind
         {
             entry.hash = hash;
             entry.height = 0.0f;
+            entry.bush = -1;
             // The bounding box's top above the origin (+0x38, the box from +0x20)
             const float top = *reinterpret_cast<const float*>(info + 0x38);
             entry.bushHeight = std::isfinite(top) && top > 0.3f && top <= kBushMaxHeight ? top : 0.0f;
@@ -680,13 +703,98 @@ class GrassWind
         bBushBound = on;
     }
 
+    // A drawable's shaders' effect names (grmShaderFx +0x44) and their textures' names, copied under SEH: the pointers are
+    // the game's. Parameters: data +0x14, count +0x1c, types +0x24 (0 a texture, its name at +0x14).
+    struct ShaderNames { char effects[16][32]; char textures[48][48]; int effectCount, textureCount; };
+
+    static void CopyName(char* to, size_t size, const char* from)
+    {
+        size_t i = 0;
+        if (from)
+            for (; i + 1 < size && from[i]; ++i)
+                to[i] = from[i];
+        to[i] = 0;
+    }
+
+    static bool ReadShaderNames(uintptr_t drawable, ShaderNames& out)
+    {
+        out.effectCount = out.textureCount = 0;
+        __try
+        {
+            const auto group = *reinterpret_cast<const uintptr_t*>(drawable + 8);
+            if (!group)
+                return false;
+            const auto shaders = *reinterpret_cast<const uintptr_t* const*>(group + 8);
+            const uint32_t count = *reinterpret_cast<const uint16_t*>(group + 0xc);
+            if (!shaders || !count || count > 64)
+                return false;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const auto shader = shaders[i];
+                if (!shader)
+                    continue;
+                if (out.effectCount < 16)
+                    CopyName(out.effects[out.effectCount++], 32, *reinterpret_cast<const char* const*>(shader + 0x44));
+                const auto data = *reinterpret_cast<const uintptr_t* const*>(shader + 0x14);
+                const int32_t parameters = *reinterpret_cast<const int32_t*>(shader + 0x1c);
+                const auto types = *reinterpret_cast<const uint8_t* const*>(shader + 0x24);
+                for (int32_t p = 0; data && types && p < (std::min)(parameters, 32) && out.textureCount < 48; ++p)
+                    if (types[p] == 0 && data[p])
+                        CopyName(out.textures[out.textureCount++], 48, *reinterpret_cast<const char* const*>(data[p] + 0x14));
+            }
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    // Whether a short model is a bush: drawn with gta_trees, or with gta_default and a plant's texture. Looked at once,
+    // while its drawable is in; false until then.
+    static bool IsBush(uint16_t model)
+    {
+        auto& entry = models[model];
+        if (entry.bush >= 0)
+            return entry.bush != 0;
+        static ShaderNames names;   // render thread
+        const auto drawable = EntityClass::ModelDrawable(model);
+        if (!drawable || !ReadShaderNames(drawable, names))
+            return false;
+        bool trees = false, plainShader = false, plant = false;
+        std::string effects, textures;
+        for (int i = 0; i < names.effectCount; ++i)
+        {
+            const std::string_view effect = names.effects[i];
+            trees |= effect.starts_with("gta_trees");
+            plainShader |= effect == "gta_default";
+            if (bLog)
+                effects += (effects.empty() ? "" : ", ") + std::string(effect);
+        }
+        for (int i = 0; i < names.textureCount; ++i)
+        {
+            std::string texture = names.textures[i];
+            for (auto& c : texture)
+                c = char(tolower(uint8_t(c)));
+            for (const auto& word : bushWords)
+                plant |= texture.find(word) != std::string::npos;
+            if (bLog)
+                textures += (textures.empty() ? "" : ", ") + texture;
+        }
+        entry.bush = trees || (plainShader && plant) ? 1 : 0;
+        if (bLog)
+            FusionLog::Write("GrassWind", "Bush", "%08x top %.2f m: %s (shaders %s; textures %s)\n", entry.hash, entry.bushHeight,
+                entry.bush ? "bush" : "not a bush", effects.c_str(), textures.c_str());
+        return entry.bush != 0;
+    }
+
     // A short model with a body in it: the bodies, its push and shake, b13. The shake grows with the faster body's speed.
     static void BeforeBushDraw(IDirect3DDevice9* pDevice, uint16_t model, const float* place)
     {
         const float height = BushHeight(model);
         const NearbyBodies::Body* nearest[2];
         // A row of bushes is one model up to 30 m long: its whole reach, not the grass's 8 m around the origin
-        if (height <= 0.0f || !FindBodies(model, place, height, nearest, FLT_MAX))
+        if (height <= 0.0f || !FindBodies(model, place, height, nearest, FLT_MAX) || !IsBush(model))
             return;
         float speed = 0.0f;
         for (const auto* body : nearest)
