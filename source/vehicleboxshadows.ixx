@@ -62,11 +62,12 @@ export struct VehicleBoxShadows
     static constexpr int kPeds = 96, kPedsPerLight = 4;
     // PropShapeShadows: lamp posts, bins, hydrants, benches, containers, barriers, kiosks and other props, each one or
     // two simple shapes the same light shaders shadow (shaders/patches/prop_shape_shadows.patch): a capsule between
-    // two points or a box turned about the vertical. A light's shapes go into a 64 x 1 float texture on s7 just
-    // before it is drawn, two texels each, their count in c115.x; up to 32, PropShapesPerLight of them. Posts are in
-    // no light's map (the caster loop takes an object into the wd_local pass only with +0x210 bit 0x800, from a map
-    // dummy, which posts lack), so they shadow under every light, lamps with a slot too; other props only under a
-    // light without a map this frame, and with the bit only under one without a cache either.
+    // two points or a box turned about the vertical. A light's shapes go into a 96 x 1 float texture on s7 just
+    // before it is drawn, two texels each, their count in c115.x; up to 48: the player's bones (PedBoneShadows), then
+    // PropShapesPerLight props. Posts are in no light's map (the caster loop takes an object into the wd_local pass
+    // only with +0x210 bit 0x800, from a map dummy, which posts lack), so they shadow under every light, lamps with a
+    // slot too; other props only under a light without a map this frame, and with the bit only under one without a
+    // cache either.
     struct Shape
     {
         // capsule: one end and the radius, the other end and -1; box: the centre and the half length, the forward
@@ -82,7 +83,7 @@ export struct VehicleBoxShadows
         bool inMaps;    // +0x210 bit 0x800: drawn into the lamps' maps by the game, their caches too
         bool post;      // a lamp post, which no lamp's map ever shows
     };
-    static constexpr int kProps = 512, kShapesPerLight = 32, kShapeTexels = kShapesPerLight * 2;
+    static constexpr int kProps = 512, kShapesPerLight = 48, kShapeTexels = kShapesPerLight * 2;
     static constexpr int kBodyShapes = 26;
     struct List
     {

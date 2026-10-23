@@ -1,18 +1,24 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index 744537d9..ee68b984 100644
+index 744537d9..ee8abf94 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-@@ -66,6 +66,10 @@
+@@ -64,9 +64,13 @@
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+     def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
      def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
-     def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
-     def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
+-    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
 +    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
 +    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
 +    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
 +    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
-     defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
      dcl_texcoord v0
      dcl vPos.xy
+     dcl_texcoord9 v9
 @@ -553,7 +557,20 @@
      rsq r20.w, r20.w
      rcp r20.w, r20.w
@@ -100,20 +106,26 @@ index 744537d9..ee68b984 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index cfe5b855..9e2480a7 100644
+index cfe5b855..3438d398 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-@@ -69,6 +69,10 @@
+@@ -67,9 +67,13 @@
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+     def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
      def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
-     def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
-     def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
+-    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
 +    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
 +    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
 +    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
 +    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
-     defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
      dcl_texcoord v0
      dcl vPos.xy
+     dcl_texcoord9 v9
 @@ -562,7 +566,20 @@
      rsq r20.w, r20.w
      rcp r20.w, r20.w
@@ -201,20 +213,26 @@ index cfe5b855..9e2480a7 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 58972675..f986f8d6 100644
+index 58972675..913feec6 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-@@ -69,6 +69,10 @@
+@@ -67,9 +67,13 @@
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+     def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
      def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
-     def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
-     def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
+-    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
 +    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
 +    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
 +    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
 +    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
-     defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
      dcl_texcoord v0
      dcl vPos.xy
+     dcl_texcoord9 v9
 @@ -564,7 +568,20 @@
      rsq r20.w, r20.w
      rcp r20.w, r20.w
@@ -302,20 +320,26 @@ index 58972675..f986f8d6 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index dfaffe50..924815c8 100644
+index dfaffe50..f3f7eed6 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-@@ -69,6 +69,10 @@
+@@ -67,9 +67,13 @@
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+     def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
      def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
-     def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
-     def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
+-    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
 +    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
 +    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
 +    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
 +    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
-     defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
      dcl_texcoord v0
      dcl vPos.xy
+     dcl_texcoord9 v9
 @@ -566,7 +570,20 @@
      rsq r20.w, r20.w
      rcp r20.w, r20.w
@@ -403,20 +427,26 @@ index dfaffe50..924815c8 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 67cd84cc..c31c6a7e 100644
+index 67cd84cc..91b22170 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-@@ -101,6 +101,10 @@
+@@ -99,9 +99,13 @@
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+     def c188, -0.600000024, -3.33333325, 0.150000006, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it; FusionFix: local_light_with_shadow_blend.patch: -1 over the skirt's height (0.3 m), its width (0.15 m)
      def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
-     def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
-     def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
+-    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
 +    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
 +    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
 +    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
 +    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
-     defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
      dcl_texcoord v0
      dcl vPos.xy
+     dcl_texcoord9 v9
 @@ -774,7 +778,20 @@
      rsq r20.w, r20.w
      rcp r20.w, r20.w
@@ -504,20 +534,26 @@ index 67cd84cc..c31c6a7e 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index cad5264c..fecdc079 100644
+index cad5264c..64854794 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-@@ -71,6 +71,10 @@
+@@ -69,9 +69,13 @@
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+     def c188, -0.600000024, -3.33333325, 0.150000006, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it; FusionFix: local_light_with_shadow_blend.patch: -1 over the skirt's height (0.3 m), its width (0.15 m)
      def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
-     def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
-     def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
+-    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
 +    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
 +    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
 +    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
 +    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
-     defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
      dcl_texcoord v0
      dcl vPos.xy
+     dcl_texcoord9 v9
 @@ -587,7 +591,20 @@
      rsq r20.w, r20.w
      rcp r20.w, r20.w
@@ -605,20 +641,26 @@ index cad5264c..fecdc079 100644
      max r20.z, r15.z, r25.x
      min r20.z, r20.z, r25.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index b7aad4d1..176d3d73 100644
+index b7aad4d1..a037a8a2 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-@@ -103,6 +103,10 @@
+@@ -101,9 +101,13 @@
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+     def c188, -0.600000024, -3.33333325, 0.150000006, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it; FusionFix: local_light_with_shadow_blend.patch: -1 over the skirt's height (0.3 m), its width (0.15 m)
      def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
-     def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
-     def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
+-    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
 +    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
 +    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
 +    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
 +    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
-     defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
      dcl_texcoord v0
      dcl vPos.xy
+     dcl_texcoord9 v9
 @@ -790,7 +794,20 @@
      rsq r20.w, r20.w
      rcp r20.w, r20.w
