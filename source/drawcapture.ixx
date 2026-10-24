@@ -39,8 +39,11 @@ export namespace DrawCapture
     // The surface as a picture named fileName next to the logs (half size, 24-bit BMP; 8 and 10 bit colour as it is,
     // float formats through x / (1 + x) and gamma 2.2, one or two channels as grey or red-green); says its size and
     // format, its brightest pixel, how many are over 1, its mean, the file, and the raw values (all four channels, as
-    // the format holds them) at each of the points. An empty fileName reads the points only.
-    std::string SaveSurface(IDirect3DDevice9* real, IDirect3DSurface9* surface, const std::string& fileName, const std::vector<Point>& points = {});
+    // the format holds them) at each of the points. An empty fileName reads the points only. With rawFileName, also the
+    // whole surface as the format holds it: "FFRAW1", then width, height, D3DFORMAT and bytes a pixel (4 x uint32), then
+    // the rows top down without padding.
+    std::string SaveSurface(IDirect3DDevice9* real, IDirect3DSurface9* surface, const std::string& fileName, const std::vector<Point>& points = {},
+        const std::string& rawFileName = "");
 }
 
 namespace DrawCapture
@@ -211,7 +214,8 @@ namespace DrawCapture
         }
     }
 
-    std::string SaveSurface(IDirect3DDevice9* real, IDirect3DSurface9* surface, const std::string& fileName, const std::vector<Point>& points)
+    std::string SaveSurface(IDirect3DDevice9* real, IDirect3DSurface9* surface, const std::string& fileName, const std::vector<Point>& points,
+        const std::string& rawFileName)
     {
         D3DSURFACE_DESC desc{};
         surface->GetDesc(&desc);
@@ -319,6 +323,22 @@ namespace DrawCapture
                     float v[4];
                     pixelAt(x, y, v);
                     result += std::format(" | at {:.3f},{:.3f} ({},{}) {:.6g} {:.6g} {:.6g} {:.6g}", point.x, point.y, x, y, v[0], v[1], v[2], v[3]);
+                }
+                if (!rawFileName.empty())
+                {
+                    const auto path = FusionLog::Directory() / std::wstring(rawFileName.begin(), rawFileName.end());
+                    if (FILE* file = _wfopen(path.c_str(), L"wb"))
+                    {
+                        const uint32_t header[4] = { desc.Width, desc.Height, uint32_t(desc.Format), bytesPerPixel };
+                        fwrite("FFRAW1", 1, 6, file);
+                        fwrite(header, 4, 4, file);
+                        for (UINT y = 0; y < desc.Height; ++y)
+                            fwrite(static_cast<const uint8_t*>(locked.pBits) + size_t(locked.Pitch) * y, 1, size_t(desc.Width) * bytesPerPixel, file);
+                        fclose(file);
+                        result += ", raw: " + rawFileName;
+                    }
+                    else
+                        result += ", raw not written";
                 }
                 copy->UnlockRect();
             }

@@ -507,7 +507,7 @@ namespace DebugServer
     std::string FrameCaptureRequest(const Request& request)
     {
         FrameCapture::Options options;
-        for (const char* key : { "kinds", "model", "ps", "vs", "target", "lines", "pictures", "draw_pictures", "constants", "stretch_pictures", "probes" })
+        for (const char* key : { "kinds", "model", "ps", "vs", "target", "lines", "pictures", "draw_pictures", "constants", "stretch_pictures", "probes", "raw" })
             if (request.Has(key))
                 FrameCapture::SetOption(options, key, request.Get(key));
         const int seconds = std::clamp(int(request.Number("timeout", 30)), 1, 120);

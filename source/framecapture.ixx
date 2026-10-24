@@ -41,6 +41,8 @@ import renderskip;
 //  constants        matching draws with every non-zero shader constant (4)
 //  stretch_pictures 0 for none of the stretches' targets (1)
 //  probes           points x,y (shares of the target's size, 0 to 1) apart by '/', read in every picture
+//  raw              part of a target name, any case: the targets of its stretches are also saved whole as their format
+//                   holds them (.raw next to the pictures, DrawCapture::SaveSurface's layout); "" none (default)
 export namespace FrameCapture
 {
     struct Options
@@ -51,6 +53,7 @@ export namespace FrameCapture
         uint32_t lines = 3000, pictures = 128, drawPictures = 24, constants = 4;
         bool stretchPictures = true;
         std::vector<DrawCapture::Point> probes;
+        std::string raw;
     };
 
     // One option by its key, throws for a key or value it does not know
@@ -148,6 +151,8 @@ namespace FrameCapture
             o.constants = ParseNumber(value, false);
         else if (key == "stretch_pictures")
             o.stretchPictures = value != "0" && value != "false";
+        else if (key == "raw")
+            o.raw = Lower(value);
         else if (key == "probes")
         {
             o.probes.clear();
@@ -189,15 +194,25 @@ namespace FrameCapture
         return lastPictures;
     }
 
-    static void Picture(IDirect3DDevice9* real, IDirect3DSurface9* surface, int index, const std::string& point = "")
+    static bool RawWanted()
     {
-        std::string name;
+        return !options.raw.empty() && Lower(stretch.name).find(options.raw) != std::string::npos;
+    }
+
+    static void Picture(IDirect3DDevice9* real, IDirect3DSurface9* surface, int index, const std::string& point = "", bool raw = false)
+    {
+        std::string name, rawName;
         if (pictures < options.pictures + options.drawPictures)
         {
             name = std::format("GTAIV.EFLC.FusionFix.FrameCapture.{}.{:03}-s{}-rt{}{}.bmp", captureNumber, pictures++, stretch.number, index, point);
             pictureNames.push_back(name);
         }
-        text += std::format("      rt{}{}: {}\n", index, point, DrawCapture::SaveSurface(real, surface, name, options.probes));
+        if (raw)
+        {
+            rawName = std::format("GTAIV.EFLC.FusionFix.FrameCapture.{}.s{}-rt{}{}.raw", captureNumber, stretch.number, index, point);
+            pictureNames.push_back(rawName);
+        }
+        text += std::format("      rt{}{}: {}\n", index, point, DrawCapture::SaveSurface(real, surface, name, options.probes, rawName));
     }
 
     static bool TargetWanted()
@@ -216,11 +231,13 @@ namespace FrameCapture
             line += std::format(" {:X}x{}", ps, n);
         text += line + "\n";
         summary += line + "\n";
-        const bool wanted = options.stretchPictures && TargetWanted();
+        const bool wanted = options.stretchPictures && TargetWanted(), raw = RawWanted();
         for (int i = 0; i < 4; ++i)
             if (auto surface = stretch.targets[i])
             {
-                if (wanted && (pictures < options.pictures || !options.probes.empty()))
+                if (raw)
+                    Picture(real, surface, i, "", true);
+                else if (wanted && (pictures < options.pictures || !options.probes.empty()))
                 {
                     // Over the stretches' share of pictures only the probes are read
                     if (pictures < options.pictures)
@@ -245,8 +262,8 @@ namespace FrameCapture
         for (size_t i = 0; i < std::size(kKindNames); ++i)
             if (options.kinds & (1u << i))
                 kinds += std::string(kinds.empty() ? "" : ",") + kKindNames[i];
-        text = std::format("capture {}: scene frame {}; kinds {} model {:08X} ps {:X} vs {:X} target '{}' lines {} pictures {} draw pictures {} constants {} probes",
-            captureNumber, frame, kinds, options.model, options.ps, options.vs, options.target, options.lines, options.pictures, options.drawPictures,
+        text = std::format("capture {}: scene frame {}; kinds {} model {:08X} ps {:X} vs {:X} target '{}' raw '{}' lines {} pictures {} draw pictures {} constants {} probes",
+            captureNumber, frame, kinds, options.model, options.ps, options.vs, options.target, options.raw, options.lines, options.pictures, options.drawPictures,
             options.constants);
         for (const auto& p : options.probes)
             text += std::format(" {:.3f},{:.3f}", p.x, p.y);
