@@ -1,0 +1,20 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -46,6 +46,7 @@
+     def c2, 255, -128, -0, -7.9000001
+     def c3, -8, -0, -1, 0.100000001
+     def c4, 9.99999975e-006, 1.11111116, 0, 0.125
++    def c89, 0.300000012, 0, 0, 0 // FusionFix zz_ped_light_skin.patch: how far from the ped category a pixel may lie
+     // --- FusionFix local contact shadows: magic, one, 1/steps, uv and position mapping, noise
+     def c157, 12345, 1, 0.0833333358, 0
+     def c156, 255, 0.25, 16, -6 // FusionFix skin lighting: the material ID in steps; skin is a quarter step over a whole one
+@@ -221,7 +222,7 @@
+     cmp r0.y, r0.y, c3.x, c3.y
+     add r0.x, r0.x, r0.y
+     add r0.x, r0.x, c3.z
+-    add r0.x, -r0_abs.x, c3.w
++    add r0.x, -r0_abs.x, c89.x // FusionFix zz_ped_light_skin.patch: was c3.w, 0.1 of a step; skin is a quarter step over (ped_skin_scattering_mask.patch), and this peds-only light left it dark
+     cmp r0.x, r0.x, -c3.z, -c3.y
+     mov r1.w, -c3.z
+     mul r26, r1, r0.x
