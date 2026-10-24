@@ -196,6 +196,18 @@ namespace FrameCapture
         return lastPictures;
     }
 
+    // When the game started, in the files' names: the captures count from 1 each run, and would write over the last run's
+    static const std::string& RunStamp()
+    {
+        static const std::string stamp = []
+        {
+            SYSTEMTIME t{};
+            GetLocalTime(&t);
+            return std::format("{:04}{:02}{:02}-{:02}{:02}{:02}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+        }();
+        return stamp;
+    }
+
     static bool RawWanted()
     {
         return !options.raw.empty() && Lower(stretch.name).find(options.raw) != std::string::npos;
@@ -206,12 +218,12 @@ namespace FrameCapture
         std::string name, rawName;
         if (pictures < options.pictures + options.drawPictures)
         {
-            name = std::format("GTAIV.EFLC.FusionFix.FrameCapture.{}.{:03}-s{}-rt{}{}.bmp", captureNumber, pictures++, stretch.number, index, point);
+            name = std::format("GTAIV.EFLC.FusionFix.FrameCapture.{}-{}.{:03}-s{}-rt{}{}.bmp", RunStamp(), captureNumber, pictures++, stretch.number, index, point);
             pictureNames.push_back(name);
         }
         if (raw)
         {
-            rawName = std::format("GTAIV.EFLC.FusionFix.FrameCapture.{}.s{}-rt{}{}.raw", captureNumber, stretch.number, index, point);
+            rawName = std::format("GTAIV.EFLC.FusionFix.FrameCapture.{}-{}.s{}-rt{}{}.raw", RunStamp(), captureNumber, stretch.number, index, point);
             pictureNames.push_back(rawName);
         }
         text += std::format("      rt{}{}: {}\n", index, point, DrawCapture::SaveSurface(real, surface, name, options.probes, rawName));
@@ -264,8 +276,8 @@ namespace FrameCapture
         for (size_t i = 0; i < std::size(kKindNames); ++i)
             if (options.kinds & (1u << i))
                 kinds += std::string(kinds.empty() ? "" : ",") + kKindNames[i];
-        text = std::format("capture {}: scene frame {}; kinds {} model {:08X} ps {:X} vs {:X} target '{}' raw '{}' lines {} pictures {} draw pictures {} constants {} probes",
-            captureNumber, frame, kinds, options.model, options.ps, options.vs, options.target, options.raw, options.lines, options.pictures, options.drawPictures,
+        text = std::format("capture {} (files FrameCapture.{}-{}.*): scene frame {}; kinds {} model {:08X} ps {:X} vs {:X} target '{}' raw '{}' lines {} pictures {} draw pictures {} constants {} probes",
+            captureNumber, RunStamp(), captureNumber, frame, kinds, options.model, options.ps, options.vs, options.target, options.raw, options.lines, options.pictures, options.drawPictures,
             options.constants);
         for (const auto& p : options.probes)
             text += std::format(" {:.3f},{:.3f}", p.x, p.y);
@@ -531,7 +543,7 @@ namespace FrameCapture
         if (!ParseOptions(text, "FrameCaptureKeyOptions", o))
             return;
         const uint32_t number = Arm(o);
-        FusionLog::Write("FrameCapture", "Keys", "Ctrl+Shift+F5: capture %u of the next frame (%s)\n", number, text.c_str());
+        FusionLog::Write("FrameCapture", "Keys", "Ctrl+Shift+F5: capture %u of the next frame, files FrameCapture.%s-%u.* (%s)\n", number, RunStamp().c_str(), number, text.c_str());
     }
 }
 
