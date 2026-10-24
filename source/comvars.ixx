@@ -765,6 +765,12 @@ namespace CTask
 
 namespace CPed
 {
+    // CPed::GetBoneMatrix (CE 0x9E70B0, also behind GET_PED_BONE_POSITION): the bone as posed by the animation, in the
+    // world, a 4x4 matrix with the place in [12..14]. Bone ids as the melee parser's names give them (CE 0xd9d08f):
+    // PELVIS 0x1A1, HEAD 0x4B5, L_THIGH/CALF/FOOT 0x1A2-0x1A4, R_THIGH/CALF/FOOT 0x1A7-0x1A9, L_UPPERARM/FOREARM/HAND
+    // 0x4C1-0x4C3, R_UPPERARM/FOREARM 0x4C8/0x4C9, R_HAND 0x4D0.
+    export void (__fastcall* GetBoneMatrix)(uintptr_t ped, void*, float* matrix, uint32_t bone) = nullptr;
+
     export CPool<void*>* GetPedPool()
     {
         return *pPedPool;
@@ -2359,6 +2365,9 @@ export namespace VehicleBoxShadowsBridge
     uint32_t (*SharedMapKey)(uint32_t key) = nullptr;
     // Render thread: for either lamp of a pair on one post, the point between them and their spacing; false otherwise.
     bool (*LampPair)(uint32_t key, float between[3], float& spacing) = nullptr;
+    // Render thread: whether a light's shadow is ours rather than the map's, AddedLightsLast's lights (facades' model and
+    // glow lights, traffic signals)
+    bool (*AddedLight)(uint32_t key, uint32_t flags) = nullptr;
 }
 
 export namespace CPlayerPed
@@ -3576,6 +3585,11 @@ public:
             CPlayer::getLocalPlayerPed = (uintptr_t(*)())injector::GetBranchDestination(pattern.get_first(0)).as_int();
             CPlayer::findPlayerCar = (uintptr_t(*)())injector::GetBranchDestination(pattern.get_first(10)).as_int();
         }
+
+        // CPed::GetBoneMatrix: push edi / mov edi, ecx / mov eax, [edi] / call [eax+A0] / ...
+        pattern = hook::pattern("57 8B F9 8B 07 FF 90 A0 00 00 00 85 C0 74 16 8B 07 8B CF FF 90 A0 00 00 00 8B 10 8B C8 FF 92 E0 00 00 00 EB 06 8B 87 00 01 00 00 85 C0 0F 84");
+        if (!pattern.empty())
+            CPed::GetBoneMatrix = pattern.get_first<void(__fastcall)(uintptr_t, void*, float*, uint32_t)>(0);
 
         pattern = hook::pattern("E8 ? ? ? ? 8A 88 6E 28 00 00 32 88 6C 28 00 00 80 F9 7F");
         if (!pattern.empty())

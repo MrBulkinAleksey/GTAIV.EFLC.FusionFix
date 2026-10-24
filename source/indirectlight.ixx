@@ -55,6 +55,68 @@ using namespace PostFxPass;
 // Before deferred lighting, after contact shadows: indirect light at half resolution,
 // smoothed and accumulated, into GIResult for deferred_lighting. It reads the scene the fog
 // pass copied last frame, with the camera of last frame (FrameHistory).
+// A pass into two targets of one size: colour writes on for the second, which the game may have left off.
+static void DrawEffectPassTwo(IDirect3DDevice9* pDevice, ID3DXEffect* effect, D3DXHANDLE technique, IDirect3DSurface9* target0,
+                              IDirect3DSurface9* target1, float width, float height, int profile)
+{
+    DWORD writes1 = 0xF;
+    pDevice->GetRenderState(D3DRS_COLORWRITEENABLE1, &writes1);
+    pDevice->SetRenderState(D3DRS_COLORWRITEENABLE1, 0xF);
+    pDevice->SetRenderTarget(1, target1);
+    DrawEffectPass(pDevice, effect, technique, target0, width, height, profile);
+    pDevice->SetRenderTarget(1, nullptr);
+    pDevice->SetRenderState(D3DRS_COLORWRITEENABLE1, writes1);
+}
+
+// FusedLightingPasses: indirect light from its march (GIRawTex) and the contact shadows left waiting
+// (ContactPending), both at half size (width, height), smoothed, accumulated and brought up to full size by three
+// passes for both (GIContact*_PS in SSR.fx), into GIResult and ContactResult. The effect holds the march's depth,
+// target size, last frame's depth and the reprojection to last frame, which both take.
+static void RenderFused(IDirect3DDevice9* pDevice, ID3DXEffect* effect, const D3DMATRIX& proj, float width, float height,
+                        float fullWidth, float fullHeight)
+{
+    auto& R = PostFxResources;
+    auto& h = R.SSREffectHandles;
+    IDirect3DTexture9* contact = R.ContactPending;
+    const bool contactHistory = R.bContactPendingHistory;
+    R.ContactPending = nullptr;
+
+    effect->SetTexture(h.SSRResultTex2D, R.GIRawTex->mD3DTexture);
+    effect->SetTexture(h.ContactInTex2D, contact);
+    effect->SetFloat(h.fDenoiseRadius, R.fSSRDenoiseRadius * 0.5f);
+    DrawEffectPassTwo(pDevice, effect, h.techGIContactDenoise, R.GIDenoisedSurf, R.ContactSurf, width, height, kProfGIDenoise);
+
+    const int prev = R.nGIAccumIndex, next = prev ^ 1;
+    const int contactPrev = R.nContactAccumIndex, contactNext = contactPrev ^ 1;
+    const bool history = FrameHistory::CanReproject(R.nGIAccumFrame);
+    effect->SetTexture(h.SSRResultTex2D, R.GIDenoisedTex->mD3DTexture);
+    effect->SetTexture(h.ContactInTex2D, R.ContactTex->mD3DTexture);
+    effect->SetTexture(h.SSRAccumTex2D, R.GIAccumTex[prev]->mD3DTexture);
+    effect->SetTexture(h.ContactHistTex2D, R.ContactAccumTex[contactPrev]->mD3DTexture);
+    BindMotionVectors(effect, history || contactHistory);
+    effect->SetFloat(h.fTemporalBlend, history ? R.fGITemporalBlend : 0.0f);
+    effect->SetFloat(h.fContactBlend, contactHistory ? R.fContactTemporalBlend : 0.0f);
+    DrawEffectPassTwo(pDevice, effect, h.techGIContactTemporal, R.GIAccumSurf[next], R.ContactAccumSurf[contactNext], width, height,
+                      kProfGITemporal);
+    R.nGIAccumIndex = next;
+    R.nGIAccumFrame = FrameHistory::Frame();
+    R.nContactAccumIndex = contactNext;
+    R.nContactAccumFrame = FrameHistory::Frame();
+
+    D3DVIEWPORT9 vpDesc = {};
+    vpDesc.Width = DWORD(fullWidth);
+    vpDesc.Height = DWORD(fullHeight);
+    vpDesc.MaxZ = 1.0f;
+    pDevice->SetViewport(&vpDesc);
+    SetTargetSize(effect, h, proj, fullWidth, fullHeight);
+    effect->SetTexture(h.SSRResultTex2D, R.GIAccumTex[next]->mD3DTexture);
+    effect->SetTexture(h.ContactInTex2D, R.ContactAccumTex[contactNext]->mD3DTexture);
+    DrawEffectPassTwo(pDevice, effect, h.techGIContactUpsample, R.GIFullSurf, R.ContactRawSurf, fullWidth, fullHeight, kProfGIUpsample);
+    R.GIResult = R.GIFullTex->mD3DTexture;
+    R.ContactResult = R.ContactRawTex->mD3DTexture;
+    R.bContactValid = true;
+}
+
 export void RenderIndirectLight()
 {
     auto& R = PostFxResources;
@@ -172,6 +234,22 @@ export void RenderIndirectLight()
     pDevice->SetViewport(&vpDesc);
 
     DrawEffectPass(pDevice, effect, h.techSSGI, R.GIRawSurf, width, height, kProfGIMarch);
+
+    // FusedLightingPasses: the contact shadows left waiting (RenderContactShadows) go through the same three
+    // passes, each for both into two targets
+    if (R.ContactPending && R.fSSRDenoiseRadius > 0.0f && h.techGIUpsample && R.GIFullSurf &&
+        R.SSRDebugMode() != R.kGIHistoryDebugMode)
+    {
+        RenderFused(pDevice, effect, proj, width, height, fullWidth, fullHeight);
+        if (R.SSRDebugMode() == R.kGIDebugMode && R.SSRDebugSurf && h.techSSRDebug)
+        {
+            effect->SetTexture(h.SSRResultTex2D, R.GIResult);
+            effect->SetFloat(h.fDebugMode, float(R.kGIDebugMode));
+            DrawEffectPass(pDevice, effect, h.techSSRDebug, R.SSRDebugSurf, fullWidth, fullHeight);
+            R.bSSRDebugValid = true;
+        }
+        return;
+    }
 
     // The same depth aware smoothing SSR uses; the gather has alpha 1 everywhere, so it is a
     // plain weighted blur. The radius is in full size pixels.

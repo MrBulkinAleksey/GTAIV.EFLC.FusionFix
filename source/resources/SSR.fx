@@ -8,6 +8,7 @@ texture MarchDepthTex2D;
 texture MotionTex2D;
 texture AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D;
 texture SceneTex2D, SkinIDTex2D, SkinLightTex2D;
+texture ContactInTex2D, ContactHistTex2D;
 
 sampler2D DepthTex
 {
@@ -45,6 +46,23 @@ sampler2D NormalTex
 sampler2D SSRResultTex
 {
     Texture = <SSRResultTex2D>;
+};
+
+// Contact shadows beside indirect light in the passes that take both (GIContact*_PS): this frame's, read as
+// SSRResultTex is, and last frame's accumulation, as SSRAccumTex is.
+sampler2D ContactInTex
+{
+    Texture = <ContactInTex2D>;
+};
+
+sampler2D ContactHistTex
+{
+    Texture = <ContactHistTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = NONE;
 };
 
 // SSRFallback_PS's guess where SSR_PS fills in, the same size as SSRResultTex.
@@ -256,6 +274,7 @@ uniform float fNeighbourFill;     // 0..1, strength of the fill from the hits ar
 uniform float fFillMinDistance;   // over fMaxDistance: hits nearer than this along their ray fill no misses (0: all do)
 uniform float fVehicleScale = 1.0; // SSRVehicleUnits / (10 x the game's c39.w) on car bodies, SkinIDTex their material IDs
 uniform float fSpreadRadius;      // pixels, how far SSRSpread_PS looks this step
+uniform float fContactBlend;      // GIContactTemporal_PS: share of last frame's contact shadows kept, 0 while there is none
 
 // Contact shadows, see ContactShadows_PS.
 uniform float4 vec4SunView;         // direction towards the sun in reconstruction space, w 0 if unknown
@@ -1741,6 +1760,183 @@ float4 GIUpsample_PS(float2 uv : TEXCOORD0) : COLOR0
     return weightSum > 1e-3 ? sum / weightSum : nearest;
 }
 
+// Indirect light and contact shadows, both marched at half size, go through their smoothing, accumulation and
+// bringing up to full size together (FusedLightingPasses): each of these passes does for both what
+// SSRDenoise_PS, SSRTemporal_PS (fTemporalAnySurface 1) and GIUpsample_PS do for indirect light in SSRResultTex
+// and ContactTemporal_PS and ContactUpsample_PS for contact shadows in ContactInTex, into two targets at once,
+// and the depths each pass weighs by, most of what it costs, and the history's place are read once for both.
+struct GIContactOutput
+{
+    float4 gi : COLOR0;
+    float4 contact : COLOR1;
+};
+
+GIContactOutput GIContactDenoise_PS(float2 uv : TEXCOORD0)
+{
+    static const float2 taps[12] =
+    {
+        float2(-0.326, -0.406), float2( 0.326,  0.406),
+        float2(-0.840, -0.074), float2( 0.840,  0.074),
+        float2(-0.696,  0.457), float2( 0.696, -0.457),
+        float2(-0.203,  0.621), float2( 0.203, -0.621),
+        float2( 0.962, -0.195), float2(-0.962,  0.195),
+        float2( 0.473, -0.480), float2(-0.473,  0.480)
+    };
+
+    GIContactOutput o;
+    o.gi = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+    o.contact = tex2Dlod(ContactInTex, float4(uv, 0, 0));
+    float2 radius = fDenoiseRadius * vec2InvViewportSize;
+
+    // Each comes back as it is where every tap reads what its centre does, as in SSRDenoise_PS. The taps are not
+    // kept for the weighing: twelve of both took more temp registers than ps_3_0 has, and more registers run
+    // fewer pixels at once; read again they come from the texture cache. Contact shadows are read for their red
+    // alone, all their accumulation and upsampling take.
+    bool giSame = true, contactSame = true;
+    [loop]
+    for (int i = 0; i < 12; ++i)
+    {
+        float4 tapUV = float4(uv + taps[i] * radius, 0, 0);
+        giSame = giSame && all(tex2Dlod(SSRResultTex, tapUV) == o.gi);
+        contactSame = contactSame && tex2Dlod(ContactInTex, tapUV).r == o.contact.r;
+    }
+    [branch]
+    if (giSame && contactSame)
+        return o;
+
+    // SSRDenoise_PS with fDenoiseSSROnly 0: the weighted mean of all four channels
+    float centreZ = LinearDepth(uv);
+    float4 giSum = o.gi;
+    float contactSum = o.contact.r;
+    float weightSum = 1.0;
+    [loop]
+    for (int j = 0; j < 12; ++j)
+    {
+        float2 tap = uv + taps[j] * radius;
+        float w = exp(-dot(taps[j], taps[j]) * 2.0);
+        w *= saturate(1.0 - abs(LinearDepth(tap) - centreZ) / (centreZ * 0.02));
+        giSum += w * tex2Dlod(SSRResultTex, float4(tap, 0, 0));
+        contactSum += w * tex2Dlod(ContactInTex, float4(tap, 0, 0)).r;
+        weightSum += w;
+    }
+    if (!giSame)
+        o.gi = giSum / weightSum;
+    if (!contactSame)
+        o.contact = float4(contactSum / weightSum, 0.0, 0.0, 1.0);
+    return o;
+}
+
+GIContactOutput GIContactTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
+{
+    GIContactOutput o;
+    float4 gi = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+    float contact = tex2Dlod(ContactInTex, float4(uv, 0, 0)).r;
+    o.gi = gi;
+    o.contact = float4(contact, 0.0, 0.0, 1.0);
+    if (tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999)
+    {
+        o.gi = 0.0;
+        return o;
+    }
+
+    // The 3x3 neighbourhoods: indirect light's mean and spread, contact shadows' least and most
+    float4 m1 = gi, m2 = gi * gi;
+    float lo = contact, hi = contact;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            if (x == 0 && y == 0)
+                continue;
+            float4 tapUV = float4(uv + float2(x, y) * vec2InvViewportSize, 0, 0);
+            float4 g = tex2Dlod(SSRResultTex, tapUV);
+            m1 += g;
+            m2 += g * g;
+            float c = tex2Dlod(ContactInTex, tapUV).r;
+            lo = min(lo, c);
+            hi = max(hi, c);
+        }
+    }
+    m1 /= 9.0;
+    float4 spread = sqrt(max(m2 / 9.0 - m1 * m1, 0.0));
+    // Each kept as it is with no history or a neighbourhood all alike, which clamps any history to it
+    bool giNow = fTemporalBlend <= 0.0 || all(spread <= 0.0);
+    bool contactNow = fContactBlend <= 0.0 || hi <= lo;
+    [branch]
+    if (giNow && contactNow)
+        return o;
+    spread = max(spread, 0.25 * abs(m1));
+    float4 giLo = m1 - 1.5 * spread, giHi = m1 + 1.5 * spread;
+
+    // Both take the history where the surface was, dropped off screen and where last frame's depth shows another
+    float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
+    bool checkDepth;
+    float2 prevUV = TemporalHistoryUV(uv, C, checkDepth);
+    float valid = 1.0;
+    if (any(prevUV <= 0.0) || any(prevUV >= 1.0))
+        valid = 0.0;
+    else if (fUsePrevDepth > 0.0 && checkDepth)
+    {
+        float4 clip = C.x * vec4ViewToPrevClip[0] + C.y * vec4ViewToPrevClip[1]
+                    + C.z * vec4ViewToPrevClip[2] + vec4ViewToPrevClip[3];
+        float prevZ = PrevLinearDepth(prevUV);
+        if (abs(prevZ - clip.w) > 0.05 * clip.w + 0.1)
+            valid = 0.0;
+    }
+
+    if (!giNow)
+        o.gi = lerp(gi, clamp(tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0)), giLo, giHi), fTemporalBlend * valid);
+    if (!contactNow)
+        o.contact.r = lerp(contact, clamp(tex2Dlod(ContactHistTex, float4(prevUV, 0, 0)).r, lo, hi), fContactBlend * valid);
+    return o;
+}
+
+// vec2InvViewportSize is the full size pixel here. The half size grid is ContactUpsample_PS's, the targets' own
+// size (half the full size, rounded down); GIUpsample_PS's, twice the full size pixel, is the same for an even width.
+GIContactOutput GIContactUpsample_PS(float2 uv : TEXCOORD0)
+{
+    float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
+    float z = pow(fFarDivNear, rawDepth) * fNearPlane;
+    float2 halfSize = floor(0.5 / vec2InvViewportSize);
+    float2 p = uv * halfSize - 0.5;
+    float2 f = frac(p);
+    float2 base = (floor(p) + 0.5) / halfSize;
+
+    float4 giSum = 0.0, nearest = 0.0;
+    float giWeightSum = 0.0, nearestDiff = 1e30;
+    float contactSum = 0.0, contactWeightSum = 0.0;
+    [unroll]
+    for (int y = 0; y < 2; ++y)
+    {
+        [unroll]
+        for (int x = 0; x < 2; ++x)
+        {
+            float2 tapUV = base + float2(x, y) / halfSize;
+            float bilinear = (x ? f.x : 1.0 - f.x) * (y ? f.y : 1.0 - f.y);
+            float diff = abs(LinearDepth(tapUV) - z);
+            float4 gi = tex2Dlod(SSRResultTex, float4(tapUV, 0, 0));
+            float wg = bilinear / (1.0 + diff / (0.02 * z + 0.02));
+            giSum += gi * wg;
+            giWeightSum += wg;
+            if (diff < nearestDiff)
+            {
+                nearestDiff = diff;
+                nearest = gi;
+            }
+            float wc = bilinear * (saturate(1.0 - diff / (z * 0.02)) + 1e-3);
+            contactSum += wc * tex2Dlod(ContactInTex, float4(tapUV, 0, 0)).r;
+            contactWeightSum += wc;
+        }
+    }
+
+    GIContactOutput o;
+    o.gi = rawDepth >= 0.9999 ? 0.0 : (giWeightSum > 1e-3 ? giSum / giWeightSum : nearest);
+    o.contact = float4(contactSum / max(contactWeightSum, 1e-6), 0.0, 0.0, 1.0);
+    return o;
+}
+
 // Light scattering under the skin (separable screen space subsurface scattering, Jimenez et
 // al.): once all lights are drawn, the light on skin is blurred with the profile of skin,
 // which carries red furthest and green and blue less, along x (SkinScatter_PS) and then y
@@ -1953,6 +2149,33 @@ technique ContactUpsample
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 ContactUpsample_PS();
+    }
+}
+
+technique GIContactDenoise
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 GIContactDenoise_PS();
+    }
+}
+
+technique GIContactTemporal
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 GIContactTemporal_PS();
+    }
+}
+
+technique GIContactUpsample
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 GIContactUpsample_PS();
     }
 }
 

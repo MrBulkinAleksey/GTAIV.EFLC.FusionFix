@@ -351,6 +351,7 @@ public:
         D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
         D3DXHANDLE SceneTex2D, SkinIDTex2D, SkinLightTex2D, vec4SkinStep, fSkinStrength;
         D3DXHANDLE techSkinLight, techSkinScatter, techSkinScatterFinal, techSkinDebug;
+        D3DXHANDLE techGIContactDenoise, techGIContactTemporal, techGIContactUpsample, ContactInTex2D, ContactHistTex2D, fContactBlend;
     } SSREffectHandles = {};
 
     // PREF_SSR: 0 off, 1 half resolution, 2 full resolution.
@@ -818,6 +819,18 @@ public:
     // ContactShadowsHalfResolution: the march runs at half size into ContactRawHalfTex and
     // ContactUpsample_PS brings it to full size, weighing by depth, before the smoothing.
     bool bContactShadowsHalfRes = true;
+    // FusedLightingPasses: indirect light and contact shadows, both marched at half size, smoothed, accumulated and
+    // brought up to full size by three passes for both (two targets each) instead of three each
+    bool bFusedLightingPasses = true;
+    // DepthBoundsLights: each light of the main view drawn only where the scene's depth lies within its sphere
+    // (the depth bounds test, see SetLightDepthBounds in postfx.ixx)
+    bool bDepthBoundsLights = true;
+    // LightEarlyOut: the light shaders leave the shadow map's filter and the GGX lobes out for pixels outside the light's
+    // sphere, where the light gives nothing (zz_sphere_early_out.patch, b5); contact shadows, boxes and shapes skip them already
+    bool bLightEarlyOut = true;
+    // LightVolumeDepth: the light volumes' vertex shaders give the log depth the light shaders wrote, so the depth test
+    // drops pixels behind the volume before the light shader runs (zz_volume_depth.patch, vs b5); off, none are dropped
+    bool bLightVolumeDepth = true;
     // Contact shadows from street lights and headlights, marched in the light shaders
     // themselves (shaders/patches/local_light_contact_shadows.patch); they follow the Contact
     // Shadows menu toggle.
@@ -876,6 +889,27 @@ public:
     // of that radius and height, its foot that far below the ped's position (see VehicleBoxShadows)
     bool bPedCapsuleShadows = true;
     float fPedCapsuleRadius = 0.25f, fPedCapsuleHeight = 1.75f, fPedCapsuleFootBelow = 1.0f;
+    // PedCapsuleAddedLights: capsules under lights whose shadow is ours, not the map's (facades' model and glow lights,
+    // traffic signals: AddedLightsLast's), which hardly ever take a slot; 0 leaves them out (a blob with no lamp to be
+    // seen, before the player's shadow followed the bones). PedCapsuleLightSize: the light's size for the capsule's
+    // penumbra, PedCapsuleSoftening that much more for each metre the light stands over 2 m above the ped's foot (a high
+    // light's shadow came out as sharp as a lamp's at head height); PedCapsuleBaseSoftness the least penumbra, in metres,
+    // also at the feet, where it shrank to 5 cm and drew the shadow's foot square
+    bool bPedCapsuleAddedLights = true;
+    float fPedCapsuleLightSize = 0.26f, fPedCapsuleSoftening = 0.0f, fPedCapsuleBaseSoftness = 0.088f;
+    // PedBoneShadows: the player's shadow from 25 capsules along the bones (legs, feet, hips, body, shoulders, arms,
+    // hands, head), posed each frame, in place of the one standing capsule, with the props' shapes
+    bool bPedBoneShadows = true;
+    // PedBoneRadiusScale: the bone capsules' thickness, 1 as BodyShapes sets them
+    float fPedBoneRadiusScale = 0.8f;
+    // PedBoneShoulderWidth: how far out to the upper arms' bones the shoulders reach, 1 all the way
+    float fPedBoneShoulderWidth = 0.8f;
+    // PedBoneShadowsFollowDraw: the bone capsules moved to where the player was drawn this frame, from where the
+    // bones were posed at the light list's hand over
+    bool bPedBoneShadowsFollowDraw = true;
+    // ShapeGroups: the light shaders read a light's shapes in four groups, each only near the way to the light from the
+    // pixels it may shadow (zz_shape_groups.patch); 0 reads them all everywhere
+    bool bShapeGroups = true;
     // PropShapeShadows: props within PropShapeDistance of the player get the shadow of a capsule or a box from the
     // lights near them, up to PropShapesPerLight shapes a light (see VehicleBoxShadows); a lamp post's post is
     // PropShapePostRadius thick, its arm PropShapeArmRadius
@@ -936,6 +970,11 @@ public:
     float fContactTemporalBlend = 0.8f;
     // What deferred_lighting gets on s9: ContactTex, or the accumulation.
     IDirect3DTexture9* ContactResult = nullptr;
+    // FusedLightingPasses: contact shadows marched at half size and left for the indirect light's passes to smooth,
+    // accumulate and bring up to full size along with its own (RenderIndirectLight), or FinishContactShadows when
+    // those did not run; null when none waits. bContactPendingHistory: whether their accumulation had a history.
+    IDirect3DTexture9* ContactPending = nullptr;
+    bool bContactPendingHistory = false;
     bool bContactValid = false;
     bool bContactBound = false;
     static constexpr int kContactDebugMode = 7;
@@ -1645,6 +1684,12 @@ public:
                 h.techSSGI = SSREffect->GetTechniqueByName("SSGI");
                 h.fGIMaxBrightness = SSREffect->GetParameterByName(nullptr, "fGIMaxBrightness");
                 h.techGIUpsample = SSREffect->GetTechniqueByName("GIUpsample");
+                h.techGIContactDenoise = SSREffect->GetTechniqueByName("GIContactDenoise");
+                h.techGIContactTemporal = SSREffect->GetTechniqueByName("GIContactTemporal");
+                h.techGIContactUpsample = SSREffect->GetTechniqueByName("GIContactUpsample");
+                h.ContactInTex2D = SSREffect->GetParameterByName(nullptr, "ContactInTex2D");
+                h.ContactHistTex2D = SSREffect->GetParameterByName(nullptr, "ContactHistTex2D");
+                h.fContactBlend = SSREffect->GetParameterByName(nullptr, "fContactBlend");
                 h.AlbedoTex2D = SSREffect->GetParameterByName(nullptr, "AlbedoTex2D");
                 h.AlbedoLinearTex2D = SSREffect->GetParameterByName(nullptr, "AlbedoLinearTex2D");
                 h.GIPrevTex2D = SSREffect->GetParameterByName(nullptr, "GIPrevTex2D");
@@ -1915,6 +1960,19 @@ public:
             IniFloat("NIGHTSHADOWS", "PedCapsuleRadius", &PostFxResource::fPedCapsuleRadius, 0.25f, 0.05f, 1.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleHeight", &PostFxResource::fPedCapsuleHeight, 1.75f, 0.5f, 3.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleFootBelow", &PostFxResource::fPedCapsuleFootBelow, 1.0f, -1.0f, 2.0f),
+            IniFlag("NIGHTSHADOWS", "PedCapsuleAddedLights", &PostFxResource::bPedCapsuleAddedLights, 1),
+            IniFloat("NIGHTSHADOWS", "PedCapsuleLightSize", &PostFxResource::fPedCapsuleLightSize, 0.26f, 0.0f, 4.0f),
+            IniFloat("NIGHTSHADOWS", "PedCapsuleSoftening", &PostFxResource::fPedCapsuleSoftening, 0.0f, 0.0f, 1.0f),
+            IniFloat("NIGHTSHADOWS", "PedCapsuleBaseSoftness", &PostFxResource::fPedCapsuleBaseSoftness, 0.088f, 0.01f, 1.0f),
+            IniFlag("NIGHTSHADOWS", "PedBoneShadows", &PostFxResource::bPedBoneShadows, 1),
+            IniFloat("NIGHTSHADOWS", "PedBoneRadiusScale", &PostFxResource::fPedBoneRadiusScale, 0.8f, 0.3f, 2.0f),
+            IniFloat("NIGHTSHADOWS", "PedBoneShoulderWidth", &PostFxResource::fPedBoneShoulderWidth, 0.8f, 0.3f, 1.2f),
+            IniFlag("NIGHTSHADOWS", "PedBoneShadowsFollowDraw", &PostFxResource::bPedBoneShadowsFollowDraw, 1),
+            IniFlag("NIGHTSHADOWS", "ShapeGroups", &PostFxResource::bShapeGroups, 1),
+            IniFlag("PERFORMANCE", "FusedLightingPasses", &PostFxResource::bFusedLightingPasses, 1),
+            IniFlag("PERFORMANCE", "DepthBoundsLights", &PostFxResource::bDepthBoundsLights, 1),
+            IniFlag("PERFORMANCE", "LightEarlyOut", &PostFxResource::bLightEarlyOut, 1),
+            IniFlag("PERFORMANCE", "LightVolumeDepth", &PostFxResource::bLightVolumeDepth, 1),
             IniFlag("NIGHTSHADOWS", "PropShapeShadows", &PostFxResource::bPropShapeShadows, 1),
             IniFloat("NIGHTSHADOWS", "PropShapeDistance", &PostFxResource::fPropShapeDistance, 80.0f, 10.0f, 200.0f),
             IniFloat("NIGHTSHADOWS", "PropShapePostRadius", &PostFxResource::fPropShapePostRadius, 0.12f, 0.03f, 0.5f),

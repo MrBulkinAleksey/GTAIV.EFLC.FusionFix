@@ -2,6 +2,7 @@
 // and the check of the game's shadow lookup before it is patched.
 #include "check.hpp"
 #include "nightshadows/LabSirenLifetime.hpp"
+#include "nightshadows/NativeShadowContinuity42.hpp"
 #include "nightshadows/ShadowInactiveSlots.hpp"
 #include "nightshadows/ShadowLampSpacing.hpp"
 #include "nightshadows/ShadowLookupLayout.hpp"
@@ -189,4 +190,30 @@ TEST(ShadowLookupLayoutMatchesTheGameAndOurHook)
 
     memory[40] ^= 0xFF;
     CHECK(!Validate(base));
+}
+
+TEST(LastResortLightsGiveWayOnlyToLightsShowingAsMuch)
+{
+    using namespace fusionfix::shadows;
+    using Continuity = NativeShadowContinuity42;
+    const Continuity continuity;
+    // a facade light of ours over you, its shadow off screen but cast on you; lamps 90 m off whose shadows show
+    // nothing; a street lamp whose shadow shows in view
+    const auto facade = continuity.Observe({ 1, 0 }, 0x45, true, false, SlotGain::OffScreen, 6.0f * 6.0f, false, false, true, true);
+    const auto distant = continuity.Observe({ 2, 0 }, 0x6F, true, false, SlotGain::None, 90.0f * 90.0f);
+    const auto inView = continuity.Observe({ 3, 0 }, 0x6F, true, false, SlotGain::InView, 30.0f * 30.0f);
+    const auto otherFacade = continuity.Observe({ 4, 0 }, 0x45, true, false, SlotGain::OffScreen, 4.0f * 4.0f, false, false, true, true);
+    const auto sameGainLamp = continuity.Observe({ 5, 0 }, 0x6F, true, false, SlotGain::OffScreen, 40.0f * 40.0f);
+    // 0 the challenger goes first, 2 the incumbent stays
+    CHECK(Continuity::Compare(1, facade, distant) == 0);
+    CHECK(Continuity::Compare(1, distant, facade) == 2);
+    CHECK(Continuity::Compare(1, inView, facade) == 0);
+    CHECK(Continuity::Compare(1, facade, inView) == 2);
+    // among lights showing as much, the last resort gives way, nearer or not
+    CHECK(Continuity::Compare(1, sameGainLamp, facade) == 0);
+    CHECK(Continuity::Compare(1, facade, sameGainLamp) == 2);
+    // two last resorts of the same gain: the game's order
+    CHECK(Continuity::Compare(1, otherFacade, facade) == 1);
+    CHECK(Continuity::Decider(1, facade, distant) == Continuity::Rule::Gain);
+    CHECK(Continuity::Decider(1, sameGainLamp, facade) == Continuity::Rule::LastResort);
 }
