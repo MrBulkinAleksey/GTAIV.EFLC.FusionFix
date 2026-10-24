@@ -35,6 +35,7 @@ export module debugserver;
 import common;
 import comvars;
 import d3dx9_43;
+import framecapture;
 import inireload;
 import natives;
 import postfxprofiler;
@@ -46,7 +47,8 @@ import profiler;
 // and the logs (and FusionFix's other files next to it: files, file), and over time: values read each frame (watch_start) and the hits of an instruction or a piece of
 // memory (trace_start: a mid-hook or a debug register, with registers, callers and reads; trace_read, trace_stop,
 // trace_list), the GPU time of FusionFix's passes and the game's (profiler: PostFxProfiler's next block), and where the
-// threads spend their CPU time (cpu_profile: a session of the sampling profiler, Profiler). One client at a time; a request is a JSON object on one line ({"id": 1, "cmd": "read", ...}), the
+// threads spend their CPU time (cpu_profile: a session of the sampling profiler, Profiler), and what a whole scene frame
+// draws (frame_capture: Frame Capture with the request's options). One client at a time; a request is a JSON object on one line ({"id": 1, "cmd": "read", ...}), the
 // answer one line ({"id": 1, "ok": true, ...}), the same protocol as the recomp's debug server. Bytes travel as hex in
 // memory order (little-endian here), addresses as "0x..." strings.
 namespace DebugServer
@@ -498,6 +500,30 @@ namespace DebugServer
         return Object({{"mime", Quote("image/png")}, {"width", std::to_string(capture.width)},
             {"height", std::to_string(capture.height)}, {"file", Quote(Utf8(path))},
             {"data", Quote(Base64(capture.png.data(), capture.png.size()))}});
+    }
+
+    // ---- frame capture (framecapture.ixx): the next whole scene frame with the request's options, answered once written
+
+    std::string FrameCaptureRequest(const Request& request)
+    {
+        FrameCapture::Options options;
+        for (const char* key : { "kinds", "model", "ps", "vs", "target", "lines", "pictures", "draw_pictures", "constants", "stretch_pictures", "probes" })
+            if (request.Has(key))
+                FrameCapture::SetOption(options, key, request.Get(key));
+        const int seconds = std::clamp(int(request.Number("timeout", 30)), 1, 120);
+        const uint32_t number = FrameCapture::Arm(options);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+        while (FrameCapture::Done() < number)
+        {
+            if (std::chrono::steady_clock::now() > deadline)
+                throw std::runtime_error("no scene frame was captured within " + std::to_string(seconds) + " s (is the game minimized or in a menu?)");
+            Sleep(20);
+        }
+        std::vector<std::string> pictures;
+        for (const auto& name : FrameCapture::Pictures())
+            pictures.push_back(Quote(name));
+        return Object({{"capture", std::to_string(number)}, {"log", Quote(Utf8(FusionLog::PathFor("FrameCapture")))},
+            {"summary", Quote(FrameCapture::Summary())}, {"pictures", Array(pictures)}});
     }
 
     // ---- the GPU profiler (PostFxProfiler): on for the request, a block started afresh, its rows when it is written
@@ -2252,6 +2278,7 @@ namespace DebugServer
         if (command == "nearby") return Nearby(request);
         if (command == "profiler") return GpuProfiler(request);
         if (command == "cpu_profile") return CpuProfile(request);
+        if (command == "frame_capture") return FrameCaptureRequest(request);
         throw std::runtime_error("unknown command '" + command + "'");
     }
 
