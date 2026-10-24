@@ -1487,11 +1487,13 @@ public:
                 ApplyEntityRadius();
             }
 
-            // The box keeps 128 entities at most: counted when the loop leaves full
+            // The box keeps 128 entities at most: counted when the loop leaves full. Hooked at xor esi, esi, not
+            // the mov before it: an empty box jumps straight to the xor (je CE 0xc0ac90), which landed in the last
+            // byte of the hook's jmp and ran the rest as call [eax+...] (crash at the start of a new game)
             pattern = hook::pattern("8B 5C 24 18 33 F6 85 ED 7E");
             if (!pattern.empty())
             {
-                static auto EntitiesHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
+                static auto EntitiesHook = safetyhook::create_mid(pattern.get_first(4), [](SafetyHookContext& regs)
                 {
                     if (regs.ebp >= 0x80)
                         nEntitiesCapped++;
