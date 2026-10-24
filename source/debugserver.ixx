@@ -507,7 +507,7 @@ namespace DebugServer
     std::string FrameCaptureRequest(const Request& request)
     {
         FrameCapture::Options options;
-        for (const char* key : { "kinds", "model", "ps", "vs", "target", "lines", "pictures", "draw_pictures", "constants", "stretch_pictures", "probes", "raw" })
+        for (const char* key : { "kinds", "model", "ps", "vs", "target", "lines", "pictures", "draw_pictures", "constants", "stretch_pictures", "probes", "raw", "raw_ps" })
             if (request.Has(key))
                 FrameCapture::SetOption(options, key, request.Get(key));
         const int seconds = std::clamp(int(request.Number("timeout", 30)), 1, 120);
@@ -983,7 +983,7 @@ namespace DebugServer
     // The last lines of a feature's log ("feature": "NightShadows"), or of the newest log.
     // FusionFix's own files next to the plugin (GTAIV.EFLC.FusionFix.*: logs, pictures, .folded): the names matching
     // "filter" with their sizes, newest first; or one of them whole as base64 (a bare name, at most kMaxFileBytes)
-    constexpr uintmax_t kMaxFileBytes = 16u << 20;
+    constexpr uintmax_t kMaxFileBytes = 64u << 20;   // a frame capture's 1920x1080 half float target is 16.6 MB
 
     std::string Files(const Request& request)
     {
@@ -1018,7 +1018,7 @@ namespace DebugServer
         if (error)
             throw std::runtime_error("no file " + name);
         if (size > kMaxFileBytes)
-            throw std::runtime_error(name + " is over 16 MB");
+            throw std::runtime_error(name + " is over 64 MB");
         std::ifstream file(path, std::ios::binary);
         std::vector<uint8_t> bytes(static_cast<size_t>(size));
         if (!file.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(bytes.size())))

@@ -24,7 +24,7 @@ import renderskip;
 // Frame Capture: one whole scene frame (from the first draw after the scene begins to the next scene) to
 // GTAIV.EFLC.FusionFix.FrameCapture.log, armed from the ini ([DEBUG] FrameCapture = 1, hidden, read again with Ctrl+Shift+F10 or
 // the debug server's ini_set, with FrameCaptureOptions), the debug server's frame_capture or Ctrl+Shift+F5 (with
-// FrameCaptureKeyOptions, by default the peds' draws and the G-buffer saved whole), for the player to keep the frame
+// FrameCaptureKeyOptions, by default the peds' draws, the G-buffer and the lighting pass saved whole), for the player to keep the frame
 // something looks wrong in. It writes
 //  - every stretch of draws into one set of colour targets: the game's target name, rt0-rt3 and depth (size, format),
 //    the viewport, its draws by pixel shader, and pictures of its targets as the frame leaves them, with the raw values
@@ -45,6 +45,8 @@ import renderskip;
 //  probes           points x,y (shares of the target's size, 0 to 1) apart by '/', read in every picture
 //  raw              part of a target name, any case: the targets of its stretches are also saved whole as their format
 //                   holds them (.raw next to the pictures, DrawCapture::SaveSurface's layout); "" none (default)
+//  raw_ps           pixel shader numbers (hex) apart by commas: the stretches that drew with any of them are saved
+//                   whole too (the lighting pass, without every other stretch of its target's name)
 export namespace FrameCapture
 {
     struct Options
@@ -56,6 +58,7 @@ export namespace FrameCapture
         bool stretchPictures = true;
         std::vector<DrawCapture::Point> probes;
         std::string raw;
+        std::vector<uint32_t> rawPixelShaders;
     };
 
     // One option by its key, throws for a key or value it does not know
@@ -155,6 +158,14 @@ namespace FrameCapture
             o.stretchPictures = value != "0" && value != "false";
         else if (key == "raw")
             o.raw = Lower(value);
+        else if (key == "raw_ps")
+        {
+            o.rawPixelShaders.clear();
+            std::stringstream list(value);
+            for (std::string number; std::getline(list, number, ',');)
+                if (!number.empty())
+                    o.rawPixelShaders.push_back(ParseNumber(number, true));
+        }
         else if (key == "probes")
         {
             o.probes.clear();
@@ -210,6 +221,9 @@ namespace FrameCapture
 
     static bool RawWanted()
     {
+        for (const auto ps : options.rawPixelShaders)
+            if (stretch.byPixelShader.contains(ps))
+                return true;
         return !options.raw.empty() && Lower(stretch.name).find(options.raw) != std::string::npos;
     }
 
@@ -493,7 +507,7 @@ namespace FrameCapture
     }
 
     // Ctrl+Shift+F5: a capture with FrameCaptureKeyOptions, for the player to take the frame something looks wrong in
-    static std::string keyOptions = "kinds=peds draw_pictures=24 constants=8 raw=gbuffer_0";
+    static std::string keyOptions = "kinds=peds draw_pictures=24 constants=8 raw=gbuffer_0 raw_ps=8";
 
     static bool ParseOptions(const std::string& text, const char* key, Options& o)
     {
@@ -516,7 +530,7 @@ namespace FrameCapture
     {
         {
             std::lock_guard lock(mutex);
-            keyOptions = iniReader.ReadString("DEBUG", "FrameCaptureKeyOptions", "kinds=peds draw_pictures=24 constants=8 raw=gbuffer_0");
+            keyOptions = iniReader.ReadString("DEBUG", "FrameCaptureKeyOptions", "kinds=peds draw_pictures=24 constants=8 raw=gbuffer_0 raw_ps=8");
         }
         if (iniReader.ReadInteger("DEBUG", "FrameCapture", 0) == 0 || capturing)
             return;
