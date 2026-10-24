@@ -23,7 +23,9 @@ import renderskip;
 
 // Frame Capture: one whole scene frame (from the first draw after the scene begins to the next scene) to
 // GTAIV.EFLC.FusionFix.FrameCapture.log, armed from the ini ([DEBUG] FrameCapture = 1, hidden, read again with Ctrl+Shift+F10 or
-// the debug server's ini_set, with FrameCaptureOptions) or the debug server's frame_capture. It writes
+// the debug server's ini_set, with FrameCaptureOptions), the debug server's frame_capture or Ctrl+Shift+F5 (with
+// FrameCaptureKeyOptions, by default the peds' draws and the G-buffer saved whole), for the player to keep the frame
+// something looks wrong in. It writes
 //  - every stretch of draws into one set of colour targets: the game's target name, rt0-rt3 and depth (size, format),
 //    the viewport, its draws by pixel shader, and pictures of its targets as the frame leaves them, with the raw values
 //    at the probe points (so the G-buffer's albedo, normals, material ID and depth, the light and the fog passes);
@@ -478,12 +480,12 @@ namespace FrameCapture
         }
     }
 
-    static void ReadIni(CIniReader& iniReader)
+    // Ctrl+Shift+F5: a capture with FrameCaptureKeyOptions, for the player to take the frame something looks wrong in
+    static std::string keyOptions = "kinds=peds draw_pictures=24 constants=8 raw=gbuffer_0";
+
+    static bool ParseOptions(const std::string& text, const char* key, Options& o)
     {
-        if (iniReader.ReadInteger("DEBUG", "FrameCapture", 0) == 0 || capturing)
-            return;
-        Options o;
-        std::stringstream list(iniReader.ReadString("DEBUG", "FrameCaptureOptions", ""));
+        std::stringstream list(text);
         try
         {
             for (std::string pair; list >> pair;)
@@ -492,10 +494,44 @@ namespace FrameCapture
         }
         catch (const std::exception& e)
         {
-            FusionLog::Write("FrameCapture", "Options", "FrameCaptureOptions: %s\n", e.what());
-            return;
+            FusionLog::Write("FrameCapture", "Options", "%s: %s\n", key, e.what());
+            return false;
         }
-        Arm(o);
+        return true;
+    }
+
+    static void ReadIni(CIniReader& iniReader)
+    {
+        {
+            std::lock_guard lock(mutex);
+            keyOptions = iniReader.ReadString("DEBUG", "FrameCaptureKeyOptions", "kinds=peds draw_pictures=24 constants=8 raw=gbuffer_0");
+        }
+        if (iniReader.ReadInteger("DEBUG", "FrameCapture", 0) == 0 || capturing)
+            return;
+        Options o;
+        if (ParseOptions(iniReader.ReadString("DEBUG", "FrameCaptureOptions", ""), "FrameCaptureOptions", o))
+            Arm(o);
+    }
+
+    // Once a game frame
+    static void PollKey()
+    {
+        static bool keyWasDown = false;
+        const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) && (GetAsyncKeyState(VK_F5) & 0x8000);
+        const bool pressed = down && !keyWasDown;
+        keyWasDown = down;
+        if (!pressed || armed || capturing)
+            return;
+        std::string text;
+        {
+            std::lock_guard lock(mutex);
+            text = keyOptions;
+        }
+        Options o;
+        if (!ParseOptions(text, "FrameCaptureKeyOptions", o))
+            return;
+        const uint32_t number = Arm(o);
+        FusionLog::Write("FrameCapture", "Keys", "Ctrl+Shift+F5: capture %u of the next frame (%s)\n", number, text.c_str());
     }
 }
 
@@ -509,6 +545,7 @@ public:
             CIniReader iniReader("");
             FrameCapture::ReadIni(iniReader);
             IniReload::Add(FrameCapture::ReadIni);
+            FusionFix::onGameProcessEvent() += FrameCapture::PollKey;
             DrawCapture::AddObserver(&FrameCapture::DrawObserver);
             EntityClass::AddDrawHooks([](EntityClass::Kind kind) { FrameCapture::currentKind = kind; FrameCapture::inEntity = true; },
                                       [](EntityClass::Kind) { FrameCapture::currentKind = EntityClass::Kind::Unknown; FrameCapture::inEntity = false; });
