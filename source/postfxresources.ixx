@@ -828,6 +828,9 @@ public:
     // LightEarlyOut: the light shaders leave the shadow map's filter and the GGX lobes out for pixels outside the light's
     // sphere, where the light gives nothing (zz_sphere_early_out.patch, b5); contact shadows, boxes and shapes skip them already
     bool bLightEarlyOut = true;
+    // LightVolumeDepth: the light volumes' vertex shaders give the log depth the light shaders wrote, so the depth test
+    // drops pixels behind the volume before the light shader runs (zz_volume_depth.patch, vs b5); off, none are dropped
+    bool bLightVolumeDepth = true;
     // Contact shadows from street lights and headlights, marched in the light shaders
     // themselves (shaders/patches/local_light_contact_shadows.patch); they follow the Contact
     // Shadows menu toggle.
@@ -1969,6 +1972,7 @@ public:
             IniFlag("PERFORMANCE", "FusedLightingPasses", &PostFxResource::bFusedLightingPasses, 1),
             IniFlag("PERFORMANCE", "DepthBoundsLights", &PostFxResource::bDepthBoundsLights, 1),
             IniFlag("PERFORMANCE", "LightEarlyOut", &PostFxResource::bLightEarlyOut, 1),
+            IniFlag("PERFORMANCE", "LightVolumeDepth", &PostFxResource::bLightVolumeDepth, 1),
             IniFlag("NIGHTSHADOWS", "PropShapeShadows", &PostFxResource::bPropShapeShadows, 1),
             IniFloat("NIGHTSHADOWS", "PropShapeDistance", &PostFxResource::fPropShapeDistance, 80.0f, 10.0f, 200.0f),
             IniFloat("NIGHTSHADOWS", "PropShapePostRadius", &PostFxResource::fPropShapePostRadius, 0.12f, 0.03f, 0.5f),

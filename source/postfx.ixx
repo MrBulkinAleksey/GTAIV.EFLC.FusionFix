@@ -2308,8 +2308,15 @@ private:
             {
                 const BOOL earlyOut = R.bLightEarlyOut ? TRUE : FALSE;
                 device->SetPixelShaderConstantB(5, &earlyOut, 1);
+                // LightVolumeDepth: vs b5 has the light volume's vertex shader give the log depth, which the light shaders
+                // no longer write (zz_volume_depth.patch), so the depth test runs before them; off, every pixel passes
+                const BOOL volumeDepth = R.bLightVolumeDepth ? TRUE : FALSE;
+                device->SetVertexShaderConstantB(5, &volumeDepth, 1);
                 if (auto real = RealDevice(device); real != device)
+                {
                     real->SetPixelShaderConstantB(5, &earlyOut, 1);
+                    real->SetVertexShaderConstantB(5, &volumeDepth, 1);
+                }
             }
             SetLightGGXShape(light);
             CollectGlintLight(light);
