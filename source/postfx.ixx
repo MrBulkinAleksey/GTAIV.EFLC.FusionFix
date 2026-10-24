@@ -2302,6 +2302,15 @@ private:
                 SetLightingStage(rage::grcDevice::GetD3DDevice(), 2);
             const auto& light = *reinterpret_cast<const rage::CLightSource*>(regs.edi - 0x28);
             SetLightDepthBounds(rage::grcDevice::GetD3DDevice(), light);
+            // LightEarlyOut: b5 lets the light shaders leave the shadow map's filter and the GGX lobes out outside the
+            // light's sphere (zz_sphere_early_out.patch); no game shader reads b5
+            if (auto device = rage::grcDevice::GetD3DDevice())
+            {
+                const BOOL earlyOut = R.bLightEarlyOut ? TRUE : FALSE;
+                device->SetPixelShaderConstantB(5, &earlyOut, 1);
+                if (auto real = RealDevice(device); real != device)
+                    real->SetPixelShaderConstantB(5, &earlyOut, 1);
+            }
             SetLightGGXShape(light);
             CollectGlintLight(light);
             auto pDevice = rage::grcDevice::GetD3DDevice();

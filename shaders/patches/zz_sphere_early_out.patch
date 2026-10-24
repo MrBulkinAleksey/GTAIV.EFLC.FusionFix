@@ -1,0 +1,1380 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
+@@ -54,6 +54,7 @@
+     def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
++    def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -141,26 +142,36 @@
+     mul r10.y, r10.y, c172.y
+     mov r9.xyz, r9
+     mov r9.w, r10.y
+-    mov r13.x, c206.w
+-    if_lt c172.z, r13.x // a headlight: both lamps
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r11, r13.y, r14
+-      nrm r19.xyz, r15
+-      call l1
+-      mov r19.w, r13.w
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r11, r13.y, -r14
+-      nrm r19.xyz, r15
+-      call l1
+-      add r13.w, r13.w, r19.w
+-      mul r13.w, r13.w, c173.w
++    // --- FusionFix: zz_sphere_early_out.patch: the GGX lobes only within the light's sphere (its distance squared over
++    // --- c73, one over the radius squared, under 1.01); outside it the light gives nothing. LightEarlyOut (b5) off: always.
++    mov r13.y, c88.y
++    if b5
++      mul r13.y, r12.w, c73.x
++    endif
++    if_lt r13.y, c88.x
++      mov r13.x, c206.w
++      if_lt c172.z, r13.x // a headlight: both lamps
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r11, r13.y, r14
++        nrm r19.xyz, r15
++        call l1
++        mov r19.w, r13.w
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r11, r13.y, -r14
++        nrm r19.xyz, r15
++        call l1
++        add r13.w, r13.w, r19.w
++        mul r13.w, r13.w, c173.w
++      else
++        mov r19.xyz, r11
++        call l1
++      endif
+     else
+-      mov r19.xyz, r11
+-      call l1
++      mov r13.w, c88.y // no highlight
+     endif
+     add r10.x, r10.x, r10.x
+     mul r13.w, r13.w, r10.x
+@@ -384,4 +395,4 @@
+     mul r17.x, r17.x, r17.x
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
+-    ret
+\ No newline at end of file
++    ret
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+@@ -57,6 +57,7 @@
+     def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
++    def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -145,26 +146,36 @@
+     mul r10.y, r10.y, c172.y
+     mov r9.xyz, r9
+     mov r9.w, r10.y
+-    mov r13.x, c206.w
+-    if_lt c172.z, r13.x // a headlight: both lamps
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r11, r13.y, r14
+-      nrm r19.xyz, r15
+-      call l1
+-      mov r19.w, r13.w
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r11, r13.y, -r14
+-      nrm r19.xyz, r15
+-      call l1
+-      add r13.w, r13.w, r19.w
+-      mul r13.w, r13.w, c173.w
++    // --- FusionFix: zz_sphere_early_out.patch: the GGX lobes only within the light's sphere (its distance squared over
++    // --- c73, one over the radius squared, under 1.01); outside it the light gives nothing. LightEarlyOut (b5) off: always.
++    mov r13.y, c88.y
++    if b5
++      mul r13.y, r12.w, c73.x
++    endif
++    if_lt r13.y, c88.x
++      mov r13.x, c206.w
++      if_lt c172.z, r13.x // a headlight: both lamps
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r11, r13.y, r14
++        nrm r19.xyz, r15
++        call l1
++        mov r19.w, r13.w
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r11, r13.y, -r14
++        nrm r19.xyz, r15
++        call l1
++        add r13.w, r13.w, r19.w
++        mul r13.w, r13.w, c173.w
++      else
++        mov r19.xyz, r11
++        call l1
++      endif
+     else
+-      mov r19.xyz, r11
+-      call l1
++      mov r13.w, c88.y // no highlight
+     endif
+     add r10.x, r10.x, r10.x
+     mul r13.w, r13.w, r10.x
+@@ -394,4 +405,4 @@
+     mul r17.x, r17.x, r17.x
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
+-    ret
+\ No newline at end of file
++    ret
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
+@@ -57,6 +57,7 @@
+     def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
++    def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -145,26 +146,36 @@
+     mul r10.y, r10.y, c172.y
+     mov r9.xyz, r9
+     mov r9.w, r10.y
+-    mov r13.x, c206.w
+-    if_lt c172.z, r13.x // a headlight: both lamps
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r11, r13.y, r14
+-      nrm r19.xyz, r15
+-      call l1
+-      mov r19.w, r13.w
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r11, r13.y, -r14
+-      nrm r19.xyz, r15
+-      call l1
+-      add r13.w, r13.w, r19.w
+-      mul r13.w, r13.w, c173.w
++    // --- FusionFix: zz_sphere_early_out.patch: the GGX lobes only within the light's sphere (its distance squared over
++    // --- c73, one over the radius squared, under 1.01); outside it the light gives nothing. LightEarlyOut (b5) off: always.
++    mov r13.y, c88.y
++    if b5
++      mul r13.y, r12.w, c73.x
++    endif
++    if_lt r13.y, c88.x
++      mov r13.x, c206.w
++      if_lt c172.z, r13.x // a headlight: both lamps
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r11, r13.y, r14
++        nrm r19.xyz, r15
++        call l1
++        mov r19.w, r13.w
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r11, r13.y, -r14
++        nrm r19.xyz, r15
++        call l1
++        add r13.w, r13.w, r19.w
++        mul r13.w, r13.w, c173.w
++      else
++        mov r19.xyz, r11
++        call l1
++      endif
+     else
+-      mov r19.xyz, r11
+-      call l1
++      mov r13.w, c88.y // no highlight
+     endif
+     add r10.x, r10.x, r10.x
+     mul r13.w, r13.w, r10.x
+@@ -394,4 +405,4 @@
+     mul r17.x, r17.x, r17.x
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
+-    ret
+\ No newline at end of file
++    ret
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -106,6 +106,7 @@
+     def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
+     def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
+     defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
++    def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -157,141 +158,152 @@
+     mul r4.xy, r4, r1.z
+     mad r4.xy, r4, c3.zwzw, c3.z
+     // ----------------------------------------------------------- Improved Shadow Filter -----------------------------------------------------------
+-    if_eq -c221_abs.x, c221_abs.x
+-      dp2add r0.x, vPos, c4, c4.z
+-      mad r0.x, r0.x, c5.x, c5.y
+-      frc r0.x, r0.x
+-      mad r0.x, r0.x, c5.z, c5.w
+-      sincos r1.xy, r0.x
+-      mul r0.xy, r1.yxzw, r20.y
+-      mad_sat r0.xy, r0, c4.w, r4
+-      mad r0.xy, r0, c77.w, c77
+-      texldl r6, r0, s14
+-      dp2add r6.y, r6, r4.zwzw, c3.y
+-      mul r0.xy, -r1.yxzw, r20.y
+-      mul r7, r1.xyxy, c6.xyyx
+-      mad_sat r0.xy, r0, c0.z, r4
+-      mad r0.xy, r0, c77.w, c77
+-      texldl r8, r0, s14
+-      dp2add r6.w, r8, r4.zwzw, c3.y
+-      mul r0.xy, r7, r20.y
+-      mad_sat r1.xy, r7.zwzw, r20.y, r4
+-      mad_sat r0.xy, r0, c3.z, r4
+-      mad r0.xy, r0, c77.w, c77
+-      texldl r7, r0, s14
+-      dp2add r6.z, r7, r4.zwzw, c3.y
+-      mad r0.xy, r1, c77.w, c77
+-      texldl r7, r0, s14
+-      dp2add r6.x, r7, r4.zwzw, c3.y
+-      mad r1, r1.w, c66.w, r6
+-      cmp r1, r1, c3.x, c3.y
+-      dp4 r0.x, r1, c0.z
+-    else
+-      dp2add r21.x, vPos.xy, c118.xy, c118.w
+-      frc r21.x, r21.x
+-      mul r21.x, r21.x, c118.z
+-      frc r21.x, r21.x
+-      mul r21.x, r21.x, c111.z
+-      sincos r22.xy, r21.x
+-      mul r22, r22.xyyx, c110.yzyy
++    // --- FusionFix: zz_sphere_early_out.patch: the shadow map's filter only within the light's sphere (its distance squared over
++    // --- c80, one over the radius squared, under 1.01); outside it the light gives nothing. LightEarlyOut (b5) off: always.
++    mov r0.x, c88.y
++    if b5
++      dp3 r0.x, r2, r2
++      mul r0.x, r0.x, c80.x
++    endif
++    if_lt r0.x, c88.x
++      if_eq -c221_abs.x, c221_abs.x
++        dp2add r0.x, vPos, c4, c4.z
++        mad r0.x, r0.x, c5.x, c5.y
++        frc r0.x, r0.x
++        mad r0.x, r0.x, c5.z, c5.w
++        sincos r1.xy, r0.x
++        mul r0.xy, r1.yxzw, r20.y
++        mad_sat r0.xy, r0, c4.w, r4
++        mad r0.xy, r0, c77.w, c77
++        texldl r6, r0, s14
++        dp2add r6.y, r6, r4.zwzw, c3.y
++        mul r0.xy, -r1.yxzw, r20.y
++        mul r7, r1.xyxy, c6.xyyx
++        mad_sat r0.xy, r0, c0.z, r4
++        mad r0.xy, r0, c77.w, c77
++        texldl r8, r0, s14
++        dp2add r6.w, r8, r4.zwzw, c3.y
++        mul r0.xy, r7, r20.y
++        mad_sat r1.xy, r7.zwzw, r20.y, r4
++        mad_sat r0.xy, r0, c3.z, r4
++        mad r0.xy, r0, c77.w, c77
++        texldl r7, r0, s14
++        dp2add r6.z, r7, r4.zwzw, c3.y
++        mad r0.xy, r1, c77.w, c77
++        texldl r7, r0, s14
++        dp2add r6.x, r7, r4.zwzw, c3.y
++        mad r1, r1.w, c66.w, r6
++        cmp r1, r1, c3.x, c3.y
++        dp4 r0.x, r1, c0.z
++      else
++        dp2add r21.x, vPos.xy, c118.xy, c118.w
++        frc r21.x, r21.x
++        mul r21.x, r21.x, c118.z
++        frc r21.x, r21.x
++        mul r21.x, r21.x, c111.z
++        sincos r22.xy, r21.x
++        mul r22, r22.xyyx, c110.yzyy
+       
+-      mul r21, c130.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c130.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r4.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r24, r21.xy, s14
+-      dp2add r24.x, r24, r4.zw, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.y, r23, r4.zw, c110.w
+-      mul r21, c131.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c131.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r4.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r23, r21.xy, s14
+-      dp2add r24.z, r23, r4.zw, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.w, r23, r4.zw, c110.w
+-      mad r24, r1.w, c66.w, r24
+-      cmp r24, r24, c110.y, c110.w
+-      dp4 r25.x, r24, -c110.x
++        mul r21, c130.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c130.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r4.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r24, r21.xy, s14
++        dp2add r24.x, r24, r4.zw, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.y, r23, r4.zw, c110.w
++        mul r21, c131.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c131.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r4.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r23, r21.xy, s14
++        dp2add r24.z, r23, r4.zw, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.w, r23, r4.zw, c110.w
++        mad r24, r1.w, c66.w, r24
++        cmp r24, r24, c110.y, c110.w
++        dp4 r25.x, r24, -c110.x
+       
+-      mul r21, c132.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c132.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r4.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r24, r21.xy, s14
+-      dp2add r24.x, r24, r4.zw, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.y, r23, r4.zw, c110.w
+-      mul r21, c133.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c133.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r4.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r23, r21.xy, s14
+-      dp2add r24.z, r23, r4.zw, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.w, r23, r4.zw, c110.w
+-      mad r24, r1.w, c66.w, r24
+-      cmp r24, r24, c110.y, c110.w
+-      dp4 r25.y, r24, -c110.x
++        mul r21, c132.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c132.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r4.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r24, r21.xy, s14
++        dp2add r24.x, r24, r4.zw, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.y, r23, r4.zw, c110.w
++        mul r21, c133.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c133.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r4.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r23, r21.xy, s14
++        dp2add r24.z, r23, r4.zw, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.w, r23, r4.zw, c110.w
++        mad r24, r1.w, c66.w, r24
++        cmp r24, r24, c110.y, c110.w
++        dp4 r25.y, r24, -c110.x
+       
+-      mul r21, c134.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c134.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r4.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r24, r21.xy, s14
+-      dp2add r24.x, r24, r4.zw, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.y, r23, r4.zw, c110.w
+-      mul r21, c135.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c135.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r4.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r23, r21.xy, s14
+-      dp2add r24.z, r23, r4.zw, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.w, r23, r4.zw, c110.w
+-      mad r24, r1.w, c66.w, r24
+-      cmp r24, r24, c110.y, c110.w
+-      dp4 r25.z, r24, -c110.x
++        mul r21, c134.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c134.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r4.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r24, r21.xy, s14
++        dp2add r24.x, r24, r4.zw, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.y, r23, r4.zw, c110.w
++        mul r21, c135.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c135.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r4.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r23, r21.xy, s14
++        dp2add r24.z, r23, r4.zw, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.w, r23, r4.zw, c110.w
++        mad r24, r1.w, c66.w, r24
++        cmp r24, r24, c110.y, c110.w
++        dp4 r25.z, r24, -c110.x
+       
+-      mul r21, c136.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c136.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r4.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r24, r21.xy, s14
+-      dp2add r24.x, r24, r4.zw, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.y, r23, r4.zw, c110.w
+-      mul r21, c137.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c137.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r4.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r23, r21.xy, s14
+-      dp2add r24.z, r23, r4.zw, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.w, r23, r4.zw, c110.w
+-      mad r24, r1.w, c66.w, r24
+-      cmp r24, r24, c110.y, c110.w
+-      dp4 r25.w, r24, -c110.x
++        mul r21, c136.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c136.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r4.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r24, r21.xy, s14
++        dp2add r24.x, r24, r4.zw, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.y, r23, r4.zw, c110.w
++        mul r21, c137.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c137.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r4.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r23, r21.xy, s14
++        dp2add r24.z, r23, r4.zw, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.w, r23, r4.zw, c110.w
++        mad r24, r1.w, c66.w, r24
++        cmp r24, r24, c110.y, c110.w
++        dp4 r25.w, r24, -c110.x
+       
+-      dp4 r0.x, r25, -c110.x
++        dp4 r0.x, r25, -c110.x
++      endif
++    else
++      mov r0.x, c88.z // no shadow: the light gives nothing here
+     endif
+     // --- FusionFix: local_light_with_shadow_size_fade.patch (Liberty's Shadows 2.0.4, OnyxOak): a lamp kept past the game's
+     // --- size limit has its map's shadow param x set to -198 - s (s from 1 to 0 as it gets smaller on screen), its shadow fades to none
+@@ -378,26 +390,36 @@
+     // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
+     mov r9.xyz, r10
+     mov r9.w, r1.w
+-    mov r13.x, c206.w
+-    if_lt c172.z, r13.x // a headlight: both lamps
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r11, r13.y, r14
+-      nrm r19.xyz, r15
+-      call l1
+-      mov r19.w, r13.w
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r11, r13.y, -r14
+-      nrm r19.xyz, r15
+-      call l1
+-      add r13.w, r13.w, r19.w
+-      mul r13.w, r13.w, c173.w
++    // --- FusionFix: zz_sphere_early_out.patch: the GGX lobes only within the light's sphere (its distance squared over
++    // --- c80, one over the radius squared, under 1.01); outside it the light gives nothing. LightEarlyOut (b5) off: always.
++    mov r13.y, c88.y
++    if b5
++      mul r13.y, r12.w, c80.x
++    endif
++    if_lt r13.y, c88.x
++      mov r13.x, c206.w
++      if_lt c172.z, r13.x // a headlight: both lamps
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r11, r13.y, r14
++        nrm r19.xyz, r15
++        call l1
++        mov r19.w, r13.w
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r11, r13.y, -r14
++        nrm r19.xyz, r15
++        call l1
++        add r13.w, r13.w, r19.w
++        mul r13.w, r13.w, c173.w
++      else
++        mov r19.xyz, r11
++        call l1
++      endif
+     else
+-      mov r19.xyz, r11
+-      call l1
++      mov r13.w, c88.y // no highlight
+     endif
+     cmp r2.w, -c200.x, r2.w, r13.w // the game's highlight while c200.x is 0
+     mul r1.xyz, r1, r2.w
+@@ -1212,4 +1234,4 @@
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
+     add r20.w, r20.w, -r24.w // FusionFix: local_light_with_shadow_blend.patch: the skirt
+-    ret
+\ No newline at end of file
++    ret
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+@@ -86,6 +86,7 @@
+     def c182, 0.252199411, 0.0004, 0, 0 // FusionFix specular sheen on lamps: the gloss world_no_specular_mark.patch writes, half a 10 bit step either way
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
++    def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -157,141 +158,152 @@
+     mul r2.xy, r2, r0.w
+     mad r2.xy, r2, c2.zwzw, c2.z
+     // ----------------------------------------------------------- Improved Shadow Filter -----------------------------------------------------------
+-    if_eq -c221_abs.x, c221_abs.x
+-      dp2add r0.w, vPos, c3, c3.z
+-      mad r0.w, r0.w, c4.x, c4.y
+-      frc r0.w, r0.w
+-      mad r0.w, r0.w, c4.z, c4.w
+-      sincos r5.xy, r0.w
+-      mul r2.zw, r5.xyyx, r20.y
+-      mad_sat r2.zw, r2, c3.w, r2.xyxy
+-      mad r2.zw, r2, c77.w, c77.xyxy
+-      texldl r6, r2.zwzw, s14
+-      dp2add r6.y, r6, r4, c2.y
+-      mul r2.zw, -r5.xyyx, r20.y
+-      mul r5, r5.xyxy, c5.xyyx
+-      mad_sat r2.zw, r2, c5.z, r2.xyxy
+-      mad r2.zw, r2, c77.w, c77.xyxy
+-      texldl r7, r2.zwzw, s14
+-      dp2add r6.w, r7, r4, c2.y
+-      mul r2.zw, r5.xyxy, r20.y
+-      mad_sat r4.zw, r5, r20.y, r2.xyxy
+-      mad_sat r2.xy, r2.zwzw, c2.z, r2
+-      mad r2.xy, r2, c77.w, c77
+-      texldl r2, r2, s14
+-      dp2add r6.z, r2, r4, c2.y
+-      mad r2.xy, r4.zwzw, c77.w, c77
+-      texldl r2, r2, s14
+-      dp2add r6.x, r2, r4, c2.y
+-      mad r2, r1.w, c66.w, r6
+-      cmp r2, r2, c2.x, c2.y
+-      dp4 r0.w, r2, c5.z
+-    else
+-      dp2add r21.x, vPos.xy, c118.xy, c118.w
+-      frc r21.x, r21.x
+-      mul r21.x, r21.x, c118.z
+-      frc r21.x, r21.x
+-      mul r21.x, r21.x, c111.z
+-      sincos r22.xy, r21.x
+-      mul r22, r22.xyyx, c110.yzyy
++    // --- FusionFix: zz_sphere_early_out.patch: the shadow map's filter only within the light's sphere (its distance squared over
++    // --- c80, one over the radius squared, under 1.01); outside it the light gives nothing. LightEarlyOut (b5) off: always.
++    mov r0.w, c88.y
++    if b5
++      dp3 r0.w, r1, r1
++      mul r0.w, r0.w, c80.x
++    endif
++    if_lt r0.w, c88.x
++      if_eq -c221_abs.x, c221_abs.x
++        dp2add r0.w, vPos, c3, c3.z
++        mad r0.w, r0.w, c4.x, c4.y
++        frc r0.w, r0.w
++        mad r0.w, r0.w, c4.z, c4.w
++        sincos r5.xy, r0.w
++        mul r2.zw, r5.xyyx, r20.y
++        mad_sat r2.zw, r2, c3.w, r2.xyxy
++        mad r2.zw, r2, c77.w, c77.xyxy
++        texldl r6, r2.zwzw, s14
++        dp2add r6.y, r6, r4, c2.y
++        mul r2.zw, -r5.xyyx, r20.y
++        mul r5, r5.xyxy, c5.xyyx
++        mad_sat r2.zw, r2, c5.z, r2.xyxy
++        mad r2.zw, r2, c77.w, c77.xyxy
++        texldl r7, r2.zwzw, s14
++        dp2add r6.w, r7, r4, c2.y
++        mul r2.zw, r5.xyxy, r20.y
++        mad_sat r4.zw, r5, r20.y, r2.xyxy
++        mad_sat r2.xy, r2.zwzw, c2.z, r2
++        mad r2.xy, r2, c77.w, c77
++        texldl r2, r2, s14
++        dp2add r6.z, r2, r4, c2.y
++        mad r2.xy, r4.zwzw, c77.w, c77
++        texldl r2, r2, s14
++        dp2add r6.x, r2, r4, c2.y
++        mad r2, r1.w, c66.w, r6
++        cmp r2, r2, c2.x, c2.y
++        dp4 r0.w, r2, c5.z
++      else
++        dp2add r21.x, vPos.xy, c118.xy, c118.w
++        frc r21.x, r21.x
++        mul r21.x, r21.x, c118.z
++        frc r21.x, r21.x
++        mul r21.x, r21.x, c111.z
++        sincos r22.xy, r21.x
++        mul r22, r22.xyyx, c110.yzyy
+       
+-      mul r21, c130.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c130.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r2.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r24, r21.xy, s14
+-      dp2add r24.x, r24, r4.xy, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.y, r23, r4.xy, c110.w
+-      mul r21, c131.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c131.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r2.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r23, r21.xy, s14
+-      dp2add r24.z, r23, r4.xy, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.w, r23, r4.xy, c110.w
+-      mad r24, r1.w, c66.w, r24
+-      cmp r24, r24, c110.y, c110.w
+-      dp4 r25.x, r24, -c110.x
++        mul r21, c130.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c130.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r2.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r24, r21.xy, s14
++        dp2add r24.x, r24, r4.xy, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.y, r23, r4.xy, c110.w
++        mul r21, c131.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c131.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r2.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r23, r21.xy, s14
++        dp2add r24.z, r23, r4.xy, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.w, r23, r4.xy, c110.w
++        mad r24, r1.w, c66.w, r24
++        cmp r24, r24, c110.y, c110.w
++        dp4 r25.x, r24, -c110.x
+       
+-      mul r21, c132.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c132.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r2.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r24, r21.xy, s14
+-      dp2add r24.x, r24, r4.xy, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.y, r23, r4.xy, c110.w
+-      mul r21, c133.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c133.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r2.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r23, r21.xy, s14
+-      dp2add r24.z, r23, r4.xy, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.w, r23, r4.xy, c110.w
+-      mad r24, r1.w, c66.w, r24
+-      cmp r24, r24, c110.y, c110.w
+-      dp4 r25.y, r24, -c110.x
++        mul r21, c132.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c132.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r2.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r24, r21.xy, s14
++        dp2add r24.x, r24, r4.xy, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.y, r23, r4.xy, c110.w
++        mul r21, c133.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c133.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r2.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r23, r21.xy, s14
++        dp2add r24.z, r23, r4.xy, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.w, r23, r4.xy, c110.w
++        mad r24, r1.w, c66.w, r24
++        cmp r24, r24, c110.y, c110.w
++        dp4 r25.y, r24, -c110.x
+       
+-      mul r21, c134.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c134.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r2.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r24, r21.xy, s14
+-      dp2add r24.x, r24, r4.xy, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.y, r23, r4.xy, c110.w
+-      mul r21, c135.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c135.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r2.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r23, r21.xy, s14
+-      dp2add r24.z, r23, r4.xy, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.w, r23, r4.xy, c110.w
+-      mad r24, r1.w, c66.w, r24
+-      cmp r24, r24, c110.y, c110.w
+-      dp4 r25.z, r24, -c110.x
++        mul r21, c134.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c134.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r2.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r24, r21.xy, s14
++        dp2add r24.x, r24, r4.xy, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.y, r23, r4.xy, c110.w
++        mul r21, c135.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c135.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r2.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r23, r21.xy, s14
++        dp2add r24.z, r23, r4.xy, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.w, r23, r4.xy, c110.w
++        mad r24, r1.w, c66.w, r24
++        cmp r24, r24, c110.y, c110.w
++        dp4 r25.z, r24, -c110.x
+       
+-      mul r21, c136.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c136.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r2.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r24, r21.xy, s14
+-      dp2add r24.x, r24, r4.xy, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.y, r23, r4.xy, c110.w
+-      mul r21, c137.xyxy, r22
+-      add r23.xy, r21.xzxz, r21.ywyw
+-      mul r21, c137.zwzw, r22
+-      add r23.zw, r21.xzxz, r21.ywyw
+-      mad_sat r21, r23, r20.y, r2.xyxy
+-      mad r21, r21, c77.w, c77.xyxy
+-      texldl r23, r21.xy, s14
+-      dp2add r24.z, r23, r4.xy, c110.w
+-      texldl r23, r21.zw, s14
+-      dp2add r24.w, r23, r4.xy, c110.w
+-      mad r24, r1.w, c66.w, r24
+-      cmp r24, r24, c110.y, c110.w
+-      dp4 r25.w, r24, -c110.x
++        mul r21, c136.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c136.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r2.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r24, r21.xy, s14
++        dp2add r24.x, r24, r4.xy, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.y, r23, r4.xy, c110.w
++        mul r21, c137.xyxy, r22
++        add r23.xy, r21.xzxz, r21.ywyw
++        mul r21, c137.zwzw, r22
++        add r23.zw, r21.xzxz, r21.ywyw
++        mad_sat r21, r23, r20.y, r2.xyxy
++        mad r21, r21, c77.w, c77.xyxy
++        texldl r23, r21.xy, s14
++        dp2add r24.z, r23, r4.xy, c110.w
++        texldl r23, r21.zw, s14
++        dp2add r24.w, r23, r4.xy, c110.w
++        mad r24, r1.w, c66.w, r24
++        cmp r24, r24, c110.y, c110.w
++        dp4 r25.w, r24, -c110.x
+       
+-      dp4 r0.w, r25, -c110.x
++        dp4 r0.w, r25, -c110.x
++      endif
++    else
++      mov r0.w, c88.z // no shadow: the light gives nothing here
+     endif
+     // --- FusionFix: local_light_with_shadow_size_fade.patch (Liberty's Shadows 2.0.4, OnyxOak): a lamp kept past the game's
+     // --- size limit has its map's shadow param x set to -198 - s (s from 1 to 0 as it gets smaller on screen), its shadow fades to none
+@@ -342,26 +354,36 @@
+     mul r10.y, r10.y, c172.y
+     mov r9.xyz, r9
+     mov r9.w, r10.y
+-    mov r13.x, c206.w
+-    if_lt c172.z, r13.x // a headlight: both lamps
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r11, r13.y, r14
+-      nrm r19.xyz, r15
+-      call l1
+-      mov r19.w, r13.w
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r11, r13.y, -r14
+-      nrm r19.xyz, r15
+-      call l1
+-      add r13.w, r13.w, r19.w
+-      mul r13.w, r13.w, c173.w
++    // --- FusionFix: zz_sphere_early_out.patch: the GGX lobes only within the light's sphere (its distance squared over
++    // --- c80, one over the radius squared, under 1.01); outside it the light gives nothing. LightEarlyOut (b5) off: always.
++    mov r13.y, c88.y
++    if b5
++      mul r13.y, r12.w, c80.x
++    endif
++    if_lt r13.y, c88.x
++      mov r13.x, c206.w
++      if_lt c172.z, r13.x // a headlight: both lamps
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r11, r13.y, r14
++        nrm r19.xyz, r15
++        call l1
++        mov r19.w, r13.w
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r11, r13.y, -r14
++        nrm r19.xyz, r15
++        call l1
++        add r13.w, r13.w, r19.w
++        mul r13.w, r13.w, c173.w
++      else
++        mov r19.xyz, r11
++        call l1
++      endif
+     else
+-      mov r19.xyz, r11
+-      call l1
++      mov r13.w, c88.y // no highlight
+     endif
+     add r10.x, r10.x, r10.x
+     mul r13.w, r13.w, r10.x
+@@ -590,4 +612,4 @@
+     mul r17.x, r17.x, r17.x
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
+-    ret
+\ No newline at end of file
++    ret
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -76,6 +76,7 @@
+     def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
+     def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
+     defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
++    def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -205,26 +206,36 @@
+     // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
+     mov r9.xyz, r5
+     mov r9.w, r1.w
+-    mov r13.x, c206.w
+-    if_lt c172.z, r13.x // a headlight: both lamps
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r8, r13.y, r14
+-      nrm r19.xyz, r15
+-      call l1
+-      mov r19.w, r13.w
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r8, r13.y, -r14
+-      nrm r19.xyz, r15
+-      call l1
+-      add r13.w, r13.w, r19.w
+-      mul r13.w, r13.w, c173.w
++    // --- FusionFix: zz_sphere_early_out.patch: the GGX lobes only within the light's sphere (its distance squared over
++    // --- c75, one over the radius squared, under 1.01); outside it the light gives nothing. LightEarlyOut (b5) off: always.
++    mov r13.y, c88.y
++    if b5
++      mul r13.y, r12.w, c75.x
++    endif
++    if_lt r13.y, c88.x
++      mov r13.x, c206.w
++      if_lt c172.z, r13.x // a headlight: both lamps
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r8, r13.y, r14
++        nrm r19.xyz, r15
++        call l1
++        mov r19.w, r13.w
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r8, r13.y, -r14
++        nrm r19.xyz, r15
++        call l1
++        add r13.w, r13.w, r19.w
++        mul r13.w, r13.w, c173.w
++      else
++        mov r19.xyz, r8
++        call l1
++      endif
+     else
+-      mov r19.xyz, r8
+-      call l1
++      mov r13.w, c88.y // no highlight
+     endif
+     cmp r0.w, -c200.x, r0.w, r13.w // the game's highlight while c200.x is 0
+     mul r1.xyw, r0.xyzz, r0.w
+@@ -1025,4 +1036,4 @@
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
+     add r20.w, r20.w, -r24.w // FusionFix: local_light_with_shadow_blend.patch: the skirt
+-    ret
+\ No newline at end of file
++    ret
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -108,6 +108,7 @@
+     def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
+     def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
+     defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
++    def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -399,26 +400,36 @@
+     // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
+     mov r9.xyz, r5
+     mov r9.w, r1.w
+-    mov r13.x, c206.w
+-    if_lt c172.z, r13.x // a headlight: both lamps
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r8, r13.y, r14
+-      nrm r19.xyz, r15
+-      call l1
+-      mov r19.w, r13.w
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r8, r13.y, -r14
+-      nrm r19.xyz, r15
+-      call l1
+-      add r13.w, r13.w, r19.w
+-      mul r13.w, r13.w, c173.w
++    // --- FusionFix: zz_sphere_early_out.patch: the GGX lobes only within the light's sphere (its distance squared over
++    // --- c82, one over the radius squared, under 1.01); outside it the light gives nothing. LightEarlyOut (b5) off: always.
++    mov r13.y, c88.y
++    if b5
++      mul r13.y, r12.w, c82.x
++    endif
++    if_lt r13.y, c88.x
++      mov r13.x, c206.w
++      if_lt c172.z, r13.x // a headlight: both lamps
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r8, r13.y, r14
++        nrm r19.xyz, r15
++        call l1
++        mov r19.w, r13.w
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r8, r13.y, -r14
++        nrm r19.xyz, r15
++        call l1
++        add r13.w, r13.w, r19.w
++        mul r13.w, r13.w, c173.w
++      else
++        mov r19.xyz, r8
++        call l1
++      endif
+     else
+-      mov r19.xyz, r8
+-      call l1
++      mov r13.w, c88.y // no highlight
+     endif
+     cmp r2.x, -c200.x, r2.x, r13.w // the game's highlight while c200.x is 0
+     dp3_sat r0.w, r8, r5
+@@ -1228,4 +1239,4 @@
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
+     add r20.w, r20.w, -r24.w // FusionFix: local_light_with_shadow_blend.patch: the skirt
+-    ret
+\ No newline at end of file
++    ret
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+@@ -71,6 +71,7 @@
+     def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
+     def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
+     defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
++    def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -157,26 +158,36 @@
+     // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
+     mov r9.xyz, r2
+     mov r9.w, r0.x
+-    mov r13.x, c206.w
+-    if_lt c172.z, r13.x // a headlight: both lamps
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r3, r13.y, r14
+-      nrm r19.xyz, r15
+-      call l1
+-      mov r19.w, r13.w
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r3, r13.y, -r14
+-      nrm r19.xyz, r15
+-      call l1
+-      add r13.w, r13.w, r19.w
+-      mul r13.w, r13.w, c173.w
++    // --- FusionFix: zz_sphere_early_out.patch: the GGX lobes only within the light's sphere (its distance squared over
++    // --- c73, one over the radius squared, under 1.01); outside it the light gives nothing. LightEarlyOut (b5) off: always.
++    mov r13.y, c88.y
++    if b5
++      mul r13.y, r12.w, c73.x
++    endif
++    if_lt r13.y, c88.x
++      mov r13.x, c206.w
++      if_lt c172.z, r13.x // a headlight: both lamps
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r3, r13.y, r14
++        nrm r19.xyz, r15
++        call l1
++        mov r19.w, r13.w
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r3, r13.y, -r14
++        nrm r19.xyz, r15
++        call l1
++        add r13.w, r13.w, r19.w
++        mul r13.w, r13.w, c173.w
++      else
++        mov r19.xyz, r3
++        call l1
++      endif
+     else
+-      mov r19.xyz, r3
+-      call l1
++      mov r13.w, c88.y // no highlight
+     endif
+     cmp r1.y, -c200.x, r1.y, r13.w // the game's highlight while c200.x is 0
+     mul r0.x, r0.z, c3.x
+@@ -981,4 +992,4 @@
+     rcp r20.x, r20.x
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
+-    ret
+\ No newline at end of file
++    ret
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+@@ -74,6 +74,7 @@
+     def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
+     def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
+     defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
++    def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -156,26 +157,36 @@
+     // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
+     mov r9.xyz, r2
+     mov r9.w, r1.y
+-    mov r13.x, c206.w
+-    if_lt c172.z, r13.x // a headlight: both lamps
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r3, r13.y, r14
+-      nrm r19.xyz, r15
+-      call l1
+-      mov r19.w, r13.w
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r3, r13.y, -r14
+-      nrm r19.xyz, r15
+-      call l1
+-      add r13.w, r13.w, r19.w
+-      mul r13.w, r13.w, c173.w
++    // --- FusionFix: zz_sphere_early_out.patch: the GGX lobes only within the light's sphere (its distance squared over
++    // --- c73, one over the radius squared, under 1.01); outside it the light gives nothing. LightEarlyOut (b5) off: always.
++    mov r13.y, c88.y
++    if b5
++      mul r13.y, r12.w, c73.x
++    endif
++    if_lt r13.y, c88.x
++      mov r13.x, c206.w
++      if_lt c172.z, r13.x // a headlight: both lamps
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r3, r13.y, r14
++        nrm r19.xyz, r15
++        call l1
++        mov r19.w, r13.w
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r3, r13.y, -r14
++        nrm r19.xyz, r15
++        call l1
++        add r13.w, r13.w, r19.w
++        mul r13.w, r13.w, c173.w
++      else
++        mov r19.xyz, r3
++        call l1
++      endif
+     else
+-      mov r19.xyz, r3
+-      call l1
++      mov r13.w, c88.y // no highlight
+     endif
+     cmp r2.w, -c200.x, r2.w, r13.w // the game's highlight while c200.x is 0
+     mul r0.w, r0.z, c4.x
+@@ -990,4 +1001,4 @@
+     rcp r20.x, r20.x
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
+-    ret
+\ No newline at end of file
++    ret
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+@@ -74,6 +74,7 @@
+     def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
+     def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
+     defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
++    def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -155,26 +156,36 @@
+     // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
+     mov r9.xyz, r2
+     mov r9.w, r1.y
+-    mov r13.x, c206.w
+-    if_lt c172.z, r13.x // a headlight: both lamps
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r3, r13.y, r14
+-      nrm r19.xyz, r15
+-      call l1
+-      mov r19.w, r13.w
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r3, r13.y, -r14
+-      nrm r19.xyz, r15
+-      call l1
+-      add r13.w, r13.w, r19.w
+-      mul r13.w, r13.w, c173.w
++    // --- FusionFix: zz_sphere_early_out.patch: the GGX lobes only within the light's sphere (its distance squared over
++    // --- c73, one over the radius squared, under 1.01); outside it the light gives nothing. LightEarlyOut (b5) off: always.
++    mov r13.y, c88.y
++    if b5
++      mul r13.y, r12.w, c73.x
++    endif
++    if_lt r13.y, c88.x
++      mov r13.x, c206.w
++      if_lt c172.z, r13.x // a headlight: both lamps
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r3, r13.y, r14
++        nrm r19.xyz, r15
++        call l1
++        mov r19.w, r13.w
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r3, r13.y, -r14
++        nrm r19.xyz, r15
++        call l1
++        add r13.w, r13.w, r19.w
++        mul r13.w, r13.w, c173.w
++      else
++        mov r19.xyz, r3
++        call l1
++      endif
+     else
+-      mov r19.xyz, r3
+-      call l1
++      mov r13.w, c88.y // no highlight
+     endif
+     cmp r2.w, -c200.x, r2.w, r13.w // the game's highlight while c200.x is 0
+     mul r0.w, r0.z, c4.y
+@@ -992,4 +1003,4 @@
+     rcp r20.x, r20.x
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
+-    ret
+\ No newline at end of file
++    ret
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -74,6 +74,7 @@
+     def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
+     def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
+     defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
++    def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -156,26 +157,36 @@
+     // --- streaks. c200.x is the strength, y the Fresnel rise; r12.xyz the view ray, r12.w the distance squared.
+     mov r9.xyz, r2
+     mov r9.w, r1.y
+-    mov r13.x, c206.w
+-    if_lt c172.z, r13.x // a headlight: both lamps
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r3, r13.y, r14
+-      nrm r19.xyz, r15
+-      call l1
+-      mov r19.w, r13.w
+-      rsq r13.y, r12.w
+-      rcp r13.y, r13.y
+-      mul r14.xyz, c206, c206.w
+-      mad r15.xyz, r3, r13.y, -r14
+-      nrm r19.xyz, r15
+-      call l1
+-      add r13.w, r13.w, r19.w
+-      mul r13.w, r13.w, c173.w
++    // --- FusionFix: zz_sphere_early_out.patch: the GGX lobes only within the light's sphere (its distance squared over
++    // --- c73, one over the radius squared, under 1.01); outside it the light gives nothing. LightEarlyOut (b5) off: always.
++    mov r13.y, c88.y
++    if b5
++      mul r13.y, r12.w, c73.x
++    endif
++    if_lt r13.y, c88.x
++      mov r13.x, c206.w
++      if_lt c172.z, r13.x // a headlight: both lamps
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r3, r13.y, r14
++        nrm r19.xyz, r15
++        call l1
++        mov r19.w, r13.w
++        rsq r13.y, r12.w
++        rcp r13.y, r13.y
++        mul r14.xyz, c206, c206.w
++        mad r15.xyz, r3, r13.y, -r14
++        nrm r19.xyz, r15
++        call l1
++        add r13.w, r13.w, r19.w
++        mul r13.w, r13.w, c173.w
++      else
++        mov r19.xyz, r3
++        call l1
++      endif
+     else
+-      mov r19.xyz, r3
+-      call l1
++      mov r13.w, c88.y // no highlight
+     endif
+     cmp r2.w, -c200.x, r2.w, r13.w // the game's highlight while c200.x is 0
+     mul r0.w, r0.z, c4.y
+@@ -994,4 +1005,4 @@
+     rcp r20.x, r20.x
+     add r20.w, r20.w, r20.x
+     add r20.w, r20.w, -r12.y
+-    ret
+\ No newline at end of file
++    ret
