@@ -1013,8 +1013,11 @@ namespace PlayerShadowAllocation
                    origin==fusionfix::shadows::ShadowSlotTrace::OriginCorona) { gain=SlotGain::None; ++addedLightsYielded; }
             }
             // StreetLampsFirst: a facade's model light that reaches you ranks off screen, below the street lamps in view
-            // and those with a car or ped in their light.
+            // and those with a car or ped in their light. Not one within BehindLampReach: uncached, it has no map but its
+            // slot, and a shop front's light 6.6 m over you lost it to street lamps with a car under them as the camera
+            // turned, the awning's shadow on the shutters below coming and going.
             if(casterPriority && streetLampsFirst && kind==budget::Kind::Lamp && !cached && lightsPlayer && gain==SlotGain::InView &&
+               geometry.distanceSquared>behindLampReach*behindLampReach &&
                lightOrigin && lightOrigin(key)==fusionfix::shadows::ShadowSlotTrace::OriginModelLight && BuildingLight(key)) {
                 gain=SlotGain::OffScreen; ++buildingLightsLowered;
             }
