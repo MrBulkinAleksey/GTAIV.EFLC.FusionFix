@@ -59,7 +59,8 @@ import entityclass;
 //    And past 60 m small props (radius under 2 m) thin out as they are drawn: of those at distance d, a share
 //    60 / d is kept (half at 120 m, 30% at 200 m; (40 / d)^2 showed them coming in), picked by the hash of their place, so the same ones stay and nearer ones come back as you
 //    get close (skipping them when made would lose them for good: a position is offered once). With the pool at
-//    16384 instead of 512 and the slider at its top, 4000+ weed draws 50-200 m out still took 3.5 ms.
+//    16384 instead of 512 and the slider at its top, 4000+ weed draws 50-200 m out still took 3.5 ms. Models that Far
+//    Prop Instancing draws in batches (ProceduralGround::DrawnInstanced) are left out of the thinning.
 //  - The 64 candidates of one entity's 2dfx props are capped, which the game itself never checked.
 //  - HeavyPropCull ([PERFORMANCE]): not the generator's, any small entity (radius under 3 m, no LOD parent) whose model
 //    took kHeavyDraws or more device draws an entity in the G-buffer (EntityClass::DrawsPerEntity, learned as they are
@@ -96,13 +97,17 @@ export namespace ProceduralGround
     {
         float corner[3][3];
         uint8_t tag;        // the surface's procedural tag (material +0x4c, bits 8..15): PROCOBJ records by tag
-        uint8_t surface;    // its material (bits 0..7): 1 GRASS, 2 SHORT_GRASS, 0 any other (GrassSurface)
+        uint8_t surface;    // its material (bits 0..7): 1 GRASS, 2 SHORT_GRASS, 3 GRASS_PATCHY, 4 GRASS_LONG, 0 any other (GrassSurface)
     };
-    // Set before the world loads (gpugrass.ixx): the manager also gathers ground of the GRASS and SHORT_GRASS materials
+    // Set before the world loads (gpugrass.ixx): the manager also gathers ground of the grassy materials (GrassSurface)
     // whose procedural tag has neither plants nor props, as ground with props of a tag that has none (so the generator
     // makes nothing there)
     inline bool GatherGrassSurfaces = false;
     inline void (*OnAdded)(const void* key, const Triangle& triangle) = nullptr;
+    // Far Prop Instancing (farpropinstancing.ixx), any thread: the model's far props are drawn in one instanced draw,
+    // so ProceduralSmallFarCull's thinning past 60 m leaves them in (the size cull still takes the tiniest); not those
+    // with a matrix of their own (scaled), which it doesn't take
+    inline bool (*DrawnInstanced)(uint16_t model) = nullptr;
     inline void (*OnRemoved)(const void* key) = nullptr;
     // A prop of `model` at `distance` from the camera left out of the scene, where other grass grows in its place
     // (gpugrass.ixx); `keep` is the prop's own random value, 0..1, the same each time it is made there
@@ -1048,6 +1053,14 @@ namespace Procedural
         return phases & ~scene;
     }
 
+    // Far Prop Instancing takes the entity's commands: its model is drawn in batches and the entity has no matrix of its
+    // own (+0x24 bit 0x4000000, a scaled prop, whose command keeps that matrix: CEntity's add, CE 0xa2fe70)
+    bool DrawnInstanced(uintptr_t entity)
+    {
+        return ProceduralGround::DrawnInstanced && !(*(uint32_t*)(entity + 0x24) & 0x4000000) &&
+               ProceduralGround::DrawnInstanced(*(uint16_t*)(entity + 0x2e));
+    }
+
     // The render lists: reflection phases off for props, and the scene for small ones far off
     uint32_t DropPhases(uintptr_t entity, uint32_t phases, float distance)
     {
@@ -1076,7 +1089,7 @@ namespace Procedural
             phases &= ~scene;
         }
         if ((phases & scene) && bSmallFarCull && radius > 0.0f && (radius < distance * SmallFarScreenSize ||
-            (radius < SmallPropRadius && distance > SmallFarThinFrom && keep * distance > SmallFarThinFrom)))
+            (radius < SmallPropRadius && distance > SmallFarThinFrom && keep * distance > SmallFarThinFrom && !DrawnInstanced(entity))))
         {
             nSmallFarCulled++;
             phases &= ~scene;
@@ -1127,24 +1140,36 @@ namespace Procedural
         }
     }
 
-    // The GRASS and SHORT_GRASS materials' indices, from the material manager by their names (as the game takes them,
-    // CE 0xcf2d59: [0x18b8968] vtable +0x18 by name); -1 until found
+    // The grassy materials' indices, from the material manager by their names (as the game takes them, CE 0xcf2d59:
+    // [0x18b8968] vtable +0x18 by name): GRASS and SHORT_GRASS by the game's own strings, GRASS_PATCHY and GRASS_LONG
+    // (materials.dat only, no tag on PC either) by ours; -1 until found, or when the manager gives a missing name's index
     uintptr_t* pMaterialManager = nullptr;
-    const char* szGrassNames[2] = {};
-    int32_t nGrassMaterials[2] = { -1, -1 };
+    const char* szGrassNames[4] = { nullptr, nullptr, "GRASS_PATCHY", "GRASS_LONG" };
+    int32_t nGrassMaterials[4] = { -1, -1, -1, -1 };
+    bool bGrassMaterialsLooked = false;
     uint8_t GrassSurface(uint32_t material)
     {
-        if (nGrassMaterials[0] < 0 && pMaterialManager && *pMaterialManager)
+        if (!bGrassMaterialsLooked && pMaterialManager && *pMaterialManager)
         {
+            bGrassMaterialsLooked = true;
             auto manager = *pMaterialManager;
             using Find = uint32_t(__thiscall*)(uintptr_t, const char*);
             const auto find = (*(Find**)manager)[6];
-            for (int i = 0; i < 2; i++)
+            const int32_t missing = int32_t(find(manager, "FUSIONFIX_NO_SUCH_MATERIAL") & 0xFF);
+            for (int i = 0; i < 4; i++)
+            {
                 nGrassMaterials[i] = int32_t(find(manager, szGrassNames[i]) & 0xFF);
-            Log("GrassSurfaces", std::format("GRASS {}, SHORT_GRASS {}", nGrassMaterials[0], nGrassMaterials[1]));
+                if (i >= 2 && nGrassMaterials[i] == missing)
+                    nGrassMaterials[i] = -1;
+            }
+            Log("GrassSurfaces", std::format("GRASS {}, SHORT_GRASS {}, GRASS_PATCHY {}, GRASS_LONG {} (a missing name gives {})",
+                nGrassMaterials[0], nGrassMaterials[1], nGrassMaterials[2], nGrassMaterials[3], missing));
         }
         const int32_t surface = int32_t(material & 0xFF);
-        return surface == nGrassMaterials[0] ? 1 : surface == nGrassMaterials[1] ? 2 : 0;
+        for (int i = 0; i < 4; i++)
+            if (surface == nGrassMaterials[i])
+                return uint8_t(i + 1);
+        return 0;
     }
 
     // GatherGrassSurfaces: where the manager marks each polygon of a bound for plants (bit 2i, the tag has a PLANT

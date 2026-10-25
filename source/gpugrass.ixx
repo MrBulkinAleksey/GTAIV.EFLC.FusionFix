@@ -56,8 +56,8 @@ using namespace PostFxProfiler;
 // weeds: by procedural.dat's PROCOBJ records of that tag whose model is grass or a weed on the grass list (GrassShared),
 // the sum of their 1 / spacing^2 times 12, at most 1; and the mix of grass and weeds among those props, which the blades
 // follow (GrassShared::GrassKind). Small plants (flower beds) stay the game's props; a tag with only those grows sparser
-// grass between them (kPlantGroundShare). Lawns of the GRASS and SHORT_GRASS
-// materials whose tag has no props, which the manager gathers for us (GatherGrassSurfaces), grow grass of their own
+// grass between them (kPlantGroundShare). Lawns of the grassy
+// materials (GRASS, SHORT_GRASS, GRASS_PATCHY, GRASS_LONG) whose tag has no props, which the manager gathers for us (GatherGrassSurfaces), grow grass of their own
 // (LookOf). The triangles are cut into pieces of at most kPieceArea square metres
 // when the set changes; each frame the pieces in view within the range take a share of the mesh's kCards cards
 // (BladeShare: all up to kDenseRange, half at GpuGrassFullRange, where far cards are fewer and wider, none at
@@ -298,8 +298,9 @@ namespace GpuGrass
         return true;
     }
 
-    // By the triangle's procedural tag where its props have grass or weeds, else by its material: lawns of GRASS and
-    // SHORT_GRASS without props (ProceduralGround::GatherGrassSurfaces), all grass, the short one lower and sparser
+    // By the triangle's procedural tag where its props have grass or weeds, else by its material: lawns of GRASS,
+    // SHORT_GRASS, GRASS_PATCHY and GRASS_LONG without props (ProceduralGround::GatherGrassSurfaces), all grass; the
+    // short one lower and sparser, the patchy one in thin patches with a few weeds, the long one full height
     bool LookOf(const ProceduralGround::Triangle& t, Look& look)
     {
         if (tagShare[t.tag] > 0.0f)
@@ -312,6 +313,10 @@ namespace GpuGrass
             look = { 1.0f, { 1.0f, 0.0f, 0.0f, 0.8f }, 251.0f / 255.0f };
         else if (t.surface == 2)
             look = { 0.75f, { 1.0f, 0.0f, 0.0f, 0.15f }, 252.0f / 255.0f };
+        else if (t.surface == 3)
+            look = { 0.5f, { 0.85f, 0.15f, 0.0f, 0.5f }, 253.0f / 255.0f };
+        else if (t.surface == 4)
+            look = { 1.0f, { 0.9f, 0.1f, 0.0f, 1.0f }, 254.0f / 255.0f };
         return t.surface != 0;
     }
 
