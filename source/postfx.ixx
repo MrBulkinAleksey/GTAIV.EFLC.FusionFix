@@ -541,14 +541,17 @@ private:
 
             PostFxResources.SSRHalfTex = rage::CreateEmptyRenderTarget("SSRHalfTex", width / 2, height / 2, 64, aoDesc, PostFxResources.SSRHalfSurf);
             {
+                // At half size, or at full size with CloudsHalfResolution off: the clouds' passes take their size from
+                // these targets.
+                const int cloudDiv = PostFxResources.bVolumetricCloudsHalfRes ? 2 : 1;
                 static const char* cloudNames[3] = { "CloudTex", "CloudAccumTex0", "CloudAccumTex1" };
                 for (int i = 0; i < 3; ++i)
-                    PostFxResources.CloudTex[i] = rage::CreateEmptyRenderTarget(cloudNames[i], width / 2, height / 2, 64, aoDesc, PostFxResources.CloudSurf[i]);
+                    PostFxResources.CloudTex[i] = rage::CreateEmptyRenderTarget(cloudNames[i], width / cloudDiv, height / cloudDiv, 64, aoDesc, PostFxResources.CloudSurf[i]);
                 PostFxResources.nCloudAccumFrame = 0;
                 PostFxResources.CloudSkyRefTex = rage::CreateEmptyRenderTarget("CloudSkyRefTex", 1, 1, 64, aoDesc, PostFxResources.CloudSkyRefSurf);
                 static const char* marchNames[2] = { "CloudMarchTex0", "CloudMarchTex1" };
                 for (int i = 0; i < 2; ++i)
-                    PostFxResources.CloudMarchTex[i] = rage::CreateEmptyRenderTarget(marchNames[i], width / 2, height / 2, 64, aoDesc, PostFxResources.CloudMarchSurf[i]);
+                    PostFxResources.CloudMarchTex[i] = rage::CreateEmptyRenderTarget(marchNames[i], width / cloudDiv, height / cloudDiv, 64, aoDesc, PostFxResources.CloudMarchSurf[i]);
                 // Cleared: it is only ever blended into, and a NaN left in it would stay for good.
                 if (PostFxResources.CloudSkyRefSurf && pDevice)
                     pDevice->ColorFill(PostFxResources.CloudSkyRefSurf, nullptr, D3DCOLOR_ARGB(0, 0, 0, 0));
