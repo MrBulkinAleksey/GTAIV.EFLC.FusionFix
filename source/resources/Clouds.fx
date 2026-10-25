@@ -116,6 +116,8 @@ float fCurl;              // how far the billows are swept along the coarse nois
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
 float fDebug;             // VolumetricCloudsDebug + 1, the numbers in the comments here:2 the sky brightness matched to, 3 to 11 one term of the light alone (Light)
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
+float4 vec4Style;         // VolumetricCloudsStyle (0 ours, 1 CloudWorks' growing billows), and for 1: the cut, the billows' gain, the base's density
+float2 vec2StyleSoft;     // for style 1: the cut's softness at the base and at the top
 float fDetailFlow;        // VolumetricCloudsDetailFlow: how far up, in billows, the heap's density pushes its billows
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
 float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach
@@ -284,6 +286,30 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
     d = saturate((d - dome) / max(1.0 - dome, 0.05)) * smoothstep(1.0, 0.85, h);
     if (d <= 0.0)
         return 0.0;
+
+    // VolumetricCloudsStyle 1, the way CloudWorks builds its clouds: the billows grow the heap instead of
+    // eating into it. The heap's density times one and some of the billows' noise, cut at a level, so
+    // the outline bulges out where a billow stands and the heap stays whole inside, no holes torn in it;
+    // the cut softer at the base than at the top, and the density held lower at the base, so the bases
+    // are thin and see-through and the tops solid. The steps towards the sun take the noise's mean.
+    [branch]
+    if (vec4Style.x > 0.0)
+    {
+        float puff = 0.5;
+        [branch]
+        if (detail)
+        {
+            float3 q = p * vec4Shape.y + float3(vec4Wind.zw, fEvolution) + wander.xyx * (fCurl * h);
+            q.z -= fDetailFlow * d;
+            float2 billow = tex3Dlod(DetailTex, float4(q, 0)).rg;
+            float fine = tex3Dlod(DetailTex, float4(q * 5.5 + 0.37 + (billow.rgr - 0.5), 0)).r;
+            crease = 1.0 - billow.r;
+            puff = 0.65 * billow.r + 0.35 * fine;
+        }
+        float grown = d * (1.0 + vec4Style.z * puff);
+        soft = saturate((grown - vec4Style.y) / lerp(vec2StyleSoft.x, vec2StyleSoft.y, h));
+        return soft * lerp(vec4Style.w, 1.0, smoothstep(0.0, 0.5, h));
+    }
 
     [branch]
     if (detail)
