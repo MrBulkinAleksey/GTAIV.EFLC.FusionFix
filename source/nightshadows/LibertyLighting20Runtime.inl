@@ -696,6 +696,19 @@ namespace Lighting20
             return false;
         }
 
+        // Two lamps of one post: both outdoors, one colour and one brightness. A slot trace in a Chinatown shop had a
+        // red lamp (i 14) paired with a white one (i 14, 2.1 m off) of the same room whenever the camera stood where
+        // the game listed the white one; the red lamp's map was then drawn from between them and the player's shadow
+        // from it came and went with the camera.
+        static bool OnePost(const rage::CLightSource& a, const rage::CLightSource& b) noexcept
+        {
+            if ((a.mInteriorIndex > 0 && a.mRoomIndex > 0) || (b.mInteriorIndex > 0 && b.mRoomIndex > 0)) return false;
+            if (std::abs(a.mColor.x - b.mColor.x) > 0.1f || std::abs(a.mColor.y - b.mColor.y) > 0.1f ||
+                std::abs(a.mColor.z - b.mColor.z) > 0.1f)
+                return false;
+            return std::abs(a.mIntensity - b.mIntensity) <= 0.25f * (std::max)(a.mIntensity, b.mIntensity);
+        }
+
         // NightShadowsSlotLog: Q lines, each light within TraceReach of you near another shadow light, paired or the
         // first rule of Find that kept it from its nearest neighbour, when that changes.
         static constexpr float TraceReach = 40.0f;
@@ -748,6 +761,7 @@ namespace Lighting20
                     else if (o.mType != l.mType) status = "type";
                     else if (o.mInteriorIndex != l.mInteriorIndex || o.mRoomIndex != l.mRoomIndex) status = "room";
                     else if (o.mCastShadows == l.mCastShadows) status = "same_key";
+                    else if (!OnePost(l, o)) status = "not_one_post";
                     else if (std::abs(o.mRadius - l.mRadius) > 0.25f * (std::max)(o.mRadius, l.mRadius)) status = "radius";
                     else if (l.mType == rage::LT_SPOT && l.mDirection.x * o.mDirection.x + l.mDirection.y * o.mDirection.y + l.mDirection.z * o.mDirection.z < 0.5f) status = "direction";
                     else if (d2(l, o) >= distance * distance) status = "distance";
@@ -821,7 +835,7 @@ namespace Lighting20
                     if (taken[b]) continue;
                     const auto& other = lights[candidates[b]];
                     if (other.mType != one.mType || other.mInteriorIndex != one.mInteriorIndex || other.mRoomIndex != one.mRoomIndex ||
-                        other.mCastShadows == one.mCastShadows ||
+                        other.mCastShadows == one.mCastShadows || !OnePost(one, other) ||
                         std::abs(other.mRadius - one.mRadius) > 0.25f * (std::max)(other.mRadius, one.mRadius))
                         continue;
                     if (one.mType == rage::LT_SPOT &&
