@@ -482,6 +482,7 @@ class NightShadows
         PlayerShadowAllocation::pedCasterDistance = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "PedCasterDistance", 35.0f), 0.0f, 150.0f);
         fusionfix::shadows::ShadowCasterPresence::MinLightAbove = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "CasterMinLightHeight", 2.5f), 0.0f, 10.0f);
         PlayerShadowAllocation::interiorLightsYield = iniReader.ReadInteger("NIGHTSHADOWS", "InteriorLightsYieldOutside", 1) != 0;
+        PlayerShadowAllocation::interiorLightsFirst = iniReader.ReadInteger("NIGHTSHADOWS", "InteriorLightsFirst", 1) != 0;
         PlayerShadowAllocation::lampSpacing.base = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "LampSpacing", 0.0f), 0.0f, 40.0f);
         PlayerShadowAllocation::lampSpacing.seconds = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "LampSpacingSeconds", 0.5f), 0.0f, 5.0f);
         PlayerShadowAllocation::lampSpacing.alongRoad = iniReader.ReadInteger("NIGHTSHADOWS", "LampSpacingAlongRoad", 0) != 0;

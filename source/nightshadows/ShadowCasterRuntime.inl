@@ -298,6 +298,9 @@ namespace ShadowDiagnostics
                 << " peds_left_out=" << PlayerShadowAllocation::pedsLeftOut.load()
                 << " interior_lights_yielded=" << PlayerShadowAllocation::interiorLightsYielded.load()
                 << " interior_scene=" << PlayerShadowAllocation::interiorScene.load()
+                << " interior_lights_first=" << PlayerShadowAllocation::interiorLightsFirst
+                << " player_interior=" << PlayerShadowAllocation::playerInterior.load()
+                << " room_lights_first=" << PlayerShadowAllocation::roomLightsFirst.load()
                 << " lamps_without_casters=" << PlayerShadowAllocation::lampsWithoutCasters.load()
                 << " lights_off_screen=" << PlayerShadowAllocation::lightsOffScreen.load()
                 << " cached_lamps_in_view=" << PlayerShadowAllocation::cachedLampsInView.load()
