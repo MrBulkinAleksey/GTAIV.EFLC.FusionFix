@@ -40,7 +40,7 @@ import inireload;
 export namespace Occlusion
 {
     // HiZOcclusion: 0 off, 1 hidden entities left out of the scene, 2 tested and counted only
-    int nMode = 2;
+    int nMode = 1;
     // LampShadowsOcclusion: lights whose whole reach is hidden draw no shadow map (nightshadows)
     bool bLampShadows = true;
     // HiZOccluderCategories: a bit per material category (the material ID less its 128 and 8 bits, as WetGround takes
@@ -677,7 +677,7 @@ public:
         static bool hooked = false, started = false;
         static auto readIni = [](CIniReader& iniReader)
         {
-            const int mode = std::clamp(iniReader.ReadInteger("PERFORMANCE", "HiZOcclusion", 2), 0, 2);
+            const int mode = std::clamp(iniReader.ReadInteger("PERFORMANCE", "HiZOcclusion", 1), 0, 2);
             fMaxMove = std::clamp(iniReader.ReadFloat("PERFORMANCE", "HiZOcclusionMaxMove", 4.0f), 0.0f, 50.0f);
             nFrames = std::clamp(iniReader.ReadInteger("PERFORMANCE", "HiZOcclusionFrames", 2), 1, 60);
             fMinRadius = std::clamp(iniReader.ReadFloat("PERFORMANCE", "HiZOcclusionMinRadius", 0.0f), 0.0f, 100.0f);
