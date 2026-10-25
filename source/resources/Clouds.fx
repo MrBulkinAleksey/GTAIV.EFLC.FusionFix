@@ -117,7 +117,8 @@ float fLightAbsorption;   // the share of the extinction the sun's light takes i
 float fDebug;             // VolumetricCloudsDebug + 1, the numbers in the comments here:2 the sky brightness matched to, 3 to 11 one term of the light alone (Light)
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
 float4 vec4Style;         // VolumetricCloudsStyle (0 ours, 1 CloudWorks' growing billows), and for 1: the cut, the billows' gain, the base's density
-float2 vec2StyleSoft;     // for style 1: the cut's softness at the base and at the top
+float2 vec2StyleSoft;
+float4 vec4StyleLight;    // VolumetricCloudsStyleLight (0 ours, 1 CloudWorks'), and for 1: the sun's gain, the sky's gain, the phase's peak     // for style 1: the cut's softness at the base and at the top
 float fDetailFlow;        // VolumetricCloudsDetailFlow: how far up, in billows, the heap's density pushes its billows
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
 float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach
@@ -545,6 +546,10 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
             // the light's march leaves the detail out, and without this the clouds' faces came out
             // as smooth gradients whatever their outline did.
             sun *= full ? 1.0 - 0.9 * crease * crease : 1.0;
+            // VolumetricCloudsStyleLight: as CloudWorks lights them, the sun's beam alone, what is left
+            // of it after the cloud towards the sun, with none of the light scattered many times, the
+            // least kept, the powder or the folds.
+            sun = vec4StyleLight.x > 0.0 ? exp(-tau) * fLightStrength : sun;
             // Darker towards the base, where the sky above is hidden by the cloud itself, by height.
             float h = saturate((p.z - base) / vec4Layer.y);
             // Thin by the density before the compressor: past it the density is near 1 a few metres
@@ -705,6 +710,18 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     }
     float3 body = (termBase + termSilver + termSunset + termSunPower + termTop) * shadeMul;
     float3 colour = body + termGlow;
+    // VolumetricCloudsStyleLight: the sun's beam through the phase CloudWorks gives it, even all round
+    // with a narrow peak towards the sun (1 + StylePhase exp(20 (cos - 1))), and the sky's light over the
+    // whole cloud alike; the silver lining, the sunset colour, the glow, the tops, the undersides and the
+    // backlight are its own lobes, left out.
+    [branch]
+    if (vec4StyleLight.x > 0.0)
+    {
+        float phase = 1.0 + vec4StyleLight.w * exp(20.0 * (cosTheta - 1.0));
+        body = sunLit * (vec4StyleLight.y * phase * sums.sun) + shadeColour * (vec4StyleLight.z * cover);
+        termGlow = 0.0;
+        colour = body;
+    }
 
     // A soft knee from three quarters of the ceiling up, on the cloud's mean colour: the glow rises
     // towards it instead of clipping to white.
@@ -715,7 +732,7 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     // With the sun low, the clouds towards it are lit from behind: their bodies darker than the sky
     // behind them, the glow of their thin edges kept (fBacklight, fGlowBoost); across the sky from it
     // they face its light and keep theirs.
-    float backlit = full ? lerp(1.0, fBacklight, smoothstep(-0.2, 0.8, cosTheta)) : 1.0;
+    float backlit = full && vec4StyleLight.x <= 0.0 ? lerp(1.0, fBacklight, smoothstep(-0.2, 0.8, cosTheta)) : 1.0;
     colour = (body * backlit + termGlow) * kneeMul;
 
     // The clouds against the sky. The game's CloudColor at its HDR exposure came out several times
@@ -743,7 +760,7 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         float3 halo = sky * (min(behind, 3.0 * skyLuma) - skyLuma) / max(behind, 1e-4);
         float band = 4.0 * cover * (1.0 - cover);
         float3 termRim = max(halo, 0.0) * (band * band * fGlow / 6.0);
-        colour += termRim;
+        colour += termRim * (1.0 - vec4StyleLight.x);
         // The haze mixes in the sky behind the cloud held within twice the frame's sky, where it used
         // to let the sky through: a cloud 3 km off let a tenth of it through, and with the sun's
         // halo behind it, many times the sky in the game's HDR, whole clouds near the sun came out

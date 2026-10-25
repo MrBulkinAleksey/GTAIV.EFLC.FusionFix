@@ -407,6 +407,8 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4Style"), &style);
         const float styleSoft[2] = { R.fVolumetricCloudsStyleSoftBase, R.fVolumetricCloudsStyleSoftTop };
         effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2StyleSoft"), styleSoft, 2);
+        const D3DXVECTOR4 styleLight(float(R.nVolumetricCloudsStyleLight), R.fVolumetricCloudsStyleSun, R.fVolumetricCloudsStyleAmbient, R.fVolumetricCloudsStylePhase);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4StyleLight"), &styleLight);
     }
     // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
     // towards white by VolumetricCloudsSunTint. The moon's is a cool white. With the physical sky,

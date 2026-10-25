@@ -607,6 +607,13 @@ public:
     float fVolumetricCloudsStyleBase = 0.2f;
     float fVolumetricCloudsStyleSoftBase = 0.35f;
     float fVolumetricCloudsStyleSoftTop = 0.1f;
+    // VolumetricCloudsStyleLight 1: lit as CloudWorks lights them, the sun's beam alone (StyleSun) through a phase even
+    // all round with a peak towards the sun (StylePhase), and the sky's light over the whole cloud (StyleAmbient),
+    // without our lobes. Hidden, live.
+    int nVolumetricCloudsStyleLight = 0;
+    float fVolumetricCloudsStyleSun = 1.0f;
+    float fVolumetricCloudsStyleAmbient = 1.0f;
+    float fVolumetricCloudsStylePhase = 1.6f;
     // The shaded side and the bases against the game's cloud colour, and how much of the view's
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
     float fVolumetricCloudsShade = 0.65f;
@@ -2136,6 +2143,10 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsStyleBase", &PostFxResource::fVolumetricCloudsStyleBase, 0.2f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsStyleSoftBase", &PostFxResource::fVolumetricCloudsStyleSoftBase, 0.35f, 0.01f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsStyleSoftTop", &PostFxResource::fVolumetricCloudsStyleSoftTop, 0.1f, 0.01f, 2.0f),
+            IniInt("WEATHER", "VolumetricCloudsStyleLight", &PostFxResource::nVolumetricCloudsStyleLight, 0, 0, 1),
+            IniFloat("WEATHER", "VolumetricCloudsStyleSun", &PostFxResource::fVolumetricCloudsStyleSun, 1.0f, 0.0f, 10.0f),
+            IniFloat("WEATHER", "VolumetricCloudsStyleAmbient", &PostFxResource::fVolumetricCloudsStyleAmbient, 1.0f, 0.0f, 10.0f),
+            IniFloat("WEATHER", "VolumetricCloudsStylePhase", &PostFxResource::fVolumetricCloudsStylePhase, 1.6f, 0.0f, 20.0f),
             IniFloat("WEATHER", "VolumetricCloudsShade", &PostFxResource::fVolumetricCloudsShade, 0.65f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsAbsorption", &PostFxResource::fVolumetricCloudsAbsorption, 0.35f, 0.05f, 3.0f),
             IniFlag("REFLECTIONS", "CloudReflections", &PostFxResource::bVolumetricCloudsReflections, 1),
