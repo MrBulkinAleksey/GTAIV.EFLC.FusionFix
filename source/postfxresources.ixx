@@ -594,6 +594,8 @@ public:
     float fVolumetricCloudsEvolution = 1.0f;
     float fVolumetricCloudsSaturation = 1.0f;
     float fVolumetricCloudsMottle = 0.4f;
+    // How far up, in billows, a heap's density pushes its billows, so they follow its shape.
+    float fVolumetricCloudsDetailFlow = 0.5f;
     // The shaded side and the bases against the game's cloud colour, and how much of the view's
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
     float fVolumetricCloudsShade = 0.65f;
@@ -2050,6 +2052,7 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsEvolution", &PostFxResource::fVolumetricCloudsEvolution, 1.0f, 0.0f, 10.0f),
             IniFloat("WEATHER", "VolumetricCloudsSaturation", &PostFxResource::fVolumetricCloudsSaturation, 1.0f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsMottle", &PostFxResource::fVolumetricCloudsMottle, 0.4f, 0.0f, 1.0f),
+            IniFloat("WEATHER", "VolumetricCloudsDetailFlow", &PostFxResource::fVolumetricCloudsDetailFlow, 0.5f, 0.0f, 4.0f),
             IniFloat("WEATHER", "VolumetricCloudsShade", &PostFxResource::fVolumetricCloudsShade, 0.65f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsAbsorption", &PostFxResource::fVolumetricCloudsAbsorption, 0.35f, 0.05f, 3.0f),
             IniFlag("REFLECTIONS", "CloudReflections", &PostFxResource::bVolumetricCloudsReflections, 1),

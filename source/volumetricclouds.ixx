@@ -401,6 +401,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         effect->SetFloat(effect->GetParameterByName(nullptr, "fGlowBoost"), 1.0f + 2.0f * (1.0f - day));
     }
     effect->SetFloat(effect->GetParameterByName(nullptr, "fMottle"), R.fVolumetricCloudsMottle);
+    effect->SetFloat(effect->GetParameterByName(nullptr, "fDetailFlow"), R.fVolumetricCloudsDetailFlow);
     // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
     // towards white by VolumetricCloudsSunTint. The moon's is a cool white. With the physical sky,
     // the sunlight that gets through its air to the middle of the layer, by its share.

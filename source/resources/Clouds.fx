@@ -33,6 +33,10 @@
 #ifndef LIGHT_STEPS
 #define LIGHT_STEPS 5
 #endif
+// The share of the view left behind the cloud below which a sample reuses the last sample's light.
+#define LIGHT_CUTOFF 0.1
+// The share of the view left behind the cloud the reflections take as opaque.
+#define REFLECTION_OPAQUE 0.2
 // CloudNoiseTex's size.
 #define COVERAGE_SIZE 1024.0
 // The dome and the rounded base take part of every heap's footprint, the more the smaller the heaps:
@@ -112,6 +116,7 @@ float fCurl;              // how far the billows are swept along the coarse nois
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
 float fDebug;             // VolumetricCloudsDebug + 1, the numbers in the comments here:2 the sky brightness matched to, 3 to 11 one term of the light alone (Light)
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
+float fDetailFlow;        // VolumetricCloudsDetailFlow: how far up, in billows, the heap's density pushes its billows
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
 float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach
 
@@ -286,6 +291,10 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
         // The billows are swept along the coarse noise, more towards the tops, so they trail into
         // wisps there instead of sitting as round bubbles.
         float3 q = p * vec4Shape.y + float3(vec4Wind.zw, fEvolution) + wander.xyx * (fCurl * h);
+        // And pushed up by the heap's own density, fDetailFlow billows at its densest: the billows
+        // stretch up the heap's sides and crowd onto its top, so they follow its shape as a
+        // cauliflower's florets do rather than lie on it as an even pattern.
+        q.z -= fDetailFlow * d;
         // Our Worley volume is 1 at the cells' middles: 1 - n is high between the billows.
         float2 billow = tex3Dlod(DetailTex, float4(q, 0)).rg;
         float n = 1.0 - billow.r;
@@ -354,7 +363,7 @@ struct CloudSums
     float shade;          // the shaded colour's share: (1 - sun), darker towards the base
     float silver;         // the silver lining's: sun, more where the cloud is thin
     float glow;           // the glow's: thin cloud with little of it towards the sun
-    float firstHit;       // how far the ray met its first cloud, or -1
+    float depth;          // how far along the ray the cloud is: the samples' distances, each by how much of the view it takes
     float top;            // the sun reaching the upper half of the cloud
     float height;         // the samples' height in the layer, 0 at the base
 };
@@ -381,7 +390,7 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
     sums.shade = 0.0;
     sums.silver = 0.0;
     sums.glow = 0.0;
-    sums.firstHit = -1.0;
+    sums.depth = 0.0;
     sums.top = 0.0;
     sums.height = 0.0;
     float3 origin = float3(vec4WorldX.w, vec4WorldY.w, vec4WorldZ.w);
@@ -409,6 +418,10 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
     float jitter = frac(PixelJitter(vpos) + fFrameJitter);
     float t = t0 + max(vec4Layer.y / 24.0, t0 * FAR_STEP) * stepScale * COARSE_STEP * jitter;
     float fineLeft = 0.0;
+    float lightDepth = 0.0;
+    // Where the march stops, for the view left behind the cloud: next to nothing for the scene's
+    // clouds, REFLECTION_OPAQUE for the reflections (see the end).
+    float opaque = full ? 0.01 : REFLECTION_OPAQUE;
     // Looking away from the sun, how much the powder effect darkens the sun's light (below).
     float powderView = full ? 0.35 - 0.35 * dot(dir, vec3SunDir) : 0.0;
 
@@ -416,7 +429,7 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
     [loop] [fastopt]
     for (int i = 0; i < steps; ++i)
     {
-        if (t >= t1 || sums.transmittance < 0.01)
+        if (t >= t1 || sums.transmittance < opaque)
             break;
         float fine = max(vec4Layer.y / 24.0, t * FAR_STEP) * stepScale;
         float3 p = origin + dir * t;
@@ -446,24 +459,29 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
         if (d > 0.01)
         {
             fineLeft = FINE_MISSES;
-            if (sums.firstHit < 0.0)
-                sums.firstHit = t;
 
             // The cloud between the sample and the sun, without the detail: from a twentieth of the
             // layer, each step twice the last, out past its whole thickness so the bases darken.
-            float lightDepth = 0.0;
-            float stepLength = vec4Layer.y * lightStart;
-            float3 q = p;
-            // A float counter, and no [fastopt]: with an int counter under [fastopt] the compiler
-            // negated the loop's bound, and the loop broke before its first step. The light's march
-            // found no cloud at all, every cloud took the sun whole, and the absorption did nothing.
-            [loop]
-            for (float j = 0.0; j < lightSteps - 0.5; j += 1.0)
+            // Once less than LIGHT_CUTOFF of the view is left, a sample adds so little to the pixel
+            // that it takes the light the last marched sample found: the light's march is most of
+            // a sample's cost, and dense cloud spent it on samples nobody sees.
+            [branch]
+            if (sums.transmittance > LIGHT_CUTOFF)
             {
-                q += vec3SunDir * stepLength;
-                float unused, unusedSoft;
-                lightDepth += Density(q, false, place, full, unused, unusedSoft) * stepLength;
-                stepLength *= 2.0;
+                lightDepth = 0.0;
+                float stepLength = vec4Layer.y * lightStart;
+                float3 q = p;
+                // A float counter, and no [fastopt]: with an int counter under [fastopt] the compiler
+                // negated the loop's bound, and the loop broke before its first step. The light's march
+                // found no cloud at all, every cloud took the sun whole, and the absorption did nothing.
+                [loop]
+                for (float j = 0.0; j < lightSteps - 0.5; j += 1.0)
+                {
+                    q += vec3SunDir * stepLength;
+                    float unused, unusedSoft;
+                    lightDepth += Density(q, false, place, full, unused, unusedSoft) * stepLength;
+                    stepLength *= 2.0;
+                }
             }
             // Light scattered many times inside a cloud gets far deeper than the sun's direct beam,
             // which is what keeps real clouds bright: three octaves, each with half the extinction
@@ -533,11 +551,29 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
             // the sun, in thicknesses of the layer at full density.
             sums.top += weight * (full && fDebug == 12.0 ? saturate(lightDepth / vec4Layer.y) : sun * smoothstep(0.5, 1.0, h));
             sums.height += weight * h;
+            sums.depth += weight * t;
             sums.transmittance *= stepTransmittance;
         }
         else
             fineLeft -= 1.0;
         t += fine;
+    }
+    float cover = 1.0 - sums.transmittance;
+    // A mean distance, where the cloud stands for the haze in front of it: the first cloud the ray
+    // met is nearer than that, for a thin far cloud by kilometres, and those took too little haze.
+    sums.depth = cover > 0.0 ? sums.depth / cover : -1.0;
+    // The reflections stop at a fifth of the view left and count that as none: the cloud is opaque
+    // a little sooner, and dense cloud is crossed in fewer steps. Each sum by the same share as the
+    // cover, so the light per cover stays as it was.
+    if (!full && cover > 0.0)
+    {
+        float opaqueCover = 1.0 - saturate((sums.transmittance - opaque) / (1.0 - opaque));
+        float scale = opaqueCover / cover;
+        sums.transmittance = 1.0 - opaqueCover;
+        sums.sun *= scale;
+        sums.shade *= scale;
+        sums.silver *= scale;
+        sums.glow *= scale;
     }
     return sums;
 }
@@ -629,17 +665,17 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         // The undersides darkened by the sky the cloud above them hides, by the cloud's height in the
         // layer alone, whatever the sun does: up to 15% at the base, none from two thirds up.
         shadeMul = 1.0 - 0.15 * (1.0 - smoothstep(0.0, 0.65, sums.height / cover));
-        // Flecks: the small billows where the ray met the cloud catch a little more or less light,
+        // Flecks: the small billows at the cloud's depth along the ray catch a little more or less light,
         // so a grey body is not one even grey but mottled with lighter specks. Two octaves of the
         // detail, of some 60 to 250 metres and a third of that, about their middle, so the cloud
         // keeps its brightness on average. Faded out with distance, where they would only shimmer.
         // The march's light leaves them out: its sums are the cloud's whole depth, and the billows
         // it reads change the outline, not the light on the surface.
-        float3 hit = float3(vec4WorldX.w, vec4WorldY.w, vec4WorldZ.w) + dir * sums.firstHit;
-        hit.z += max(1.0 - dir.z * dir.z, 1e-6) / (2.0 * EARTH_RADIUS) * sums.firstHit * sums.firstHit;
+        float3 hit = float3(vec4WorldX.w, vec4WorldY.w, vec4WorldZ.w) + dir * sums.depth;
+        hit.z += max(1.0 - dir.z * dir.z, 1e-6) / (2.0 * EARTH_RADIUS) * sums.depth * sums.depth;
         float3 q = hit * (vec4Shape.y * 1.5) + float3(vec4Wind.zw, fEvolution) + 0.53;
         float fleck = 0.65 * tex3Dlod(DetailTex, float4(q, 0)).r + 0.35 * tex3Dlod(DetailTex, float4(q * 2.7 + 0.21, 0)).g - 0.5;
-        shadeMul *= 1.0 + 2.0 * fMottle * fleck * exp(-sums.firstHit / 12000.0);
+        shadeMul *= 1.0 + 2.0 * fMottle * fleck * exp(-sums.depth / 12000.0);
     }
     float3 body = (termBase + termSilver + termSunset + termSunPower + termTop) * shadeMul;
     float3 colour = body + termGlow;
@@ -663,8 +699,8 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     // every cloud. Matched to the sky right behind each one instead, the clouds round the sun took
     // its halo and shone cream while those across the sky, whose sunlit sides face the eye and
     // should be the brightest, sank to the grey of the sky there.
-    // Haze: distant cloud fades into the sky.
-    float haze = sums.firstHit >= 0.0 ? exp(-sums.firstHit / vec4Shape.w) : 0.0;
+    // Haze: distant cloud fades into the sky, by its mean depth along the ray.
+    float haze = sums.depth >= 0.0 ? exp(-sums.depth / vec4Shape.w) : 0.0;
     [branch]
     if (full && fSkyMatch > 0.0)
     {
@@ -742,7 +778,7 @@ void CloudsMarch_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS, out float4 sums0 
     float3 dir = RayDirection(vpos, rayScale);
     CloudSums sums = March(uv, vpos, dir, rayScale, true, CLOUD_STEPS, 1.0, LIGHT_STEPS, 0.05);
     sums0 = float4(sums.transmittance, sums.sun, sums.shade, sums.silver);
-    sums1 = float4(sums.glow, sums.firstHit, sums.top, sums.height);
+    sums1 = float4(sums.glow, sums.depth, sums.top, sums.height);
 }
 
 // The light from the march's sums, at half size, for the accumulation.
@@ -756,7 +792,7 @@ float4 CloudsLight_PS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     sums.shade = sums0.z;
     sums.silver = sums0.w;
     sums.glow = sums1.x;
-    sums.firstHit = sums1.y;
+    sums.depth = sums1.y;
     sums.top = sums1.z;
     sums.height = sums1.w;
     return Light(sums, WorldRay(vpos), true, uv);
