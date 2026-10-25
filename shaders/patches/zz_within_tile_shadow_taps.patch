@@ -1,0 +1,330 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index 40ebac12..1e7fdc1a 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -107,6 +107,7 @@
+     def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
+     defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
+     def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
++    def c198, 0.00390625, 0.99609375, 0, 0 // FusionFix: zz_within_tile_shadow_taps.patch: 1/256 inside the tile either way
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -174,21 +175,29 @@
+         sincos r1.xy, r0.x
+         mul r0.xy, r1.yxzw, r20.y
+         mad_sat r0.xy, r0, c4.w, r4
++        max r0.xy, r0, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r0.xy, r0, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r0.xy, r0, c77.w, c77
+         texldl r6, r0, s14
+         dp2add r6.y, r6, r4.zwzw, c3.y
+         mul r0.xy, -r1.yxzw, r20.y
+         mul r7, r1.xyxy, c6.xyyx
+         mad_sat r0.xy, r0, c0.z, r4
++        max r0.xy, r0, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r0.xy, r0, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r0.xy, r0, c77.w, c77
+         texldl r8, r0, s14
+         dp2add r6.w, r8, r4.zwzw, c3.y
+         mul r0.xy, r7, r20.y
+         mad_sat r1.xy, r7.zwzw, r20.y, r4
+         mad_sat r0.xy, r0, c3.z, r4
++        max r0.xy, r0, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r0.xy, r0, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r0.xy, r0, c77.w, c77
+         texldl r7, r0, s14
+         dp2add r6.z, r7, r4.zwzw, c3.y
++        max r1.xy, r1, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r1.xy, r1, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r0.xy, r1, c77.w, c77
+         texldl r7, r0, s14
+         dp2add r6.x, r7, r4.zwzw, c3.y
+@@ -209,6 +218,8 @@
+         mul r21, c130.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r4.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r24, r21.xy, s14
+         dp2add r24.x, r24, r4.zw, c110.w
+@@ -219,6 +230,8 @@
+         mul r21, c131.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r4.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r23, r21.xy, s14
+         dp2add r24.z, r23, r4.zw, c110.w
+@@ -233,6 +246,8 @@
+         mul r21, c132.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r4.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r24, r21.xy, s14
+         dp2add r24.x, r24, r4.zw, c110.w
+@@ -243,6 +258,8 @@
+         mul r21, c133.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r4.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r23, r21.xy, s14
+         dp2add r24.z, r23, r4.zw, c110.w
+@@ -257,6 +274,8 @@
+         mul r21, c134.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r4.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r24, r21.xy, s14
+         dp2add r24.x, r24, r4.zw, c110.w
+@@ -267,6 +286,8 @@
+         mul r21, c135.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r4.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r23, r21.xy, s14
+         dp2add r24.z, r23, r4.zw, c110.w
+@@ -281,6 +302,8 @@
+         mul r21, c136.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r4.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r24, r21.xy, s14
+         dp2add r24.x, r24, r4.zw, c110.w
+@@ -291,6 +314,8 @@
+         mul r21, c137.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r4.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r23, r21.xy, s14
+         dp2add r24.z, r23, r4.zw, c110.w
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+index 4e43dae4..f4042127 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+@@ -87,6 +87,7 @@
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
++    def c198, 0.00390625, 0.99609375, 0, 0 // FusionFix: zz_within_tile_shadow_taps.patch: 1/256 inside the tile either way
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -174,21 +175,29 @@
+         sincos r5.xy, r0.w
+         mul r2.zw, r5.xyyx, r20.y
+         mad_sat r2.zw, r2, c3.w, r2.xyxy
++        max r2.zw, r2, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r2.zw, r2, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r2.zw, r2, c77.w, c77.xyxy
+         texldl r6, r2.zwzw, s14
+         dp2add r6.y, r6, r4, c2.y
+         mul r2.zw, -r5.xyyx, r20.y
+         mul r5, r5.xyxy, c5.xyyx
+         mad_sat r2.zw, r2, c5.z, r2.xyxy
++        max r2.zw, r2, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r2.zw, r2, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r2.zw, r2, c77.w, c77.xyxy
+         texldl r7, r2.zwzw, s14
+         dp2add r6.w, r7, r4, c2.y
+         mul r2.zw, r5.xyxy, r20.y
+         mad_sat r4.zw, r5, r20.y, r2.xyxy
+         mad_sat r2.xy, r2.zwzw, c2.z, r2
++        max r2.xy, r2, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r2.xy, r2, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r2.xy, r2, c77.w, c77
+         texldl r2, r2, s14
+         dp2add r6.z, r2, r4, c2.y
++        max r4.zw, r4, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r4.zw, r4, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r2.xy, r4.zwzw, c77.w, c77
+         texldl r2, r2, s14
+         dp2add r6.x, r2, r4, c2.y
+@@ -209,6 +218,8 @@
+         mul r21, c130.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r2.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r24, r21.xy, s14
+         dp2add r24.x, r24, r4.xy, c110.w
+@@ -219,6 +230,8 @@
+         mul r21, c131.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r2.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r23, r21.xy, s14
+         dp2add r24.z, r23, r4.xy, c110.w
+@@ -233,6 +246,8 @@
+         mul r21, c132.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r2.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r24, r21.xy, s14
+         dp2add r24.x, r24, r4.xy, c110.w
+@@ -243,6 +258,8 @@
+         mul r21, c133.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r2.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r23, r21.xy, s14
+         dp2add r24.z, r23, r4.xy, c110.w
+@@ -257,6 +274,8 @@
+         mul r21, c134.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r2.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r24, r21.xy, s14
+         dp2add r24.x, r24, r4.xy, c110.w
+@@ -267,6 +286,8 @@
+         mul r21, c135.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r2.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r23, r21.xy, s14
+         dp2add r24.z, r23, r4.xy, c110.w
+@@ -281,6 +302,8 @@
+         mul r21, c136.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r2.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r24, r21.xy, s14
+         dp2add r24.x, r24, r4.xy, c110.w
+@@ -291,6 +314,8 @@
+         mul r21, c137.zwzw, r22
+         add r23.zw, r21.xzxz, r21.ywyw
+         mad_sat r21, r23, r20.y, r2.xyxy
++        max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++        min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+         mad r21, r21, c77.w, c77.xyxy
+         texldl r23, r21.xy, s14
+         dp2add r24.z, r23, r4.xy, c110.w
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index 31644884..a0ca5aab 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -109,6 +109,7 @@
+     def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
+     defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
+     def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
++    def c198, 0.00390625, 0.99609375, 0, 0 // FusionFix: zz_within_tile_shadow_taps.patch: 1/256 inside the tile either way
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -252,9 +253,17 @@
+       mad_sat r2.zw, r2, c2.w, r2.xyxy
+       mad_sat r9.xy, r9, c1.y, r2
+       mad_sat r2.xy, r4.zwzw, c3.w, r2
++      max r9.zw, r9, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++      min r9.zw, r9, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+       mad r4.zw, r9, c77.w, c77.xyxy
++      max r2.zw, r2, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++      min r2.zw, r2, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+       mad r2.zw, r2, c77.w, c77.xyxy
++      max r9.xy, r9, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++      min r9.xy, r9, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+       mad r9.xy, r9, c77.w, c77
++      max r2.xy, r2, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++      min r2.xy, r2, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+       mad r2.xy, r2, c77.w, c77
+       texldl r10, r4.zwzw, s14
+       dp2add r10.x, r10, r4, c1.z
+@@ -281,6 +290,8 @@
+       mul r21, c130.zwzw, r22
+       add r23.zw, r21.xzxz, r21.ywyw
+       mad_sat r21, r23, r20.y, r2.xyxy
++      max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++      min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+       mad r21, r21, c77.w, c77.xyxy
+       texldl r24, r21.xy, s14
+       dp2add r24.x, r24, r4.xy, c110.w
+@@ -291,6 +302,8 @@
+       mul r21, c131.zwzw, r22
+       add r23.zw, r21.xzxz, r21.ywyw
+       mad_sat r21, r23, r20.y, r2.xyxy
++      max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++      min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+       mad r21, r21, c77.w, c77.xyxy
+       texldl r23, r21.xy, s14
+       dp2add r24.z, r23, r4.xy, c110.w
+@@ -305,6 +318,8 @@
+       mul r21, c132.zwzw, r22
+       add r23.zw, r21.xzxz, r21.ywyw
+       mad_sat r21, r23, r20.y, r2.xyxy
++      max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++      min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+       mad r21, r21, c77.w, c77.xyxy
+       texldl r24, r21.xy, s14
+       dp2add r24.x, r24, r4.xy, c110.w
+@@ -315,6 +330,8 @@
+       mul r21, c133.zwzw, r22
+       add r23.zw, r21.xzxz, r21.ywyw
+       mad_sat r21, r23, r20.y, r2.xyxy
++      max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++      min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+       mad r21, r21, c77.w, c77.xyxy
+       texldl r23, r21.xy, s14
+       dp2add r24.z, r23, r4.xy, c110.w
+@@ -329,6 +346,8 @@
+       mul r21, c134.zwzw, r22
+       add r23.zw, r21.xzxz, r21.ywyw
+       mad_sat r21, r23, r20.y, r2.xyxy
++      max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++      min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+       mad r21, r21, c77.w, c77.xyxy
+       texldl r24, r21.xy, s14
+       dp2add r24.x, r24, r4.xy, c110.w
+@@ -339,6 +358,8 @@
+       mul r21, c135.zwzw, r22
+       add r23.zw, r21.xzxz, r21.ywyw
+       mad_sat r21, r23, r20.y, r2.xyxy
++      max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++      min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+       mad r21, r21, c77.w, c77.xyxy
+       texldl r23, r21.xy, s14
+       dp2add r24.z, r23, r4.xy, c110.w
+@@ -353,6 +374,8 @@
+       mul r21, c136.zwzw, r22
+       add r23.zw, r21.xzxz, r21.ywyw
+       mad_sat r21, r23, r20.y, r2.xyxy
++      max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++      min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+       mad r21, r21, c77.w, c77.xyxy
+       texldl r24, r21.xy, s14
+       dp2add r24.x, r24, r4.xy, c110.w
+@@ -363,6 +386,8 @@
+       mul r21, c137.zwzw, r22
+       add r23.zw, r21.xzxz, r21.ywyw
+       mad_sat r21, r23, r20.y, r2.xyxy
++      max r21, r21, c198.x // FusionFix: zz_within_tile_shadow_taps.patch
++      min r21, r21, c198.y // FusionFix: zz_within_tile_shadow_taps.patch
+       mad r21, r21, c77.w, c77.xyxy
+       texldl r23, r21.xy, s14
+       dp2add r24.z, r23, r4.xy, c110.w

@@ -1975,6 +1975,8 @@ export struct VehicleBoxShadows
         const float capsule[4] = { R.fPedCapsuleRadius, -(R.fPedCapsuleRadius + 0.3f), pedLightSize, R.fPedCapsuleBaseSoftness };
         pDevice->SetPixelShaderConstantF(150, peds[0], kPedsPerLight);
         pDevice->SetPixelShaderConstantF(154, capsule, 1);
+        const float capsuleFromDistance[4] = { R.fPedCapsuleDistanceSoftness, 0.0f, 0.0f, 0.0f };
+        pDevice->SetPixelShaderConstantF(142, capsuleFromDistance, 1);
         // The shapes' groups (zz_shape_groups.patch): c115 their count and where groups 0-2 end, c129 where groups 3-6
         // end; the groups' spheres in c125-c128, c116, c117, c119 and c120
         auto end = [&](int g) { return propsUsed ? shapeEnds[g] : 0.0f; };

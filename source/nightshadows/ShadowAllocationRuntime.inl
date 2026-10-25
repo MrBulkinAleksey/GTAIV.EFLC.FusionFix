@@ -59,6 +59,41 @@ namespace PlayerShadowAllocation
     static bool interiorLightsYield = true;
     static std::atomic<bool> interiorScene{false};
     static std::atomic<uint32_t> interiorLightsYielded{0};
+    // InteriorLightsFirst (Liberty's Shadows 2.1.0, NativeInteriorPriority370): the interior the player stands in, as
+    // a light's mInteriorIndex names it, read once a frame in CaptureCasters; 0 outside, in a doorway or in a car.
+    static bool interiorLightsFirst = true;
+    static std::atomic<int32_t> playerInterior{0};
+    static std::atomic<uint32_t> roomLightsFirst{0};
+    // The ped's interior and room (+0xB0, +0xB8) and the handle GET_INTERIOR_FROM_CHAR (0xBA71F0) makes of it: the
+    // CInteriorInst pool's slot << 8 plus that slot's flag byte, the pool's address read where that native loads it.
+    static int32_t PlayerInteriorHandle() noexcept
+    {
+        static uintptr_t poolGlobal = 0;
+        static bool checked = false;
+        if (!checked) {
+            checked = true;
+            const auto at = reinterpret_cast<const uint8_t*>(gameBase + 0x7A721E);
+            if (at[0] == 0x8B && at[1] == 0x0D && *reinterpret_cast<const uint32_t*>(at + 2) == gameBase + 0xEFB214)
+                poolGlobal = gameBase + 0xEFB214;
+        }
+        if (!poolGlobal || !CPlayer::getLocalPlayerPed) return 0;
+        const uintptr_t ped = CPlayer::getLocalPlayerPed();
+        if (!ped) return 0;
+        __try {
+            const auto object = *reinterpret_cast<const uintptr_t*>(ped + 0xB0);
+            if (!object || *reinterpret_cast<const int32_t*>(ped + 0xB8) <= 0) return 0;
+            const auto pool = *reinterpret_cast<const uintptr_t*>(poolGlobal);
+            if (!pool) return 0;
+            const auto storage = *reinterpret_cast<const uintptr_t*>(pool);
+            const auto flags = *reinterpret_cast<const uint8_t* const*>(pool + 4);
+            const auto size = *reinterpret_cast<const int32_t*>(pool + 8), stride = *reinterpret_cast<const int32_t*>(pool + 0xC);
+            if (!storage || !flags || size <= 0 || stride <= 0 || object < storage || (object - storage) % stride) return 0;
+            const auto slot = static_cast<int32_t>((object - storage) / stride);
+            if (slot >= size || (flags[slot] & 0x80)) return 0;
+            return (slot << 8) + flags[slot];
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    }
     // Copied on the game-process callback, read by selection on the render side.
     static std::atomic_flag castersLock = ATOMIC_FLAG_INIT;
     static fusionfix::shadows::ShadowCasterPresence casters{};
@@ -525,6 +560,7 @@ namespace PlayerShadowAllocation
     static void CaptureCasters() noexcept
     {
         using fusionfix::shadows::ShadowCasterPresence;
+        if (interiorLightsFirst) playerInterior.store(Enabled() ? PlayerInteriorHandle() : 0, std::memory_order_relaxed);
         if (!casterPriority || !Enabled() || !CTimer::m_snTimeInMilliseconds) return;
         if (interiorLightsYield) interiorScene.store(Natives::IsInteriorScene(), std::memory_order_relaxed);
         PlayerCar::Focus focus;
@@ -1095,10 +1131,16 @@ namespace PlayerShadowAllocation
                 lastResort=AddedLight(key,flags);
                 if(lastResort) ++addedLightsLastResort;
             }
+            const int32_t interior=playerInterior.load(std::memory_order_relaxed);
+            const bool roomLight=interiorLightsFirst && interior>0 && !state.occupiedCar && kind==budget::Kind::Lamp &&
+                !(flags&rage::LF_VEHICLE) && light.mInteriorIndex==interior && light.mRoomIndex>0 && volumeVisible &&
+                std::isfinite(geometry.distanceSquared) && geometry.distanceSquared<=claimReach*claimReach &&
+                (!lightOrigin || lightOrigin(key)==fusionfix::shadows::ShadowSlotTrace::OriginGame);
+            if(roomLight) ++roomLightsFirst;
             labRelevant[index]=relevant?1:0; state.nativeCandidates[index]=state.continuity.Observe(
                 {key,kind==budget::Kind::Lamp?LampGeometry(light):0},flags,relevant,kind==budget::Kind::PlayerBeam,gain,
                 rankedSquared,(caster>=0 && rawGain!=SlotGain::None) || wholeShadow,
-                kind!=budget::Kind::PlayerBeam && SlotIsFresh(key),inReach,lastResort);
+                kind!=budget::Kind::PlayerBeam && SlotIsFresh(key),inReach,lastResort,roomLight);
             // Record why a prior choice loses its claim, independently of
             // whether native sorting eventually drops it. Bounded to 7/pass.
             for(const auto& old:state.previousSelection) if(old.key==key) {
@@ -1147,6 +1189,7 @@ namespace PlayerShadowAllocation
                 : decider==Rule::Gain ? Trace::Rule::Gain : decider==Rule::Claim ? Trace::Rule::Claim
                 : decider==Rule::Nearer ? Trace::Rule::Nearer : decider==Rule::Fresh ? Trace::Rule::Fresh
                 : decider==Rule::Reach ? Trace::Rule::Reach : decider==Rule::LastResort ? Trace::Rule::LastResort
+                : decider==Rule::RoomLight ? Trace::Rule::RoomLight
                 : result==1 ? Trace::Rule::Distance : Trace::Rule::Native;
             const auto* lights=CurrentLights();
             try { slotTrace.Compared(static_cast<uint32_t>(lights[challenger].mCastShadows),

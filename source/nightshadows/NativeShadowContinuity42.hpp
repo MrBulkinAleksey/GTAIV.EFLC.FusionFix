@@ -39,6 +39,10 @@ public:
         // gives way to any light whose shadow shows as much (gain), also holding a slot; meanwhile the shapes in the
         // light shaders shadow the cars, people and props under it.
         bool lastResort=false;
+        // InteriorLightsFirst (Liberty's Shadows 2.1.0): on foot inside, a game light of the interior you are in,
+        // within the reach and its light in view, goes ahead of every light that is not; among such lights the
+        // rules below decide as usual.
+        bool roomLight=false;
     };
     // ClaimDistanceRatio: a claim keeps its slot against a newcomer of the same gain unless
     // the claim is this many times further away than the newcomer; 0 always keeps it.
@@ -58,10 +62,12 @@ public:
         return held?reset|gap:0u;
     }
     Candidate Observe(Identity id,std::uint32_t flags,bool relevant,bool own,SlotGain gain=SlotGain::InView,
-                      float distanceSquared=-1.0f,bool byCaster=false,bool fresh=false,bool inReach=true,bool lastResort=false) const noexcept {
+                      float distanceSquared=-1.0f,bool byCaster=false,bool fresh=false,bool inReach=true,bool lastResort=false,
+                      bool roomLight=false) const noexcept {
         Candidate c{flags,Unclaimed,own,true,gain,distanceSquared,byCaster};
         c.inReach=inReach;
         c.lastResort=lastResort;
+        c.roomLight=roomLight;
         if(id.key && relevant)
             for(unsigned i=0;i<Slots;++i)
                 if(claims_[i].key==id.key && claims_[i].generation==id.generation) {c.claim=i;break;}
@@ -82,7 +88,7 @@ public:
     // unless the newcomer's shadow is in view and the claim's is not, or the
     // claim only redraws what the lamp's cache already shows.
     // Which rule of Compare decided, for the slot trace.
-    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Nearer, Fresh, Reach, LastResort };
+    enum class Rule : std::uint8_t { Native, Special, OwnBeam, Gain, Claim, Nearer, Fresh, Reach, LastResort, RoomLight };
     // Claims as one score per light rather than rules on pairs. Pairwise, a claim gave way to a newcomer with
     // someone in its light only when that one was ClaimDistanceRatio times nearer, while it beat any other
     // newcomer, and two newcomers went by distance: claim A at 30 m, caster newcomer B at 10 m, other newcomer
@@ -106,6 +112,7 @@ public:
         if(native<0 || native>2 || !challenger.observed || !incumbent.observed) return Rule::Native;
         if((challenger.flags|incumbent.flags)&0x400u) return Rule::Special;
         if(challenger.ownBeam!=incumbent.ownBeam) return Rule::OwnBeam;
+        if(challenger.roomLight!=incumbent.roomLight) return Rule::RoomLight;
         if(challenger.gain!=incumbent.gain) return Rule::Gain;
         if(challenger.lastResort!=incumbent.lastResort) return Rule::LastResort;
         if(challenger.fresh!=incumbent.fresh) return Rule::Fresh;
@@ -122,6 +129,9 @@ public:
         if(native<0 || native>2 || !challenger.observed || !incumbent.observed ||
            ((challenger.flags|incumbent.flags)&0x400u)) return native;
         if(challenger.ownBeam!=incumbent.ownBeam) return challenger.ownBeam?0:2;
+        // Inside, the street lamps through the windows and the cars passing outside light little of the room you
+        // stand in; Liberty's Shadows found the Chinatown gun shop's lamps casting their shadows only close up.
+        if(challenger.roomLight!=incumbent.roomLight) return challenger.roomLight?0:2;
         // By what its shadow shows first, and only among those that show as much a last resort gives way, also when
         // it holds a slot. Before the gain, a facade light over you whose shadow showed lost its slot to lamps 60-100 m
         // off whose shadows showed nothing, and took it back each time one of them dropped out of the game's light list

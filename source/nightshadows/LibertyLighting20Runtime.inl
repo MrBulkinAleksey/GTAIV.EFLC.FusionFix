@@ -627,6 +627,9 @@ namespace Lighting20
         static Link links[Cells];     // by the second lamp's key: the first's
         struct Origin { uint32_t first = 0, frame = 0; float between[3]{}; float grow = 0; };
         static Origin origins[Cells]; // by the first lamp's key: where the map is drawn from; selection thread only
+        struct Kept { uint32_t partner = 0, ms = 0; };
+        static std::unordered_map<uint32_t, Kept> kept; // by either lamp's key: its partner when last paired; selection thread only
+        static constexpr uint32_t HoldMs = 2000;
 
         static uint32_t Cell(uint32_t key) noexcept { return (key * 0x9E3779B1u) >> 22; }
 
@@ -809,33 +812,41 @@ namespace Lighting20
                     (lights[a].mPosition.x == lights[b].mPosition.x && static_cast<uint32_t>(lights[a].mCastShadows) < static_cast<uint32_t>(lights[b].mCastShadows));
             });
             taken.assign(n, false);
-            uint32_t inFrame = 0;
-            for (unsigned a = 0; a < n; ++a)
+            // The squared spacing of two lamps that may pair, or a negative number.
+            const auto spacing = [](const rage::CLightSource& one, const rage::CLightSource& other) noexcept -> float
             {
-                if (taken[a]) continue;
-                const auto& one = lights[candidates[a]];
-                int best = -1;
-                float bestD2 = distance * distance;
-                for (unsigned b = a + 1; b < n && lights[candidates[b]].mPosition.x - one.mPosition.x < distance; ++b)
-                {
-                    if (taken[b]) continue;
-                    const auto& other = lights[candidates[b]];
-                    if (other.mType != one.mType || other.mInteriorIndex != one.mInteriorIndex || other.mRoomIndex != one.mRoomIndex ||
-                        other.mCastShadows == one.mCastShadows ||
-                        std::abs(other.mRadius - one.mRadius) > 0.25f * (std::max)(other.mRadius, one.mRadius))
-                        continue;
-                    if (one.mType == rage::LT_SPOT &&
-                        one.mDirection.x * other.mDirection.x + one.mDirection.y * other.mDirection.y + one.mDirection.z * other.mDirection.z < 0.5f)
-                        continue;
-                    const float dx = other.mPosition.x - one.mPosition.x, dy = other.mPosition.y - one.mPosition.y, dz = other.mPosition.z - one.mPosition.z;
-                    const float d2 = dx * dx + dy * dy + dz * dz;
-                    if (d2 < bestD2)
-                    {
-                        bestD2 = d2;
-                        best = int(b);
-                    }
-                }
-                if (best < 0) continue;
+                if (other.mType != one.mType || other.mInteriorIndex != one.mInteriorIndex || other.mRoomIndex != one.mRoomIndex ||
+                    other.mCastShadows == one.mCastShadows ||
+                    std::abs(other.mRadius - one.mRadius) > 0.25f * (std::max)(other.mRadius, one.mRadius))
+                    return -1.0f;
+                if (one.mType == rage::LT_SPOT &&
+                    one.mDirection.x * other.mDirection.x + one.mDirection.y * other.mDirection.y + one.mDirection.z * other.mDirection.z < 0.5f)
+                    return -1.0f;
+                const float dx = other.mPosition.x - one.mPosition.x, dy = other.mPosition.y - one.mPosition.y, dz = other.mPosition.z - one.mPosition.z;
+                const float d2 = dx * dx + dy * dy + dz * dz;
+                return d2 < distance * distance ? d2 : -1.0f;
+            };
+            // Pairs keep: the light list holds the lamps whose light reaches the view, so a third lamp near a pair came
+            // and went as the camera moved, and the nearest-first choice paired one lamp with it and back. In a
+            // Chinatown shop the player's shadow on the wall, from a pair's map only (the lamp at his head draws him
+            // clipped), came and went with it. A pair whose lamps are both listed stays one; a lamp whose partner left
+            // the list waits HoldMs before it pairs again.
+            const auto nowMs = CTimer::m_snTimeInMilliseconds ? static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds) : 0u;
+            static std::unordered_map<uint32_t, uint32_t> at; // key -> its place in candidates, this frame
+            at.clear();
+            for (unsigned a = 0; a < n; ++a) at[static_cast<uint32_t>(lights[candidates[a]].mCastShadows)] = a;
+            if (kept.size() > 4096)
+                std::erase_if(kept, [nowMs](const auto& k) { return nowMs - k.second.ms > HoldMs; });
+            const auto held = [nowMs](uint32_t key, uint32_t& partnerKey) noexcept
+            {
+                const auto it = kept.find(key);
+                if (it == kept.end() || nowMs - it->second.ms > HoldMs) return false;
+                partnerKey = it->second.partner;
+                return true;
+            };
+            uint32_t inFrame = 0;
+            const auto join = [&](unsigned a, unsigned best, float bestD2)
+            {
                 taken[a] = taken[best] = true;
                 // The lamp with the lower key draws the map, whichever comes first in the list, so the slot keeps its key.
                 uint16_t firstIndex = candidates[a], secondIndex = candidates[best];
@@ -866,7 +877,36 @@ namespace Lighting20
                         break;
                     }
                 }
+                kept[firstKey] = {secondKey, nowMs};
+                kept[secondKey] = {firstKey, nowMs};
                 ++inFrame;
+            };
+            for (unsigned a = 0; a < n; ++a)
+            {
+                uint32_t partnerKey;
+                if (taken[a] || !held(static_cast<uint32_t>(lights[candidates[a]].mCastShadows), partnerKey)) continue;
+                const auto it = at.find(partnerKey);
+                if (it == at.end() || taken[it->second]) continue;
+                if (const float d2 = spacing(lights[candidates[a]], lights[candidates[it->second]]); d2 >= 0)
+                    join(a, it->second, d2);
+            }
+            for (unsigned a = 0; a < n; ++a)
+            {
+                uint32_t partnerKey;
+                if (taken[a] || held(static_cast<uint32_t>(lights[candidates[a]].mCastShadows), partnerKey)) continue;
+                const auto& one = lights[candidates[a]];
+                int best = -1;
+                float bestD2 = distance * distance;
+                for (unsigned b = a + 1; b < n && lights[candidates[b]].mPosition.x - one.mPosition.x < distance; ++b)
+                {
+                    if (taken[b] || held(static_cast<uint32_t>(lights[candidates[b]].mCastShadows), partnerKey)) continue;
+                    if (const float d2 = spacing(one, lights[candidates[b]]); d2 >= 0 && d2 < bestD2)
+                    {
+                        bestD2 = d2;
+                        best = int(b);
+                    }
+                }
+                if (best >= 0) join(a, unsigned(best), bestD2);
             }
             found += inFrame;
             if (inFrame > mostInFrame.load(std::memory_order_relaxed)) mostInFrame.store(inFrame, std::memory_order_relaxed);
