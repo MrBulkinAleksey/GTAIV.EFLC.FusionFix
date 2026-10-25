@@ -897,6 +897,11 @@ public:
     // also at the feet, where it shrank to 5 cm and drew the shadow's foot square
     bool bPedCapsuleAddedLights = true;
     float fPedCapsuleLightSize = 0.26f, fPedCapsuleSoftening = 0.0f, fPedCapsuleBaseSoftness = 0.088f;
+    // PedCapsuleDistanceSoftness: metres of penumbra more for each metre from the light, for the capsules and the bones
+    // (zz_z_shape_distance_softness.patch, c142.x). The shadow map blurs by an angle, so a far light's map shadow is soft,
+    // while a capsule's penumbra shrank with the light's distance: the player's shadow on a wall from a far lamp came out
+    // as a sharp figure of pipes beside the soft shadows of the railings
+    float fPedCapsuleDistanceSoftness = 0.03f;
     // PedBoneShadows: the player's shadow from 25 capsules along the bones (legs, feet, hips, body, shoulders, arms,
     // hands, head), posed each frame, in place of the one standing capsule, with the props' shapes
     bool bPedBoneShadows = true;
@@ -1964,6 +1969,7 @@ public:
             IniFloat("NIGHTSHADOWS", "PedCapsuleLightSize", &PostFxResource::fPedCapsuleLightSize, 0.26f, 0.0f, 4.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleSoftening", &PostFxResource::fPedCapsuleSoftening, 0.0f, 0.0f, 1.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleBaseSoftness", &PostFxResource::fPedCapsuleBaseSoftness, 0.088f, 0.01f, 1.0f),
+            IniFloat("NIGHTSHADOWS", "PedCapsuleDistanceSoftness", &PostFxResource::fPedCapsuleDistanceSoftness, 0.03f, 0.0f, 0.5f),
             IniFlag("NIGHTSHADOWS", "PedBoneShadows", &PostFxResource::bPedBoneShadows, 1),
             IniFloat("NIGHTSHADOWS", "PedBoneRadiusScale", &PostFxResource::fPedBoneRadiusScale, 0.8f, 0.3f, 2.0f),
             IniFloat("NIGHTSHADOWS", "PedBoneShoulderWidth", &PostFxResource::fPedBoneShoulderWidth, 0.8f, 0.3f, 1.2f),
