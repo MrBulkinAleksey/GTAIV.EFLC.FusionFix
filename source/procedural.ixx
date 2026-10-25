@@ -96,9 +96,9 @@ export namespace ProceduralGround
     {
         float corner[3][3];
         uint8_t tag;        // the surface's procedural tag (material +0x4c, bits 8..15): PROCOBJ records by tag
-        uint8_t surface;    // its material (bits 0..7): 1 GRASS, 2 SHORT_GRASS, 0 any other (GrassSurface)
+        uint8_t surface;    // its material (bits 0..7): 1 GRASS, 2 SHORT_GRASS, 3 GRASS_PATCHY, 4 GRASS_LONG, 0 any other (GrassSurface)
     };
-    // Set before the world loads (gpugrass.ixx): the manager also gathers ground of the GRASS and SHORT_GRASS materials
+    // Set before the world loads (gpugrass.ixx): the manager also gathers ground of the grassy materials (GrassSurface)
     // whose procedural tag has neither plants nor props, as ground with props of a tag that has none (so the generator
     // makes nothing there)
     inline bool GatherGrassSurfaces = false;
@@ -1127,24 +1127,36 @@ namespace Procedural
         }
     }
 
-    // The GRASS and SHORT_GRASS materials' indices, from the material manager by their names (as the game takes them,
-    // CE 0xcf2d59: [0x18b8968] vtable +0x18 by name); -1 until found
+    // The grassy materials' indices, from the material manager by their names (as the game takes them, CE 0xcf2d59:
+    // [0x18b8968] vtable +0x18 by name): GRASS and SHORT_GRASS by the game's own strings, GRASS_PATCHY and GRASS_LONG
+    // (materials.dat only, no tag on PC either) by ours; -1 until found, or when the manager gives a missing name's index
     uintptr_t* pMaterialManager = nullptr;
-    const char* szGrassNames[2] = {};
-    int32_t nGrassMaterials[2] = { -1, -1 };
+    const char* szGrassNames[4] = { nullptr, nullptr, "GRASS_PATCHY", "GRASS_LONG" };
+    int32_t nGrassMaterials[4] = { -1, -1, -1, -1 };
+    bool bGrassMaterialsLooked = false;
     uint8_t GrassSurface(uint32_t material)
     {
-        if (nGrassMaterials[0] < 0 && pMaterialManager && *pMaterialManager)
+        if (!bGrassMaterialsLooked && pMaterialManager && *pMaterialManager)
         {
+            bGrassMaterialsLooked = true;
             auto manager = *pMaterialManager;
             using Find = uint32_t(__thiscall*)(uintptr_t, const char*);
             const auto find = (*(Find**)manager)[6];
-            for (int i = 0; i < 2; i++)
+            const int32_t missing = int32_t(find(manager, "FUSIONFIX_NO_SUCH_MATERIAL") & 0xFF);
+            for (int i = 0; i < 4; i++)
+            {
                 nGrassMaterials[i] = int32_t(find(manager, szGrassNames[i]) & 0xFF);
-            Log("GrassSurfaces", std::format("GRASS {}, SHORT_GRASS {}", nGrassMaterials[0], nGrassMaterials[1]));
+                if (i >= 2 && nGrassMaterials[i] == missing)
+                    nGrassMaterials[i] = -1;
+            }
+            Log("GrassSurfaces", std::format("GRASS {}, SHORT_GRASS {}, GRASS_PATCHY {}, GRASS_LONG {} (a missing name gives {})",
+                nGrassMaterials[0], nGrassMaterials[1], nGrassMaterials[2], nGrassMaterials[3], missing));
         }
         const int32_t surface = int32_t(material & 0xFF);
-        return surface == nGrassMaterials[0] ? 1 : surface == nGrassMaterials[1] ? 2 : 0;
+        for (int i = 0; i < 4; i++)
+            if (surface == nGrassMaterials[i])
+                return uint8_t(i + 1);
+        return 0;
     }
 
     // GatherGrassSurfaces: where the manager marks each polygon of a bound for plants (bit 2i, the tag has a PLANT
