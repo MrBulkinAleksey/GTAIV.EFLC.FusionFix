@@ -1,5 +1,5 @@
 // Volumetric clouds (RenderVolumetricClouds in postfx.ixx): one layer of cloud marched from the camera at
-// half size (CloudsMarch, which keeps sums of what the light needs), lit from those sums
+// half size, or at full size with CloudsHalfResolution off (CloudsMarch, which keeps sums of what the light needs), lit from those sums
 // (CloudsLight, matched to the sky's brightness from CloudsSkyRef), accumulated over frames
 // (CloudsResolve) and blended into the lit scene at full size right before the fog pass
 // (CloudsComposite), so the fog, SSR's history and everything after see them. The march and the

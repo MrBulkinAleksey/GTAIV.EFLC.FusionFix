@@ -595,7 +595,7 @@ public:
     float fVolumetricCloudsSaturation = 1.0f;
     float fVolumetricCloudsMottle = 0.4f;
     // How far up, in billows, a heap's density pushes its billows, so they follow its shape.
-    float fVolumetricCloudsDetailFlow = 0.5f;
+    float fVolumetricCloudsDetailFlow = 0.0f;
     // The shaded side and the bases against the game's cloud colour, and how much of the view's
     // extinction the sun's light takes inside a cloud: the clouds' contrast.
     float fVolumetricCloudsShade = 0.65f;
@@ -608,6 +608,9 @@ public:
     float fVolumetricCloudsReflectionBrightness = 1.0f;
     // CloudReflectionsHalfResolution: the reflections' clouds worked out at half size and laid over at full
     bool bVolumetricCloudsReflectionsHalfRes = true;
+    // CloudsHalfResolution: the scene's clouds marched and lit at half size, accumulated over frames and laid over
+    // at full size; off, all of it at full size, sharper, about four times the march's cost (restart).
+    bool bVolumetricCloudsHalfRes = true;
     // One a size: the water's reflection (1280x512) and the reflection map (1024x1024) take turns every frame, and one
     // target made again for each had the game's books of its video memory (made through the device wrapper, freed
     // past them) grow by a gigabyte in 10 s, until the streaming let the whole world go
@@ -2052,13 +2055,14 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsEvolution", &PostFxResource::fVolumetricCloudsEvolution, 1.0f, 0.0f, 10.0f),
             IniFloat("WEATHER", "VolumetricCloudsSaturation", &PostFxResource::fVolumetricCloudsSaturation, 1.0f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsMottle", &PostFxResource::fVolumetricCloudsMottle, 0.4f, 0.0f, 1.0f),
-            IniFloat("WEATHER", "VolumetricCloudsDetailFlow", &PostFxResource::fVolumetricCloudsDetailFlow, 0.5f, 0.0f, 4.0f),
+            IniFloat("WEATHER", "VolumetricCloudsDetailFlow", &PostFxResource::fVolumetricCloudsDetailFlow, 0.0f, 0.0f, 4.0f),
             IniFloat("WEATHER", "VolumetricCloudsShade", &PostFxResource::fVolumetricCloudsShade, 0.65f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsAbsorption", &PostFxResource::fVolumetricCloudsAbsorption, 0.35f, 0.05f, 3.0f),
             IniFlag("REFLECTIONS", "CloudReflections", &PostFxResource::bVolumetricCloudsReflections, 1),
             IniFlag("PERFORMANCE", "CloudReflectionsAtNight", &PostFxResource::bVolumetricCloudsReflectionsAtNight, 0),
             IniFloat("REFLECTIONS", "CloudReflectionsBrightness", &PostFxResource::fVolumetricCloudsReflectionBrightness, 1.0f, 0.0f, 10.0f),
             IniFlag("PERFORMANCE", "CloudReflectionsHalfResolution", &PostFxResource::bVolumetricCloudsReflectionsHalfRes, 1),
+            IniFlag("PERFORMANCE", "CloudsHalfResolution", &PostFxResource::bVolumetricCloudsHalfRes, 1),
             IniFloat("REFLECTIONS", "SSREdgeFade", &PostFxResource::fSSREdgeFade, 0.1f, 0.001f, 0.5f),
             IniFloat("REFLECTIONS", "SSRGlossBoost", &PostFxResource::fSSRGlossBoost, 2.0f, 0.0f, 8.0f),
             IniFloat("REFLECTIONS", "SSRGlossCutoff", &PostFxResource::fSSRGlossCutoff, 0.5f, 0.0f, 1.0f),
