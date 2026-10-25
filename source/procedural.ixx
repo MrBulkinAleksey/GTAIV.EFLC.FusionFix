@@ -59,7 +59,8 @@ import entityclass;
 //    And past 60 m small props (radius under 2 m) thin out as they are drawn: of those at distance d, a share
 //    60 / d is kept (half at 120 m, 30% at 200 m; (40 / d)^2 showed them coming in), picked by the hash of their place, so the same ones stay and nearer ones come back as you
 //    get close (skipping them when made would lose them for good: a position is offered once). With the pool at
-//    16384 instead of 512 and the slider at its top, 4000+ weed draws 50-200 m out still took 3.5 ms.
+//    16384 instead of 512 and the slider at its top, 4000+ weed draws 50-200 m out still took 3.5 ms. Models that Far
+//    Prop Instancing draws in batches (ProceduralGround::DrawnInstanced) are left out of the thinning.
 //  - The 64 candidates of one entity's 2dfx props are capped, which the game itself never checked.
 //  - HeavyPropCull ([PERFORMANCE]): not the generator's, any small entity (radius under 3 m, no LOD parent) whose model
 //    took kHeavyDraws or more device draws an entity in the G-buffer (EntityClass::DrawsPerEntity, learned as they are
@@ -103,6 +104,9 @@ export namespace ProceduralGround
     // makes nothing there)
     inline bool GatherGrassSurfaces = false;
     inline void (*OnAdded)(const void* key, const Triangle& triangle) = nullptr;
+    // Far Prop Instancing (farpropinstancing.ixx), any thread: the model's far props are drawn in one instanced draw,
+    // so ProceduralSmallFarCull's thinning past 60 m leaves them in (the size cull still takes the tiniest)
+    inline bool (*DrawnInstanced)(uint16_t model) = nullptr;
     inline void (*OnRemoved)(const void* key) = nullptr;
     // A prop of `model` at `distance` from the camera left out of the scene, where other grass grows in its place
     // (gpugrass.ixx); `keep` is the prop's own random value, 0..1, the same each time it is made there
@@ -1076,7 +1080,8 @@ namespace Procedural
             phases &= ~scene;
         }
         if ((phases & scene) && bSmallFarCull && radius > 0.0f && (radius < distance * SmallFarScreenSize ||
-            (radius < SmallPropRadius && distance > SmallFarThinFrom && keep * distance > SmallFarThinFrom)))
+            (radius < SmallPropRadius && distance > SmallFarThinFrom && keep * distance > SmallFarThinFrom &&
+             !(ProceduralGround::DrawnInstanced && ProceduralGround::DrawnInstanced(*(uint16_t*)(entity + 0x2e))))))
         {
             nSmallFarCulled++;
             phases &= ~scene;

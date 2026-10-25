@@ -152,6 +152,9 @@ export namespace TemporalAA
     // The same, before the motion vectors are made from the depth: what is drawn into the G-buffer there (GPU grass)
     // gets the camera's motion, and its depth reaches the resolve, DLAA and FSR. OnGBufferEnd follows, after them.
     inline void (*OnGBufferBeforeMotion)(IDirect3DDevice9* device) = nullptr;
+    // Game thread, as the camera scene's G-buffer list is closed: commands appended here run in the pass, after its
+    // entities and before the end above (Far Prop Instancing draws its batches there, so they reach the depth and motion)
+    inline void (*AppendBeforeSceneEnd)() = nullptr;
     inline void (*OnGBufferEnd)(IDirect3DDevice9* device) = nullptr;
     // Marks the motion vectors' passes for the PostFx profiler (begin, then end), when it is set.
     inline void (*ProfileMotion)(IDirect3DDevice9* device, bool begin) = nullptr;
@@ -2271,7 +2274,11 @@ public:
             CRenderPhaseDeferredLighting_SceneToGBuffer::OnAfterBuildRenderList() += []()
             {
                 if (bBuildingSceneList)
+                {
+                    if (TemporalAA::AppendBeforeSceneEnd)
+                        TemporalAA::AppendBeforeSceneEnd();
                     Append(CTemporalDC::Type::SceneEnd);
+                }
                 bBuildingSceneList = false;
             };
         };

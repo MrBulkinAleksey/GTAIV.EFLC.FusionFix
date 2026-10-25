@@ -128,6 +128,12 @@ export namespace EntityClass
     using CommandHook = bool (*)(Kind kind, uint16_t model, const float* place);
     void SetCommandHook(CommandHook hook);
 
+    // One hook (Far Prop Instancing): called before each CDrawEntityDC (quaternion +0x10, position +0x20, model +0x30,
+    // alpha +0x32, bucket +0x35) in a pass not left out, before the command hook; false leaves the command out (the
+    // hook may keep a copy and execute it later through its vtable). Set at init.
+    using EntityCommandHook = bool (*)(Kind kind, void* dc);
+    void SetEntityCommandHook(EntityCommandHook hook);
+
     // The model's rmcDrawable as CDrawEntityDC's execute (CE 0x8dcbf0) takes it: a fragment type's (+8) at +0xb4, else
     // the one +0xc points to; 0 while it is not loaded. Its grmShaderGroup is at +8 (shaders +8, their count +0xc).
     uintptr_t ModelDrawable(uint16_t model);
@@ -150,6 +156,7 @@ namespace
     // The command being executed, while the hooks run (render thread)
     void* currentDc = nullptr;
     EntityClass::CommandHook commandHook = nullptr;
+    EntityClass::EntityCommandHook entityCommandHook = nullptr;
 
     std::vector<std::pair<EntityClass::DrawHook, EntityClass::DrawHook>>& Hooks()
     {
@@ -830,6 +837,9 @@ namespace
             return;
         }
 
+        if (entityCommandHook && source == FromEntity && !entityCommandHook(kind, dc))
+            return;
+
         if (commandHook && (source == FromEntity || source == FromFrag || source == FromFragType))
         {
             uint16_t model;
@@ -1171,6 +1181,11 @@ namespace EntityClass
     void SetCommandHook(CommandHook hook)
     {
         commandHook = hook;
+    }
+
+    void SetEntityCommandHook(EntityCommandHook hook)
+    {
+        entityCommandHook = hook;
     }
 
     uintptr_t ModelInfo(uint16_t model)
