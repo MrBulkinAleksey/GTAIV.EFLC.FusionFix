@@ -105,7 +105,8 @@ export namespace ProceduralGround
     inline bool GatherGrassSurfaces = false;
     inline void (*OnAdded)(const void* key, const Triangle& triangle) = nullptr;
     // Far Prop Instancing (farpropinstancing.ixx), any thread: the model's far props are drawn in one instanced draw,
-    // so ProceduralSmallFarCull's thinning past 60 m leaves them in (the size cull still takes the tiniest)
+    // so ProceduralSmallFarCull's thinning past 60 m leaves them in (the size cull still takes the tiniest); not those
+    // with a matrix of their own (scaled), which it doesn't take
     inline bool (*DrawnInstanced)(uint16_t model) = nullptr;
     inline void (*OnRemoved)(const void* key) = nullptr;
     // A prop of `model` at `distance` from the camera left out of the scene, where other grass grows in its place
@@ -1052,6 +1053,14 @@ namespace Procedural
         return phases & ~scene;
     }
 
+    // Far Prop Instancing takes the entity's commands: its model is drawn in batches and the entity has no matrix of its
+    // own (+0x24 bit 0x4000000, a scaled prop, whose command keeps that matrix: CEntity's add, CE 0xa2fe70)
+    bool DrawnInstanced(uintptr_t entity)
+    {
+        return ProceduralGround::DrawnInstanced && !(*(uint32_t*)(entity + 0x24) & 0x4000000) &&
+               ProceduralGround::DrawnInstanced(*(uint16_t*)(entity + 0x2e));
+    }
+
     // The render lists: reflection phases off for props, and the scene for small ones far off
     uint32_t DropPhases(uintptr_t entity, uint32_t phases, float distance)
     {
@@ -1080,8 +1089,7 @@ namespace Procedural
             phases &= ~scene;
         }
         if ((phases & scene) && bSmallFarCull && radius > 0.0f && (radius < distance * SmallFarScreenSize ||
-            (radius < SmallPropRadius && distance > SmallFarThinFrom && keep * distance > SmallFarThinFrom &&
-             !(ProceduralGround::DrawnInstanced && ProceduralGround::DrawnInstanced(*(uint16_t*)(entity + 0x2e))))))
+            (radius < SmallPropRadius && distance > SmallFarThinFrom && keep * distance > SmallFarThinFrom && !DrawnInstanced(entity))))
         {
             nSmallFarCulled++;
             phases &= ~scene;

@@ -49,6 +49,8 @@ import vtablepatch;
 // through them first. The rest of the shader is the game's: the world position, the projection, the wind's sway
 // (b12, grasswind.ixx) and the fade come out as for the entity itself.
 //
+// Only CDrawEntityDC is taken: an entity with a matrix of its own (entity +0x24 bit 0x4000000, a scaled prop) gets a
+// command of 0x60 bytes holding that matrix instead (CE 0x8dae60, CEntity's add 0xa2fe70) and is drawn as before.
 // A model whose draw cannot be instanced (a shader the copy cannot be made of, more than one vertex stream, a draw that
 // is not indexed) is drawn the game's way from then on; for that frame the copies are executed one by one, as they are
 // when the sample drew nothing. The drawable draws its highest detail for the sample, as the execute always asks.
@@ -190,8 +192,9 @@ class FarPropInstancing
         std::memcpy(copy.dc, bytes, sizeof(copy.dc));
         const uint8_t alpha = bytes[0x32];
         const uint64_t alphaStep = alpha == 255 ? kAlphaSteps : alpha * kAlphaSteps / 256;
+        // +0x37 too: EntityClass marks the command there (ground surfaces' b15), and the sample's mark is the group's
         const uint64_t key = uint64_t(model) | alphaStep << 16 | uint64_t(bytes[0x33]) << 24 | uint64_t(bytes[0x34]) << 32 |
-                             uint64_t(bytes[0x35]) << 40 | uint64_t(bytes[0x36]) << 48;
+                             uint64_t(bytes[0x35]) << 40 | uint64_t(bytes[0x36]) << 48 | uint64_t(bytes[0x37]) << 56;
         groups[key].push_back(uint32_t(copies.size()));
         copies.push_back(copy);
         return false;
