@@ -90,6 +90,13 @@ class FarPropInstancing
     // on the game thread (DrawnInstanced)
     static inline volatile uint8_t modelState[0x10000] = {};
     static inline uint8_t modelMisses[0x10000] = {};
+    // By model, a bit per bucket (+0x35, 0-7): its commands there draw nothing, the game's own executes neither (the
+    // game adds an entity to the lists of several buckets, a weed has meshes in one). Dropped then, looked at again
+    // every kEmptyRecheck passes.
+    static inline uint8_t emptyBuckets[0x10000] = {};
+    static constexpr uint32_t kEmptyRecheck = 64;
+    static inline uint32_t passCount = 0;
+    static inline uint32_t deviceDraws = 0;     // the game's draws while copies are executed one by one
 
     static inline IDirect3DVertexBuffer9* instanceVB = nullptr;
     static inline UINT instanceCursor = 0;
@@ -104,7 +111,7 @@ class FarPropInstancing
 
     // FarPropInstancingLog
     static inline uint32_t logPasses = 0;
-    static inline uint64_t logInstances = 0, logGroups = 0, logDraws = 0, logOneByOne = 0, logCapped = 0;
+    static inline uint64_t logInstances = 0, logGroups = 0, logDraws = 0, logOneByOne = 0, logCapped = 0, logEmptyDropped = 0;
     static inline uint32_t logShadersMade = 0, logShadersFailed = 0;
 
     static void ReadIni(CIniReader& iniReader)
@@ -168,6 +175,12 @@ class FarPropInstancing
         const uint16_t model = *reinterpret_cast<const uint16_t*>(bytes + 0x30);
         if (!Candidate(model))
             return true;
+        const uint8_t bucket = bytes[0x35];
+        if (bucket < 8 && (emptyBuckets[model] & (1u << bucket)) && (passCount + model) % kEmptyRecheck != 0)
+        {
+            logEmptyDropped++;
+            return false;
+        }
         if (cameraFrame != FrameHistory::Frame())
         {
             cameraFrame = FrameHistory::Frame();
@@ -206,13 +219,24 @@ class FarPropInstancing
         (*reinterpret_cast<Exec**>(dc))[1](dc, nullptr);
     }
 
-    static void ExecuteOneByOne(const std::vector<uint32_t>& items)
+    // The game's device draws they made
+    static uint32_t ExecuteOneByOne(const std::vector<uint32_t>& items)
     {
+        instancingThread = GetCurrentThreadId();
+        deviceDraws = 0;
         bExecuting = true;
         for (auto i : items)
             Execute(copies[i].dc);
         bExecuting = false;
         logOneByOne += items.size();
+        return deviceDraws;
+    }
+
+    // While copies are executed one by one on the render thread
+    static void CountDraw()
+    {
+        if (bExecuting && !bInstancing && GetCurrentThreadId() == instancingThread)
+            deviceDraws++;
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -469,7 +493,10 @@ class FarPropInstancing
     static HRESULT __stdcall DrawIndexedPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count)
     {
         if (!Instancing())
+        {
+            CountDraw();
             return RealDrawIndexedPrimitive(device, type, base, minIndex, vertices, start, count);
+        }
         if (batch.failed)
             return S_OK;
         IDirect3DVertexShader9* shader = nullptr;
@@ -509,7 +536,10 @@ class FarPropInstancing
     static HRESULT __stdcall DrawPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT start, UINT count)
     {
         if (!Instancing())
+        {
+            CountDraw();
             return RealDrawPrimitive(device, type, start, count);
+        }
         batch.failed = true;
         return S_OK;
     }
@@ -517,7 +547,10 @@ class FarPropInstancing
     static HRESULT __stdcall DrawPrimitiveUP(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT count, const void* data, UINT stride)
     {
         if (!Instancing())
+        {
+            CountDraw();
             return RealDrawPrimitiveUP(device, type, count, data, stride);
+        }
         batch.failed = true;
         return S_OK;
     }
@@ -526,7 +559,10 @@ class FarPropInstancing
                                                     D3DFORMAT format, const void* data, UINT stride)
     {
         if (!Instancing())
+        {
+            CountDraw();
             return RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
+        }
         batch.failed = true;
         return S_OK;
     }
@@ -615,6 +651,7 @@ class FarPropInstancing
     static void Flush()
     {
         bInScene = false;
+        passCount++;
         if (groups.empty())
         {
             copies.clear();
@@ -626,6 +663,7 @@ class FarPropInstancing
         for (auto& [key, items] : groups)
         {
             const uint16_t model = uint16_t(key & 0xFFFF);
+            const uint8_t bucket = uint8_t(key >> 40), bucketBit = bucket < 8 ? uint8_t(1u << bucket) : uint8_t(0);
             logInstances += items.size();
             logGroups++;
             if (!ready || modelState[model] != 1 || !Upload(device, items, origin))
@@ -653,12 +691,21 @@ class FarPropInstancing
             }
             else if (batch.draws == 0)
             {
-                if (++modelMisses[model] >= kMissesToGiveUp)
-                    GiveUp(model, "the sample drew nothing");
-                ExecuteOneByOne(items);
+                // Nothing drawn one by one either: a bucket the model has no meshes in, not a sample out of view
+                if (ExecuteOneByOne(items) == 0)
+                    emptyBuckets[model] |= bucketBit;
+                else
+                {
+                    emptyBuckets[model] &= uint8_t(~bucketBit);
+                    if (++modelMisses[model] >= kMissesToGiveUp)
+                        GiveUp(model, "the sample drew nothing where its copies did");
+                }
             }
             else
+            {
+                emptyBuckets[model] &= uint8_t(~bucketBit);
                 modelMisses[model] = 0;
+            }
         }
         groups.clear();
         copies.clear();
@@ -670,10 +717,12 @@ class FarPropInstancing
                 givenUp += state == 3;
             const double n = double(logPasses);
             FusionLog::Write("FarPropInstancing", "Stats", "%u passes; per pass: %.0f instances in %.1f groups, %.1f instanced draws, %.1f "
-                "copies executed one by one, %.1f left to the game (store full); shader copies made %u, failed %u; models given up on %u\n",
-                logPasses, logInstances / n, logGroups / n, logDraws / n, logOneByOne / n, logCapped / n, logShadersMade, logShadersFailed, givenUp);
+                "copies executed one by one, %.1f dropped (a bucket the model draws nothing in), %.1f left to the game (store full); "
+                "shader copies made %u, failed %u; models given up on %u\n",
+                logPasses, logInstances / n, logGroups / n, logDraws / n, logOneByOne / n, logEmptyDropped / n, logCapped / n,
+                logShadersMade, logShadersFailed, givenUp);
             logPasses = 0;
-            logInstances = logGroups = logDraws = logOneByOne = logCapped = 0;
+            logInstances = logGroups = logDraws = logOneByOne = logCapped = logEmptyDropped = 0;
         }
     }
 
