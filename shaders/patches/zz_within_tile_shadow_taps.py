@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Writes zzz_shadow_tile_clamp.patch: the local lights' shadow taps stay inside their map's tile of the atlas (s14).
+# Writes zz_within_tile_shadow_taps.patch (after zz_volume_depth: Windows lists names upper-cased, where Z sorts before _): the local lights' shadow taps stay inside their map's tile of the atlas (s14).
 # Each tap's coordinate inside the tile is saturated to 0-1 and then placed in the atlas (mad .., c77.w, c77); the game
 # moves the tiles 0.1 texel out (CE 0x9268B0, [0x119D02C] / resolution, resolution at map record + 4) and the filter
 # reaches half a texel further, so taps at a tile's far edge read the next light's map. From Liberty's Shadows 2.1.0
@@ -7,14 +7,14 @@
 # the atlas (PS14, PS15, PS17) is held 1/256 inside the tile, over half a texel past the offset at the smallest maps,
 # four texels at the edge of the paraboloid at 1024.
 #
-# Usage: zzz_shadow_tile_clamp.py <FusionShaders checkout with the other patches applied>
+# Usage: zz_within_tile_shadow_taps.py <FusionShaders checkout with the other patches applied>
 # Commit that state first; the patch is the diff this script leaves (git add -A && git diff --cached).
 import re
 import sys
 from pathlib import Path
 
 ROOT = Path(sys.argv[1]) / 'win32_30_nv8' / 'deferred_lighting'
-TAG = 'FusionFix: zzz_shadow_tile_clamp.patch'
+TAG = 'FusionFix: zz_within_tile_shadow_taps.patch'
 REGISTER = 'c198'
 PLACE = re.compile(r'^(\s*)mad (r\d+)(\.[xyzw]+)?, (r\d+)(\.[xyzw]+)?, c77\.w, c77')
 
