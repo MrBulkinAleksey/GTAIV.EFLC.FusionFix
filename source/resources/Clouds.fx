@@ -306,16 +306,24 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
         float heap = add ? e : saturate(e) * top;
         if (add ? heap + 0.5 * vec4Style.z <= vec4Style.y : heap <= 0.0)
             return 0.0;
+        // The steps towards the sun read style 2's billows too, the coarse ones alone with the fine
+        // ones' mean: with the heap alone they found no cloud where a billow had grown the outline,
+        // and with StyleDetail 3 whole clouds came out flat white, with no shade on them.
         float puff = 0.5;
         [branch]
-        if (detail)
+        if (detail || add)
         {
             float3 q = p * (vec4Shape.y * (add ? vec4StyleSoft.z : 1.0)) + float3(vec4Wind.zw, fEvolution) + wander.xyx * (fCurl * h);
             q.z -= fDetailFlow * saturate(heap);
             float2 billow = tex3Dlod(DetailTex, float4(q, 0)).rg;
-            float fine = tex3Dlod(DetailTex, float4(q * (add ? 4.0 : 5.5) + 0.37 + (billow.rgr - 0.5), 0)).r;
-            crease = 1.0 - billow.r;
-            puff = add ? 0.8 * billow.r + 0.2 * fine : 0.65 * billow.r + 0.35 * fine;
+            puff = 0.8 * billow.r + 0.1;
+            [branch]
+            if (detail)
+            {
+                float fine = tex3Dlod(DetailTex, float4(q * (add ? 4.0 : 5.5) + 0.37 + (billow.rgr - 0.5), 0)).r;
+                crease = 1.0 - billow.r;
+                puff = add ? 0.8 * billow.r + 0.2 * fine : 0.65 * billow.r + 0.35 * fine;
+            }
         }
         float grown = add ? heap + vec4Style.z * (puff - 0.5) : heap * (1.0 + vec4Style.z * puff);
         soft = saturate((grown - vec4Style.y) / lerp(vec4StyleSoft.x, vec4StyleSoft.y, h));
