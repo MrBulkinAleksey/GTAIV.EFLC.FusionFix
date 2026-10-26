@@ -402,14 +402,6 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     }
     effect->SetFloat(effect->GetParameterByName(nullptr, "fMottle"), R.fVolumetricCloudsMottle);
     effect->SetFloat(effect->GetParameterByName(nullptr, "fDetailFlow"), R.fVolumetricCloudsDetailFlow);
-    {
-        const D3DXVECTOR4 style(float(R.nVolumetricCloudsStyle), R.fVolumetricCloudsStyleCut, R.fVolumetricCloudsStyleDetail, R.fVolumetricCloudsStyleBase);
-        effect->SetVector(effect->GetParameterByName(nullptr, "vec4Style"), &style);
-        const D3DXVECTOR4 styleSoft(R.fVolumetricCloudsStyleSoftBase, R.fVolumetricCloudsStyleSoftTop, R.fVolumetricCloudsStyleScale, 0.0f);
-        effect->SetVector(effect->GetParameterByName(nullptr, "vec4StyleSoft"), &styleSoft);
-        const D3DXVECTOR4 styleLight(float(R.nVolumetricCloudsStyleLight), R.fVolumetricCloudsStyleSun, R.fVolumetricCloudsStyleAmbient, R.fVolumetricCloudsStylePhase);
-        effect->SetVector(effect->GetParameterByName(nullptr, "vec4StyleLight"), &styleLight);
-    }
     // The sun's hue at brightness 1 (Rec. 709 luma), each channel kept within 0 to 2, mixed
     // towards white by VolumetricCloudsSunTint. The moon's is a cool white. With the physical sky,
     // the sunlight that gets through its air to the middle of the layer, by its share.
