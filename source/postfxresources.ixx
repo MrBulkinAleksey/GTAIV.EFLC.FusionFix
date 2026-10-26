@@ -602,7 +602,7 @@ public:
     // density times 1 + StyleDetail times the billows, cut at StyleCut, StyleSoftBase to StyleSoftTop wide) instead
     // of eating into it, and the density at the base StyleBase of the top's. 2: the billows, StyleScale times ours in
     // size, added to the heap (StyleDetail of them either way of their mean), so they grow the outline past the map's
-    // edge as well. Hidden, live.
+    // edge as well. 3: style 2's billows build the heap alone, less StyleCut, under our detail. Hidden, live.
     int nVolumetricCloudsStyle = 0;
     float fVolumetricCloudsStyleCut = 0.25f;
     float fVolumetricCloudsStyleDetail = 1.5f;
@@ -2140,7 +2140,7 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsSaturation", &PostFxResource::fVolumetricCloudsSaturation, 1.0f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsMottle", &PostFxResource::fVolumetricCloudsMottle, 0.4f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsDetailFlow", &PostFxResource::fVolumetricCloudsDetailFlow, 0.0f, 0.0f, 4.0f),
-            IniInt("WEATHER", "VolumetricCloudsStyle", &PostFxResource::nVolumetricCloudsStyle, 0, 0, 2),
+            IniInt("WEATHER", "VolumetricCloudsStyle", &PostFxResource::nVolumetricCloudsStyle, 0, 0, 3),
             IniFloat("WEATHER", "VolumetricCloudsStyleCut", &PostFxResource::fVolumetricCloudsStyleCut, 0.25f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsStyleDetail", &PostFxResource::fVolumetricCloudsStyleDetail, 1.5f, 0.0f, 8.0f),
             IniFloat("WEATHER", "VolumetricCloudsStyleBase", &PostFxResource::fVolumetricCloudsStyleBase, 0.2f, 0.0f, 1.0f),

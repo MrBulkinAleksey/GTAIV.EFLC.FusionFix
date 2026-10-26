@@ -116,7 +116,7 @@ float fCurl;              // how far the billows are swept along the coarse nois
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
 float fDebug;             // VolumetricCloudsDebug + 1, the numbers in the comments here:2 the sky brightness matched to, 3 to 11 one term of the light alone (Light)
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
-float4 vec4Style;         // VolumetricCloudsStyle (0 ours, 1 CloudWorks' growing billows, 2 billows added to the heap), and for 1 and 2: the cut, the billows' gain, the base's density
+float4 vec4Style;         // VolumetricCloudsStyle (0 ours, 1 CloudWorks' growing billows, 2 billows added to the heap, 3 2's heap under our detail), and for 1 to 3: the cut, the billows' gain, the base's density
 float4 vec4StyleSoft;     // for styles 1 and 2: the cut's softness at the base and at the top; for 2: the billows' size against ours
 float4 vec4StyleLight;    // VolumetricCloudsStyleLight (0 ours, 1 CloudWorks'), and for 1: the sun's gain, the sky's gain, the phase's peak
 float fDetailFlow;        // VolumetricCloudsDetailFlow: how far up, in billows, the heap's density pushes its billows
@@ -295,10 +295,13 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
     // Style 2: the billows added to the heap instead, which goes on below zero past the map's edge and
     // above the dome, so a billow can stand out of the outline as well as bite into it; the billows
     // StyleScale times ours in size, big enough to make the heap's florets, the fine ones on their surface.
+    // Style 3: style 2's billows build the heap alone, less StyleCut, and ours take it from there: the
+    // fine billows eat into it, the compressor and the rest as without a style.
     [branch]
     if (vec4Style.x > 0.0)
     {
         bool add = vec4Style.x > 1.5;
+        bool hybrid = vec4Style.x > 2.5;
         float e = (c - threshold) / max(cover, 0.01);
         e = e > 0.0 ? e * e : e;
         e = (e - dome) / max(1.0 - dome, 0.05);
@@ -318,7 +321,7 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
             float2 billow = tex3Dlod(DetailTex, float4(q, 0)).rg;
             puff = 0.8 * billow.r + 0.1;
             [branch]
-            if (detail)
+            if (detail && !hybrid)
             {
                 float fine = tex3Dlod(DetailTex, float4(q * (add ? 4.0 : 5.5) + 0.37 + (billow.rgr - 0.5), 0)).r;
                 crease = 1.0 - billow.r;
@@ -326,11 +329,15 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
             }
         }
         float grown = add ? heap + vec4Style.z * (puff - 0.5) : heap * (1.0 + vec4Style.z * puff);
-        soft = saturate((grown - vec4Style.y) / lerp(vec4StyleSoft.x, vec4StyleSoft.y, h));
-        return soft * lerp(vec4Style.w, 1.0, smoothstep(0.0, 0.5, h)) * (add ? top : 1.0);
+        if (!hybrid)
+        {
+            soft = saturate((grown - vec4Style.y) / lerp(vec4StyleSoft.x, vec4StyleSoft.y, h));
+            return soft * lerp(vec4Style.w, 1.0, smoothstep(0.0, 0.5, h)) * (add ? top : 1.0);
+        }
+        d = saturate(grown - vec4Style.y) * top;
     }
-
-    d = saturate((d - dome) / max(1.0 - dome, 0.05)) * smoothstep(1.0, 0.85, h);
+    else
+        d = saturate((d - dome) / max(1.0 - dome, 0.05)) * smoothstep(1.0, 0.85, h);
     if (d <= 0.0)
         return 0.0;
 
