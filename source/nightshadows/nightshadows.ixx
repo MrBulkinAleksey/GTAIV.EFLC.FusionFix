@@ -632,7 +632,8 @@ public:
                 if (PlayerShadowAllocation::ready.load(std::memory_order_acquire))
                 {
                     ShadowCache16::Install(iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowCaches", 32),
-                        iniReader.ReadFloat("NIGHTSHADOWS", "CacheWholeTileDistance", 25.0f));
+                        iniReader.ReadFloat("NIGHTSHADOWS", "CacheWholeTileDistance", 25.0f),
+                        iniReader.ReadFloat("NIGHTSHADOWS", "CacheEvictMargin", 1.25f));
                     if (ShadowCache16::enabled)
                         PlayerShadowAllocation::layOutCaches = ShadowCache16::LayOut;
                     if (ShadowCache16::moved)

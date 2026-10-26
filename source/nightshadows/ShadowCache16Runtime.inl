@@ -21,8 +21,8 @@
 // tiles 12 to 15 and 24) at half the resolution. The two places drawing into or out of a cache's tile at the map's
 // whole size take its rectangle's size instead: the rewarp's quad (0x926852) and the copy into a slot's map
 // (0x925CEA). A lamp nearer than CacheWholeTileDistance takes a whole tile and a farther one a quarter, where there
-// is one to take (CacheChoice, from the selection's own pick at 0x927E29); a lamp in a quarter tile coming nearer
-// gives it up for a whole one (LayOut).
+// is one to take (CacheChoice, from the selection's own pick at 0x927E29), and an entry goes to a new lamp only when
+// its own is CacheEvictMargin times as far; a lamp in a quarter tile coming nearer gives it up for a whole one (LayOut).
 //
 // Only before the game creates the atlas: one made 4N already keeps its size until the device is reset.
 namespace ShadowCache16
@@ -31,6 +31,12 @@ namespace ShadowCache16
     static std::string status = "off";
     static float tileScale = 5.0f; // the atlas in maps, for the patched mulss operands
     static float wholeDistance = 25.0f; // CacheWholeTileDistance
+    // CacheEvictMargin: an entry goes to a new lamp only when its own lamp is this many times as far (plus 2 m). With
+    // 32 entries the lamps at the edge of who gets one stood 50-70 m off (the game's measure), many at the same
+    // distance, and the game's rule (any entry farther) handed entries back and forth between them every frame:
+    // 18 new caches a second, 900 lamps getting theirs back within 2 s in a run of 150 s, each a bake and a lamp
+    // without its shadow until it came back.
+    static float evictMargin = 1.25f;
     static constexpr unsigned WholeTiles = 12;
     static std::atomic<uint32_t> rectsFixed{0}, promotions{0}, choices{0};
 
@@ -98,7 +104,7 @@ namespace ShadowCache16
         {
             const auto record = fusionfix::shadows::CacheRecord(base, i);
             const int state = *reinterpret_cast<const int32_t*>(record + 0xE4);
-            wholeFree = state == -1 || *reinterpret_cast<const float*>(record + 0xD0) > wholeDistance;
+            wholeFree = state == -1 || *reinterpret_cast<const float*>(record + 0xD0) > wholeDistance * evictMargin + 2.0f;
         }
         if (!wholeFree) return;
         for (unsigned i = WholeTiles; i < fusionfix::shadows::cacheEntries; ++i)
@@ -122,7 +128,7 @@ namespace ShadowCache16
         const auto pick = [&](unsigned from, unsigned to) noexcept
         {
             int unused = -1, farthest = -1, oldest = 0;
-            float most = distance;
+            float most = distance * evictMargin + 2.0f;
             for (unsigned i = from; i < to; ++i)
             {
                 const auto record = fusionfix::shadows::CacheRecord(base, i);
@@ -241,10 +247,11 @@ namespace ShadowCache16
         return true;
     }
 
-    static void Install(int requested, float wholeTileDistance) noexcept
+    static void Install(int requested, float wholeTileDistance, float margin) noexcept
     {
         if (requested < 16) return;
         wholeDistance = std::clamp(wholeTileDistance, 0.0f, 200.0f);
+        evictMargin = std::isfinite(margin) ? std::clamp(margin, 1.0f, 4.0f) : 1.25f;
         const auto base = GameBase();
         using HeadlightEnhancement::CodeCheck;
         const auto check = CodeCheck()
