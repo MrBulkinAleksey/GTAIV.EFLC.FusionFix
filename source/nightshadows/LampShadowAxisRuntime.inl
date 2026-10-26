@@ -17,7 +17,23 @@
 namespace LampShadowAxis
 {
     static SafetyHookInline pointHook, spotHook;
-    static std::atomic<int> mode{1};   // 0 the game's world +x, 1 down for points and along the beam for spots
+    static std::atomic<int> mode{1};   // 0 the game's world +x, 1 down for points and along the beam for spots, 2 points
+                                       // level toward the player (down when the player is under the lamp), spots along the beam
+    // Mode 2: where the player is, from the slot selection (PlayerShadowAllocation, before the maps are built). A lamp's
+    // map edge is where its halves' rims are: down put the walls beside a lamp there (a tunnel's cable cast a thick wavy
+    // band along the wall), world +x the road along a tunnel running the other way (a car's shadow behind it drawn as
+    // long black spikes); level toward the player puts you, your car and its shadow and the street toward you near a
+    // half's centre, and the map is drawn again each frame, so it follows you
+    static std::atomic<float> target[3]{};
+    static std::atomic<bool> haveTarget{false};
+    static void SetTarget(float x, float y, float z) noexcept
+    {
+        if (!std::isfinite(x + y + z)) return;
+        target[0].store(x, std::memory_order_relaxed);
+        target[1].store(y, std::memory_order_relaxed);
+        target[2].store(z, std::memory_order_relaxed);
+        haveTarget.store(true, std::memory_order_release);
+    }
     static std::string status = "off";
 
     constexpr uintptr_t SlotRecordsRva = 0xD9F100, SlotSize = 0x110;
@@ -46,6 +62,14 @@ namespace LampShadowAxis
         const auto* direction = reinterpret_cast<const float*>(slot + 0xD0);
 
         float axis[3] = { 0.0f, 0.0f, -1.0f };
+        if (!spot && mode.load(std::memory_order_relaxed) == 2 && haveTarget.load(std::memory_order_acquire))
+        {
+            const float dx = target[0].load(std::memory_order_relaxed) - position[0];
+            const float dy = target[1].load(std::memory_order_relaxed) - position[1];
+            const float level = std::sqrt(dx * dx + dy * dy);
+            if (std::isfinite(level) && level > 2.0f)
+                axis[0] = dx / level, axis[1] = dy / level, axis[2] = 0.0f;
+        }
         if (spot)
         {
             const float length2 = direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2];

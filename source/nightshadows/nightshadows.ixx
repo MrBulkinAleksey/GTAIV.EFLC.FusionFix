@@ -475,7 +475,7 @@ class NightShadows
     static void ReadLiveSettings(CIniReader& iniReader)
     {
         bLampShadowsInDaylight = iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowsInDaylight", 0) != 0;
-        LampShadowAxis::mode.store(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowAxis", 0), 0, 1), std::memory_order_relaxed);
+        LampShadowAxis::mode.store(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowAxis", 0), 0, 2), std::memory_order_relaxed);
         if (!ceAdapter)
             return;
         bCloseHeadlightRelevance = iniReader.ReadInteger("NIGHTSHADOWS", "CloseHeadlightRelevance", 0) != 0;

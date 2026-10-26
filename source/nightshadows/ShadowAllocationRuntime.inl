@@ -672,6 +672,7 @@ namespace PlayerShadowAllocation
         state.gainHold.holdMs = casterHoldMs;
         state.ped = ped;
         state.player = {focus.position[0], focus.position[1], focus.position[2]};
+        LampShadowAxis::SetTarget(state.player.x, state.player.y, state.player.z);
         state.occupiedCar = focus.car;
         state.drivingFocus=state.motionFocus.Update(state.player,state.occupiedCar,static_cast<uint32_t>(*CTimer::m_snTimeInMilliseconds));
         state.frame = *CTimer::m_frameCount;
