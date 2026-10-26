@@ -297,6 +297,10 @@ namespace Lighting20
         static bool installed = false;
         static std::optional<std::reference_wrapper<int32_t>> pref;
         static bool cachedLamps = true, modelLights = true, coronas = true;
+        // ModelLightShadows: 1 every light of a model, 2 those of buildings only (a shop front's), 3 those of objects
+        // only (a scaffold's ceiling lights, a wall lamp), by the owner the light's key points into
+        static int modelLightOwners = 0;
+        static std::atomic<uint32_t> modelLightsOtherOwner{0};
         static SafetyHookMid coronaHook;
         static std::atomic<uint32_t> lampsPromoted{0}, modelLightsPromoted{0}, coronaLights{0}, coronasRefused{0}, coronasCapped{0};
         static std::atomic<uint32_t> coronasMerged{0}, modelLightsMerged{0}, modelLightsIdle{0};
@@ -346,6 +350,15 @@ namespace Lighting20
             const auto type = *reinterpret_cast<const uint8_t*>(descriptor + 0x5B);
             const float radius = *reinterpret_cast<const float*>(descriptor + 0x38);
             if ((type != 1 && type != 2) || !std::isfinite(radius) || radius <= 0 || !key || key == UINT32_MAX) return false;
+            if (modelLightOwners)
+            {
+                PlayerShadowAllocation::KeyOwner owner{};
+                if (!PlayerShadowAllocation::FindKeyOwner(key, owner) || owner.kind != modelLightOwners)
+                {
+                    ++modelLightsOtherOwner;
+                    return false;
+                }
+            }
             Ours::Add(key, Ours::ModelLight);
             ++modelLightsPromoted;
             return true;
@@ -416,7 +429,9 @@ namespace Lighting20
         {
             pref = FusionFixSettings.GetRef("PREF_WORLD_LIGHT_SHADOWS");
             cachedLamps = ini.ReadInteger("NIGHTSHADOWS", "CachedLampShadows", 1) != 0;
-            modelLights = ini.ReadInteger("NIGHTSHADOWS", "ModelLightShadows", 0) != 0;
+            const int modelLightMode = std::clamp(ini.ReadInteger("NIGHTSHADOWS", "ModelLightShadows", 0), 0, 3);
+            modelLights = modelLightMode != 0;
+            modelLightOwners = modelLightMode == 2 ? 1 : modelLightMode == 3 ? 2 : 0; // FindKeyOwner's kinds
             modelLightCacheDistance = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "ModelLightCacheDistance", 15.0f), 0.0f, 60.0f);
             coronas = ini.ReadInteger("NIGHTSHADOWS", "CoronaLightShadows", 1) != 0;
             corona.approximate = ini.ReadInteger("NIGHTSHADOWS", "CoronaLightApproximation", 1) != 0;
@@ -437,7 +452,7 @@ namespace Lighting20
                     coronaHook = safetyhook::create_mid(game + 0x81EB27, Corona);
                 installStatus += coronaHook ? " coronas=1" : " coronas=code_differs";
             }
-            installStatus += std::string(" world=1 cached_lamps=") + (cachedLamps ? "1" : "0") + " model_lights=" + (modelLights ? "1" : "0");
+            installStatus += std::string(" world=1 cached_lamps=") + (cachedLamps ? "1" : "0") + " model_lights=" + std::to_string(modelLights ? (modelLightOwners ? modelLightOwners + 1 : 1) : 0);
         }
     }
 
@@ -1135,7 +1150,7 @@ namespace Lighting20
                 << " corona_refused=" << World::coronasRefused.load() << " corona_capped=" << World::coronasCapped.load()
                 << " arcade_moved=" << Arcade::moved.load() << " merged: coronas=" << World::coronasMerged.load() << " model_lights=" << World::modelLightsMerged.load()
                 << " model_lights_without_casters=" << World::modelLightsIdle.load()
-                << " model_lights_cached=" << World::modelLightsCached.load()
+                << " model_lights_cached=" << World::modelLightsCached.load() << " model_lights_other_owner=" << World::modelLightsOtherOwner.load()
                 << " | buildings " << (Buildings::On() ? "on" : "off") << " passes=" << Buildings::passes.load()
                 << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load()
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
