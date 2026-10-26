@@ -432,6 +432,26 @@ namespace CoronaRender
             }
         }
 
+        // Any other view from the game's own camera list (the water's reflection: its eye under the water, so none of
+        // the tests above): the view's six frustum planes, as grcViewport::IsSphereVisible (CE 0x431e40) reads them at
+        // +0x300 (normal, then distance; inside when n.p + d + r >= 0). That pass drew all 15000 coronas of a dawn, 1.2 ms
+        // of the render thread. The ball takes the shift toward the camera (+0x14) in as well, which can bring a corona
+        // over the far plane
+        const float* frustum = nullptr;
+        if (nMode == 1 && !reflection && !skipBehind && !bOtherView)
+        {
+            auto planes = (const float*)(viewport + 0x300);
+            bool valid = true;
+            for (int k = 0; k < 6 && valid; k++)
+            {
+                const float* p = planes + k * 4;
+                float lengthSquared = p[0] * p[0] + p[1] * p[1] + p[2] * p[2];
+                valid = lengthSquared > 0.81f && lengthSquared < 1.21f && std::isfinite(p[3]);
+            }
+            if (valid)
+                frustum = planes;
+        }
+
         static std::vector<uint32_t> drawn;
         drawn.clear();
         for (int32_t i = first; i < count; i++)
@@ -460,6 +480,22 @@ namespace CoronaRender
                     if (margin < 0.0f || lateralSquared * coneCos * coneCos > margin * margin)
                         continue;
                 }
+            }
+            else if (frustum)
+            {
+                auto pos = (const float*)item;
+                float size = std::fabs(*(const float*)(item + 0xC));
+                if (size == 0.0f)
+                    continue;
+                float radius = 1.5f * size + 0.5f + std::fabs(*(const float*)(item + 0x14));
+                bool inside = true;
+                for (int k = 0; k < 6 && inside; k++)
+                {
+                    const float* p = frustum + k * 4;
+                    inside = p[0] * pos[0] + p[1] * pos[1] + p[2] * pos[2] + p[3] + radius >= 0.0f;
+                }
+                if (!inside)
+                    continue;
             }
             else if (skipParaboloid)
             {
