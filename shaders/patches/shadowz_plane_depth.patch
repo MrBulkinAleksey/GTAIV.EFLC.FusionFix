@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/shadowZ/shadowZPS1.asm b/win32_30_nv8/shadowZ/shadowZPS1.asm
-index e15faf0f..38fe304a 100644
+index e15faf0..0ce3030 100644
 --- a/win32_30_nv8/shadowZ/shadowZPS1.asm
 +++ b/win32_30_nv8/shadowZ/shadowZPS1.asm
-@@ -11,16 +11,73 @@
+@@ -11,16 +11,69 @@
  //   Name                 Reg   Size
  //   -------------------- ----- ----
  //   gShadowParam14151617 c56      1
@@ -18,6 +18,7 @@ index e15faf0f..38fe304a 100644
 +    def c1, 1, -1, 2, 0.0799999982 // FusionFix: shadowz_plane_depth.patch: 1, -1, 2, the least cosine of the texel's ray against the surface
 +    def c2, 0.5, 1.5, -1234.5, 0.5 // FusionFix: shadowz_plane_depth.patch: how far the plane's depth may be from the interpolated one; c49.w's key for on
 +    dcl_texcoord1 v0
++    dcl_texcoord2 v1.x // FusionFix: shadowz_plane_depth.patch: world z
 +    dcl vPos.xy
      add r0.x, c0.x, -v0.z
      abs r0.y, c56.x
@@ -28,16 +29,11 @@ index e15faf0f..38fe304a 100644
 +    // interpolated inside a big one lies on the chord, off the surface (a shop front's awning bent around the lamp, a
 +    // wall shadowing itself but for round patches). The interpolated point still lies in the triangle's plane: the
 +    // depth written is the distance along the texel's own ray to that plane, in the lamp's x, y and half axis over
-+    // its radius. World x and y come in v0.xy, the half's axis in v0.z, so world z only when that axis is steep
-+    abs r1.x, c56.y
-+    cmp r1.x, -r1.x, c1.x, c1.y
-+    mul r1.y, r1.x, v0.z
++    // its radius. World x and y come in v0.xy, world z in v1.x (shadowZ VS0 writes it to texcoord2), the half's axis in v0.z
 +    add r2.xy, v0, -c48
 +    mul r2.xy, r2, c48.w
-+    mad r1.z, -c49.x, r2.x, r1.y
-+    mad r1.z, -c49.y, r2.y, r1.z
-+    rcp r1.w, c49.z
-+    mul r2.z, r1.z, r1.w
++    add r2.z, v1.x, -c48.z
++    mul r2.z, r2.z, c48.w
 +    mov r4.xyz, c55
 +    crs r3.xyz, r4, c49
 +    dp3 r5.x, r2, r4
@@ -78,3 +74,22 @@ index e15faf0f..38fe304a 100644
 +    mov oC0, r10.x
  
  // approximately 5 instruction slots used
+diff --git a/win32_30_nv8/shadowZ/shadowZVS0.asm b/win32_30_nv8/shadowZ/shadowZVS0.asm
+index b016145..a88cce1 100644
+--- a/win32_30_nv8/shadowZ/shadowZVS0.asm
++++ b/win32_30_nv8/shadowZ/shadowZVS0.asm
+@@ -30,6 +30,7 @@
+     dcl_position v0
+     dcl_position o0
+     dcl_texcoord1 o1
++    dcl_texcoord2 o2 // FusionFix: shadowz_plane_depth.patch: world z for the plane depth in PS1
+     mul r0.xyz, c1, v0.y
+     mad r0.xyz, v0.x, c0, r0
+     mad r0.xyz, v0.z, c2, r0
+@@ -103,5 +104,6 @@
+     mov o0.w, r4.x
+     mov o1.xy, r0
+     mov o1.zw, r4.xyyz
++    mov o2, r0.z // FusionFix: shadowz_plane_depth.patch
+ 
+ // approximately 77 instruction slots used

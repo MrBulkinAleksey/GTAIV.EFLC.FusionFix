@@ -654,12 +654,12 @@ namespace
         s.coneAngle = type == 2 && outerCos > 0.0f && outerCos <= 1.0f ? std::acos(outerCos) : -1.0f;
     }
 
-    // The lamp of the half drawn for shadowz_plane_depth.patch: on only with its axis steep (the shader gets world z
-    // from the half's axis coordinate), else off, so a half of no known lamp leaves the depth as interpolated
+    // The lamp of the half drawn for shadowz_plane_depth.patch, any axis (shadowZ VS0 hands the shader world z too);
+    // off for a half of no known lamp, which keeps the depth as interpolated
     void SetPlaneDepthLamp()
     {
         const auto& o = currentOrigin;
-        const bool on = bPlaneDepth && planeFace && o.radius > 0.0f && std::fabs(o.axis[2]) >= 0.5f;
+        const bool on = bPlaneDepth && planeFace && o.radius > 0.0f;
         float values[4][4] = {};
         if (on)
         {
