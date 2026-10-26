@@ -662,18 +662,18 @@ namespace
         {
             auto pDevice = rage::grcDevice::GetD3DDevice();
             D3DVIEWPORT9 viewport{};
-            if (!pDevice || FAILED(RageDirect3DDevice9::RealDevice(pDevice)->GetViewport(&viewport)) || !viewport.Width || !viewport.Height)
-                return;
-            values[0][0] = o.position[0], values[0][1] = o.position[1], values[0][2] = o.position[2], values[0][3] = 1.0f / o.radius;
-            values[1][0] = o.axis[0], values[1][1] = o.axis[1], values[1][2] = o.axis[2], values[1][3] = 1.0f;
-            values[2][0] = float(viewport.X), values[2][1] = float(viewport.Y);
-            values[2][2] = 2.0f / float(viewport.Width), values[2][3] = 2.0f / float(viewport.Height);
-            values[3][0] = o.xAxis[0], values[3][1] = o.xAxis[1], values[3][2] = o.xAxis[2];
+            if (pDevice && SUCCEEDED(RageDirect3DDevice9::RealDevice(pDevice)->GetViewport(&viewport)) && viewport.Width && viewport.Height)
+            {
+                values[0][0] = o.position[0], values[0][1] = o.position[1], values[0][2] = o.position[2], values[0][3] = 1.0f / o.radius;
+                values[1][0] = o.axis[0], values[1][1] = o.axis[1], values[1][2] = o.axis[2], values[1][3] = 1.0f;
+                values[2][0] = float(viewport.X), values[2][1] = float(viewport.Y);
+                values[2][2] = 2.0f / float(viewport.Width), values[2][3] = 2.0f / float(viewport.Height);
+                values[3][0] = o.xAxis[0], values[3][1] = o.xAxis[1], values[3][2] = o.xAxis[2];
+            }
         }
-        static bool wasOn = false;
-        if (!on && !wasOn)
-            return;
-        wasOn = on;
+        // Every half, zeros too: the patch reads c49.w as on, and the registers keep whatever was set in them last; left
+        // unwritten while off (LampShadowAxis 0 or 2, LampShadowPlaneDepth 0) a stale non-zero c49.w had it compute
+        // depths from leftovers, and cars' and rails' shadows in a tunnel came out as curved bands and spikes
         auto pDevice = rage::grcDevice::GetD3DDevice();
         if (!pDevice)
             return;
