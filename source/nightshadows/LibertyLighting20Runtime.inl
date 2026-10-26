@@ -307,6 +307,8 @@ namespace Lighting20
         static bool modelLightsNeedCasters = true; // ModelLightShadowsNeedCasters
         static float modelLightCacheDistance = 15.0f; // ModelLightCacheDistance
         static std::atomic<uint32_t> modelLightsCached{0};
+        static uint32_t modelLightCacheBudget = 8; // ModelLightCacheBudget
+        static std::atomic<uint32_t> modelLightsBudgeted{0};
         static float mergeDistance = 1.5f; // ExtraLightMergeDistance
 
         struct CoronaSettings
@@ -433,6 +435,7 @@ namespace Lighting20
             modelLights = modelLightMode != 0;
             modelLightOwners = modelLightMode == 2 ? 1 : modelLightMode == 3 ? 2 : 0; // FindKeyOwner's kinds
             modelLightCacheDistance = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "ModelLightCacheDistance", 15.0f), 0.0f, 60.0f);
+            modelLightCacheBudget = static_cast<uint32_t>(std::clamp(ini.ReadInteger("NIGHTSHADOWS", "ModelLightCacheBudget", 8), 0, 24));
             coronas = ini.ReadInteger("NIGHTSHADOWS", "CoronaLightShadows", 1) != 0;
             corona.approximate = ini.ReadInteger("NIGHTSHADOWS", "CoronaLightApproximation", 1) != 0;
             corona.radiusPerSize = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightRadiusPerSize", 12.0f), 0.1f, 1024.0f);
@@ -636,11 +639,39 @@ namespace Lighting20
     // (mode 4 with a cache index); idle (IdleModelLights took flag 4), it lights from the cache alone, without a slot.
     // Until it has a cache entry the game gives a light with flag 2 no slot either (the selection's candidate loop sends
     // it to the cache path only, CE 0x927D24).
+    //
+    // ModelLightCacheBudget: beyond that distance, within the lamp shadow reach, the nearest model lights of this
+    // frame's list get flag 2 too, as many as make the model lights given it this many (those within the distance
+    // count). By distance alone a shop front's light seen from 30 m had neither a cache nor (idle) a slot, so no
+    // shadow until you came near; the budget keeps them from taking the street lamps' entries. A light given it last
+    // run competes as if CacheEvictMargin nearer, so two at about the same distance do not take turns at an entry.
+    namespace ModelLightBudget
+    {
+        static constexpr float Margin = 1.25f;
+        static std::array<uint32_t, 24> kept{};
+        static uint32_t keptCount = 0;
+        struct Candidate { float score; uint32_t index; };
+        static std::vector<Candidate> candidates;
+
+        static bool Kept(uint32_t key) noexcept
+        {
+            for (uint32_t i = 0; i < keptCount; ++i)
+                if (kept[i] == key) return true;
+            return false;
+        }
+    }
+
     static void CacheNearModelLights(rage::CLightSource* lights, uint32_t count) noexcept
     {
-        if (!World::On() || World::modelLightCacheDistance <= 0.0f) return;
+        namespace B = ModelLightBudget;
+        if (!World::On() || World::modelLightCacheDistance <= 0.0f) { B::keptCount = 0; return; }
         const auto& state = PlayerShadowAllocation::state;
-        const float reach = World::modelLightCacheDistance;
+        const float close = World::modelLightCacheDistance;
+        const int feet = fusionfix::shadows::ShadowReachFeet(ShadowReachStep(false));
+        const float reach = (std::max)(close, feet > 0 ? feet * 0.3048f : 60.0f);
+        const uint32_t budget = World::modelLightCacheBudget;
+        uint32_t given = 0;
+        B::candidates.clear();
         for (uint32_t i = 0; i < count; ++i)
         {
             auto& l = lights[i];
@@ -648,10 +679,30 @@ namespace Lighting20
                 Ours::Of(static_cast<uint32_t>(l.mCastShadows)) != Ours::ModelLight)
                 continue;
             const float dx = l.mPosition.x - state.player.x, dy = l.mPosition.y - state.player.y, dz = l.mPosition.z - state.player.z;
-            if (dx * dx + dy * dy + dz * dz > reach * reach)
-                continue;
+            const float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 <= close * close)
+            {
+                l.mFlags |= rage::LF_STATIC_SHADOW;
+                ++World::modelLightsCached;
+                ++given;
+            }
+            else if (budget && d2 <= reach * reach)
+            {
+                const float d = std::sqrt(d2);
+                B::candidates.push_back({ B::Kept(static_cast<uint32_t>(l.mCastShadows)) ? d / B::Margin : d, i });
+            }
+        }
+        const uint32_t room = given < budget ? budget - given : 0;
+        const auto take = (std::min)(static_cast<size_t>(room), B::candidates.size());
+        std::partial_sort(B::candidates.begin(), B::candidates.begin() + take, B::candidates.end(),
+            [](const B::Candidate& a, const B::Candidate& b) { return a.score < b.score; });
+        B::keptCount = 0;
+        for (size_t n = 0; n < take; ++n)
+        {
+            auto& l = lights[B::candidates[n].index];
             l.mFlags |= rage::LF_STATIC_SHADOW;
-            ++World::modelLightsCached;
+            B::kept[B::keptCount++] = static_cast<uint32_t>(l.mCastShadows);
+            ++World::modelLightsBudgeted;
         }
     }
 
@@ -1150,7 +1201,7 @@ namespace Lighting20
                 << " corona_refused=" << World::coronasRefused.load() << " corona_capped=" << World::coronasCapped.load()
                 << " arcade_moved=" << Arcade::moved.load() << " merged: coronas=" << World::coronasMerged.load() << " model_lights=" << World::modelLightsMerged.load()
                 << " model_lights_without_casters=" << World::modelLightsIdle.load()
-                << " model_lights_cached=" << World::modelLightsCached.load() << " model_lights_other_owner=" << World::modelLightsOtherOwner.load()
+                << " model_lights_cached=" << World::modelLightsCached.load() << " model_lights_budgeted=" << World::modelLightsBudgeted.load() << " model_lights_other_owner=" << World::modelLightsOtherOwner.load()
                 << " | buildings " << (Buildings::On() ? "on" : "off") << " passes=" << Buildings::passes.load()
                 << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load()
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
