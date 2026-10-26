@@ -8,7 +8,8 @@
 //
 // So where the render list sorts an opaque entity into its lists (0xAE73B1, before the 0x8000 test that puts an
 // object into list 5 of the phases in [0x159B750]), an object within the light of the lamp slot 0 bakes this frame
-// goes into list 5 of slot 0's phase as well (0xAE43A0). Slot 0's phase number and lamp are taken as BuildRenderList
+// goes into lists 5 and 0 of slot 0's phase as well (0xAE43A0; the lamp pass draws list 5 with shader bucket 4,
+// list 0 with bucket 0). Slot 0's phase number and lamp are taken as BuildRenderList
 // numbers the phase (0xD78370). The objects come from the frame's scene walks of all phases, so one no phase sees is
 // left out until it is seen.
 //
@@ -76,7 +77,12 @@ namespace PropCaches
         const float dx = matrix[12] - lamp[0].load(std::memory_order_relaxed), dy = matrix[13] - lamp[1].load(std::memory_order_relaxed),
             dz = matrix[14] - lamp[2].load(std::memory_order_relaxed), reach = lamp[3].load(std::memory_order_relaxed);
         if (dx * dx + dy * dy + dz * dz > reach * reach) return;
-        reinterpret_cast<void(__cdecl*)(uint32_t, uintptr_t, float, int)>(game + 0x6E43A0)(bit, entity, 0.0f, 5);
+        // The lamp pass draws list 5 with shader bucket 4 only and lists 1 and 0 with bucket 0: a scaffold's poles and
+        // boards (gta_default, bucket 0) went in through list 5 as nothing, only its ceiling light's quad
+        // (gta_emissivenight, bucket 4) and the lamp posts drew. In both, each pass drawing its own bucket's geometries.
+        const auto add = reinterpret_cast<void(__cdecl*)(uint32_t, uintptr_t, float, int)>(game + 0x6E43A0);
+        add(bit, entity, 0.0f, 5);
+        add(bit, entity, 0.0f, 0);
         signature.fetch_add(Hash(entity, matrix), std::memory_order_relaxed);
         ++added;
     }
