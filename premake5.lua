@@ -32,15 +32,24 @@ function envdir(key)
    return path.translate(value)
 end
 
+-- The pre-build step writing BuildTime.h of a project that embeds Versioninfo.rc: a new time only when one of `inputs`
+-- (files or folders, relative to the repository) is newer than the project's target, so a build without changes
+-- doesn't link again
+function buildtime(inputs)
+   local args = '"$(MSBuildProjectFullPath)"'
+   for _, i in ipairs(inputs) do args = args .. ' "../' .. i .. '"' end
+   prebuildcommands { 'powershell -NoProfile -ExecutionPolicy Bypass -File "../tools/buildtime.ps1" -Out "../build/generated/%{prj.name}/%{cfg.buildcfg}/BuildTime.h" -Target "$(TargetPath)" ' .. args }
+end
+
 workspace "GTAIV.EFLC.FusionFix"
    configurations { "Release", "Debug" }
    architecture "x86"
    location "build"
-   -- BuildTimeUtc (Versioninfo.rc): the build's own time in UTC, written before every build; the in-game update
-   -- check compares it with the release asset's time (FileVersion is only shown)
-   includedirs { "build/generated" }
-   resincludedirs { "build/generated" }
-   prebuildcommands { 'powershell -NoProfile -ExecutionPolicy Bypass -File "../tools/buildtime.ps1" -Out "../build/generated/BuildTime.h"' }
+   -- BuildTimeUtc (Versioninfo.rc): the build's own time in UTC, written by tools/buildtime.ps1 before a build that
+   -- links (see buildtime() below); the in-game update check compares it with the release asset's time (FileVersion is
+   -- only shown)
+   includedirs { "build/generated/%{prj.name}/%{cfg.buildcfg}" }
+   resincludedirs { "build/generated/%{prj.name}/%{cfg.buildcfg}" }
    cppdialect "C++latest"
    kind "SharedLib"
    language "C++"
@@ -123,6 +132,8 @@ workspace "GTAIV.EFLC.FusionFix"
    -- ASI Settings: the description and translations of the settings, embedded by source/resources/Settings.rc
    files { "source/resources/Settings.rc" }
    files { "settings/*.json" }
+   -- The fonts' character tables, for text of the descriptions shown in the menu
+   files { "source/resources/GameFont.rc" }
    links { "LogitechLEDLib.lib" }
 
    includedirs { "external/injector/safetyhook/include" }
@@ -200,6 +211,8 @@ project "GTAIV.EFLC.FusionFix"
    prebuildcommands { '"../bin/tools/asi-settings-validate.exe" "../settings/GTAIV.EFLC.FusionFix.json" "../settings/GTAIV.EFLC.FusionFix.en.json" "../settings/GTAIV.EFLC.FusionFix.fr.json" "../settings/GTAIV.EFLC.FusionFix.de.json" "../settings/GTAIV.EFLC.FusionFix.it.json" "../settings/GTAIV.EFLC.FusionFix.es.json" "../settings/GTAIV.EFLC.FusionFix.ru.json" "../settings/GTAIV.EFLC.FusionFix.ja.json"' }
    postbuildcommands { '"../bin/tools/asi-settings-validate.exe" "$(TargetPath)"' }
 
+   buildtime { "source", "external", "settings" }
+
    local gamedir = envdir("GTAIV_DIR")
    if gamedir then
       local plugins = gamedir .. "\\plugins"
@@ -272,6 +285,7 @@ project "d3d9"
    files { "source/d3d9/d3d9.def" }
    files { "source/d3d9/d3d9.cpp" }
    files { "source/resources/Versioninfo.rc" }
+   buildtime { "source/d3d9", "source/resources/Versioninfo.rc", "source/resources/VersionInfo.h" }
 
    filter "configurations:Debug"
       defines { "DEBUG" }
