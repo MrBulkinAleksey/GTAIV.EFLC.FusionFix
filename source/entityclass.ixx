@@ -187,6 +187,10 @@ namespace
     bool bViewCulling = false;          // and the face hooks in place
     constexpr float kViewHullMargin = 2.0f;
     bool bSkipLeftOut = true;           // SkipLeftOutDraws
+    // LampShadowPlaneDepth: shadowz_plane_depth.patch writes each texel's depth along its own ray to the drawn
+    // triangle's plane; it reads the lamp of the half drawn from these pixel shader constants, set as the half starts
+    bool bPlaneDepth = true;
+    constexpr UINT kPlaneDepthLamp = 48, kPlaneDepthAxis = 49, kPlaneDepthViewport = 50, kPlaneDepthX = 55;
     uintptr_t modelInfos = 0;       // CE 0x1295cd8, model infos by index
     // DrawsPerEntity: by model index (CDrawEntityDC +0x30, CDrawFragTypeDC +0x58)
     volatile uint8_t modelDraws[0x10000] = {};
@@ -452,6 +456,7 @@ namespace
     {
         float position[3];
         float axis[3];
+        float xAxis[3];     // the slot's x row (+0x40), the paraboloid's x
         float direction[3];
         float radius;
         float coneAngle;    // a spot's outer half angle in radians; negative when not a spot or not known
@@ -459,6 +464,7 @@ namespace
         // for each; none when not known
         float viewPlanes[18][4];
         uint8_t viewPlaneCount;
+        bool cache;         // a half of a cached map's render (mode 3): for the plane depth only, never culled
     };
     FaceOrigin faceOrigins[256]{};
     uint8_t nextFaceOrigin = 0;
@@ -478,6 +484,7 @@ namespace
     bool bFaceHooks = false;
     int currentFace = -1;
     FaceOrigin currentOrigin{};
+    bool planeFace = false;     // a marked half of either mode is being drawn, its lamp in currentOrigin
 
     // The planes of the convex hull of the camera's frustum (viewport, row vectors: clip = world * view * projection)
     // and the lamp, moved out by kViewHullMargin; 0 planes when the viewport makes no sense
@@ -607,7 +614,7 @@ namespace
         return count;
     }
 
-    void MarkFace(uintptr_t dc, uintptr_t slotOffset, uintptr_t slotRender)
+    void MarkFace(uintptr_t dc, uintptr_t slotOffset, uintptr_t slotRender, bool cache = false)
     {
         if (!dc || !slotRecords)
             return;
@@ -615,8 +622,10 @@ namespace
         auto& origin = faceOrigins[nextFaceOrigin];
         std::memcpy(origin.position, reinterpret_cast<const float*>(slot + 0xc0), sizeof(origin.position));
         std::memcpy(origin.axis, reinterpret_cast<const float*>(slot + 0x60), sizeof(origin.axis));
+        std::memcpy(origin.xAxis, reinterpret_cast<const float*>(slot + 0x40), sizeof(origin.xAxis));
         std::memcpy(origin.direction, reinterpret_cast<const float*>(slot + 0xd0), sizeof(origin.direction));
         origin.radius = *reinterpret_cast<const float*>(slot + 0xe0);
+        origin.cache = cache;
         origin.coneAngle = -1.0f;
         if (const auto index = slotOffset / 0x110; index < std::size(slotLights) && slotLights[index].key &&
             slotLights[index].key == *reinterpret_cast<const uint32_t*>(slot + 0xf8))
@@ -644,24 +653,58 @@ namespace
         s.coneAngle = type == 2 && outerCos > 0.0f && outerCos <= 1.0f ? std::acos(outerCos) : -1.0f;
     }
 
+    // The lamp of the half drawn for shadowz_plane_depth.patch: on only with its axis steep (the shader gets world z
+    // from the half's axis coordinate), else off, so a half of no known lamp leaves the depth as interpolated
+    void SetPlaneDepthLamp()
+    {
+        const auto& o = currentOrigin;
+        const bool on = bPlaneDepth && planeFace && o.radius > 0.0f && std::fabs(o.axis[2]) >= 0.5f;
+        float values[4][4] = {};
+        if (on)
+        {
+            auto pDevice = rage::grcDevice::GetD3DDevice();
+            D3DVIEWPORT9 viewport{};
+            if (!pDevice || FAILED(RageDirect3DDevice9::RealDevice(pDevice)->GetViewport(&viewport)) || !viewport.Width || !viewport.Height)
+                return;
+            values[0][0] = o.position[0], values[0][1] = o.position[1], values[0][2] = o.position[2], values[0][3] = 1.0f / o.radius;
+            values[1][0] = o.axis[0], values[1][1] = o.axis[1], values[1][2] = o.axis[2], values[1][3] = 1.0f;
+            values[2][0] = float(viewport.X), values[2][1] = float(viewport.Y);
+            values[2][2] = 2.0f / float(viewport.Width), values[2][3] = 2.0f / float(viewport.Height);
+            values[3][0] = o.xAxis[0], values[3][1] = o.xAxis[1], values[3][2] = o.xAxis[2];
+        }
+        static bool wasOn = false;
+        if (!on && !wasOn)
+            return;
+        wasOn = on;
+        auto pDevice = rage::grcDevice::GetD3DDevice();
+        if (!pDevice)
+            return;
+        // On the game's wrapper and the device behind it, as SetTextureBoth does
+        pDevice->SetPixelShaderConstantF(kPlaneDepthLamp, values[0], 3);
+        pDevice->SetPixelShaderConstantF(kPlaneDepthX, values[3], 1);
+        if (auto real = RageDirect3DDevice9::RealDevice(pDevice); real && real != pDevice)
+        {
+            real->SetPixelShaderConstantF(kPlaneDepthLamp, values[0], 3);
+            real->SetPixelShaderConstantF(kPlaneDepthX, values[3], 1);
+        }
+    }
+
     void __fastcall FaceExecute(void* dc, void*)
     {
         const auto* bytes = reinterpret_cast<const uint8_t*>(dc);
         const int face = *reinterpret_cast<const int32_t*>(bytes + 0x10);
-        if (bytes[kFaceMarkByte] == kFaceMark && (face == 0 || face == 1))
-        {
-            currentFace = face;
+        planeFace = bytes[kFaceMarkByte] == kFaceMark && (face == 0 || face == 1);
+        if (planeFace)
             currentOrigin = faceOrigins[bytes[kFaceOriginByte]];
-        }
-        else
-            currentFace = -1;
+        currentFace = planeFace && !currentOrigin.cache ? face : -1;
         faceExecute(dc);
+        SetPlaneDepthLamp();
     }
 
     void __fastcall ColorWriteExecute(void* dc, void*)
     {
         if (*reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(dc) + 8) == 0xf)
-            currentFace = -1;
+            currentFace = -1, planeFace = false;
         colorWriteExecute(dc);
     }
 
@@ -1043,6 +1086,15 @@ namespace
                 auto** colorWriteVtable = *reinterpret_cast<void***>(colorWriteCtor + 0x26);
                 static auto face0Hook = safetyhook::create_mid(face0.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp, regs.esi); });
                 static auto face1Hook = safetyhook::create_mid(face1.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp, regs.esi); });
+                // The halves of a cached map's render (mode 3, CE 0xD77B69 / 0xD77C16), for LampShadowPlaneDepth
+                auto cache0 = hook::pattern("C7 44 24 34 FF FF FF FF E8 ? ? ? ? EB 02 33 C0 50 E8");
+                auto cache1 = hook::pattern("C7 44 24 30 FF FF FF FF E8 ? ? ? ? EB 02 33 C0 50 E8");
+                if (cache0.size() == 1 && cache1.size() == 1 && callTarget(cache0.get_first<uint8_t>(8)) == faceCtor &&
+                    callTarget(cache1.get_first<uint8_t>(8)) == faceCtor)
+                {
+                    static auto cache0Hook = safetyhook::create_mid(cache0.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp, regs.esi, true); });
+                    static auto cache1Hook = safetyhook::create_mid(cache1.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp, regs.esi, true); });
+                }
                 faceExecute = reinterpret_cast<DrawExecute>(faceVtable[1]);
                 injector::WriteMemory(&faceVtable[1], reinterpret_cast<void*>(&FaceExecute), true);
                 colorWriteExecute = reinterpret_cast<DrawExecute>(colorWriteVtable[1]);
@@ -1141,6 +1193,7 @@ namespace
                     bViewCullSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowViewCulling", 1) != 0;
                     bViewCulling = bViewCullSetting && bFaceHooks;
                     bSkipLeftOut = iniReader.ReadInteger("PERFORMANCE", "SkipLeftOutDraws", 1) != 0;
+                    bPlaneDepth = iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowPlaneDepth", 1) != 0;
                     FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s), LampShadowRangeCulling %d (%s), LampShadowSmallCull %d (%s), LampShadowConeCulling %d (%s), LampShadowViewCulling %d (%s), SkipLeftOutDraws %d\n",
                         int(bDrawLog), int(bFaceCullingSetting), !bFaceCullingSetting ? "off" : bFaceCulling ? "on" : "no hooks",
                         int(bRangeCullingSetting), !bRangeCullingSetting ? "off" : bRangeCulling ? "on" : "no hooks",
