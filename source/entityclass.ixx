@@ -191,6 +191,9 @@ namespace
     // triangle's plane; it reads the lamp of the half drawn from these pixel shader constants, set as the half starts
     bool bPlaneDepth = true;
     constexpr UINT kPlaneDepthLamp = 48, kPlaneDepthAxis = 49, kPlaneDepthViewport = 50, kPlaneDepthX = 55;
+    // c49.w for on: the patch takes no other value, c49 being set by other shaders too, and the shader draws outside
+    // the halves marked here (where nothing writes zeros)
+    constexpr float kPlaneDepthOn = 1234.5f;
     uintptr_t modelInfos = 0;       // CE 0x1295cd8, model infos by index
     // DrawsPerEntity: by model index (CDrawEntityDC +0x30, CDrawFragTypeDC +0x58)
     volatile uint8_t modelDraws[0x10000] = {};
@@ -665,13 +668,13 @@ namespace
             if (pDevice && SUCCEEDED(RageDirect3DDevice9::RealDevice(pDevice)->GetViewport(&viewport)) && viewport.Width && viewport.Height)
             {
                 values[0][0] = o.position[0], values[0][1] = o.position[1], values[0][2] = o.position[2], values[0][3] = 1.0f / o.radius;
-                values[1][0] = o.axis[0], values[1][1] = o.axis[1], values[1][2] = o.axis[2], values[1][3] = 1.0f;
+                values[1][0] = o.axis[0], values[1][1] = o.axis[1], values[1][2] = o.axis[2], values[1][3] = kPlaneDepthOn;
                 values[2][0] = float(viewport.X), values[2][1] = float(viewport.Y);
                 values[2][2] = 2.0f / float(viewport.Width), values[2][3] = 2.0f / float(viewport.Height);
                 values[3][0] = o.xAxis[0], values[3][1] = o.xAxis[1], values[3][2] = o.xAxis[2];
             }
         }
-        // Every half, zeros too: the patch reads c49.w as on, and the registers keep whatever was set in them last; left
+        // Every half, zeros too: the patch read any non-zero c49.w as on, and the registers keep whatever was set in them last; left
         // unwritten while off (LampShadowAxis 0 or 2, LampShadowPlaneDepth 0) a stale non-zero c49.w had it compute
         // depths from leftovers, and cars' and rails' shadows in a tunnel came out as curved bands and spikes
         auto pDevice = rage::grcDevice::GetD3DDevice();

@@ -2,12 +2,12 @@ diff --git a/win32_30_nv8/shadowZ/shadowZPS1.asm b/win32_30_nv8/shadowZ/shadowZP
 index e15faf0f..38fe304a 100644
 --- a/win32_30_nv8/shadowZ/shadowZPS1.asm
 +++ b/win32_30_nv8/shadowZ/shadowZPS1.asm
-@@ -11,16 +11,70 @@
+@@ -11,16 +11,72 @@
  //   Name                 Reg   Size
  //   -------------------- ----- ----
  //   gShadowParam14151617 c56      1
 +//
-+// FusionFix: shadowz_plane_depth.patch: c48 the lamp (position, 1 / radius), c49 its halves' axis (w: on), c50 the viewport (x, y, 2 / width,
++// FusionFix: shadowz_plane_depth.patch: c48 the lamp (position, 1 / radius), c49 its halves' axis (w: 1234.5 on), c50 the viewport (x, y, 2 / width,
 +// 2 / height), c55 its x axis, set by EntityClass for each half of a lamp's map
  //
  
@@ -16,7 +16,7 @@ index e15faf0f..38fe304a 100644
      def c0, 0.00999999978, 0, 0, 0
 -    dcl_texcoord1 v0.zw
 +    def c1, 1, -1, 2, 0.0799999982 // FusionFix: shadowz_plane_depth.patch: 1, -1, 2, the least cosine of the texel's ray against the surface
-+    def c2, 0.5, 1.5, 0, 0 // FusionFix: shadowz_plane_depth.patch: how far the plane's depth may be from the interpolated one
++    def c2, 0.5, 1.5, -1234.5, 0.5 // FusionFix: shadowz_plane_depth.patch: how far the plane's depth may be from the interpolated one; c49.w's key for on
 +    dcl_texcoord1 v0
 +    dcl vPos.xy
      add r0.x, c0.x, -v0.z
@@ -71,7 +71,9 @@ index e15faf0f..38fe304a 100644
 +    cmp r10.x, r10.x, r9.z, v0.w
 +    abs r11.x, c56.x
 +    cmp r10.x, -r11.x, r10.x, v0.w // only the paraboloid halves (c56.x 0), not the cube faces a cached map is baked from (3)
-+    cmp r10.x, -c49_abs.w, v0.w, r10.x
++    add r11.y, c49.w, c2.z // on only with c49.w the key: c49 is other shaders' too, and this shader draws outside a marked half
++    add r11.y, r11_abs.y, -c2.w
++    cmp r10.x, r11.y, v0.w, r10.x
 +    mov oC0, r10.x
  
  // approximately 5 instruction slots used
