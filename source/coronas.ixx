@@ -244,6 +244,9 @@ namespace CoronaRender
     // For a pass from another view: the part of the list made for it (carmirrors.ixx puts the coronas its mirror sees
     // after the game camera's), by the list's buffer; false draws none. Unset, the whole list.
     export bool (*pOtherRange)(uint32_t buffer, int32_t& first, int32_t& count) = nullptr;
+    // True while the pass is one RenderSkip leaves out (its target never locked, its draws dropped): the water's
+    // reflection while no water is seen still called this every frame, 14000 quads built for nothing (renderskip.ixx)
+    export bool (*pPassDropped)() = nullptr;
 
     int32_t nMode = 1;                      // 0: the game's, 1: ours without what is out of view, 2: ours, all of them
     float* pCamera = nullptr;               // CE 0x128e340, the game camera's position, where it looks 8 floats before
@@ -340,6 +343,8 @@ namespace CoronaRender
     {
         if (!nMode || !pFunction)
             return false;
+        if (pPassDropped && pPassDropped())
+            return true;
         if (!bReady && !bFailed)
         {
             bReady = Read();

@@ -17,6 +17,7 @@ import comvars;
 import temporal;
 import vtablepatch;
 import inireload;
+import coronas;
 
 // Passes of the game left out on the GPU, by the target they draw into. grcTextureFactoryPC::LockRenderTarget and
 // UnlockRenderTarget (its vtable slots 15 and 16, index 0) say which target the game draws into; the device's draws,
@@ -937,6 +938,7 @@ public:
             bFarCascadesHalfRate = iniReader.ReadInteger("PERFORMANCE", "FarCascadesHalfRate", 1) != 0;
             bMidCascadeHalfRate = iniReader.ReadInteger("PERFORMANCE", "MidCascadeHalfRate", 0) != 0;
             bTrace = iniReader.ReadInteger("DEBUG", "RenderSkipTrace", 0) != 0;
+            CoronaRender::pPassDropped = &DropsDraws;
             fSunLowBelow = iniReader.ReadFloat("PERFORMANCE", "SunShadowsMinElevation", 8.0f);
             // At init: the hook that fills the parameters walks the same vector
             nSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
