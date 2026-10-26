@@ -631,9 +631,12 @@ public:
                 // Last, after every check of the selection's bytes; its tile layout is kept after each selection run.
                 if (PlayerShadowAllocation::ready.load(std::memory_order_acquire))
                 {
-                    ShadowCache16::Install(iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowCaches", 16) >= 16);
+                    ShadowCache16::Install(iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowCaches", 32),
+                        iniReader.ReadFloat("NIGHTSHADOWS", "CacheWholeTileDistance", 25.0f));
                     if (ShadowCache16::enabled)
                         PlayerShadowAllocation::layOutCaches = ShadowCache16::LayOut;
+                    if (ShadowCache16::moved)
+                        PlayerShadowAllocation::cacheChoice = ShadowCache16::CacheChoice;
                 }
                 else ShadowCache16::status = "allocation_unavailable";
                 PropCaches::Install(iniReader.ReadInteger("NIGHTSHADOWS", "PropsInLampCaches", 1) != 0,

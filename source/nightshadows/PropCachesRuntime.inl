@@ -103,7 +103,7 @@ namespace PropCaches
             .Bytes(0x978366, {0xB9}).Address(0x978367, 0x1214C90)   // mov ecx, 0x1614C90 (the phase numbers)
             .Bytes(0x6E73B1, {0xF7,0x46,0x24,0x00,0x80,0x00,0x00})  // test [esi+0x24], 0x8000
             .Bytes(0x977A88, {0x3B,0xBD}).Address(0x977A8A, 0xD9F1F4) // cmp edi, [ebp+0x119F1F4]
-            .Bytes(0x977D49, {0x89,0xB8}).Address(0x977D4B, 0xDA0BFC) // mov [eax+0x11A0BFC], edi
+            .Bytes(0x977D49, {0x89,0xB8})                             // mov [eax+record 0 +0xEC], edi (LampShadowCaches 32 moves it)
             .Bytes(0x6E6FF5, {0x8B,0x04,0x85}).Address(0x6E6FF8, 0xE95CD8); // mov eax, [eax*4+0x1295CD8]: the model infos
         if (!check) { status = check.Status(); return; }
         numbered = safetyhook::create_mid(game + 0x978370, Numbered);

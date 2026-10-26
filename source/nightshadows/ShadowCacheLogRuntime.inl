@@ -45,7 +45,7 @@ namespace PlayerShadowAllocation::CacheLog
         std::array<Entry, fusionfix::shadows::MaxCacheEntries> entries{};
         for (unsigned i = 0; i < fusionfix::shadows::cacheEntries; ++i)
         {
-            const auto entry = gameBase + allocation::CacheAge0Rva + i * 0x100;
+            const auto entry = fusionfix::shadows::CacheRecord(gameBase, i) + 0xDC;
             entries[i] = {*reinterpret_cast<const uint32_t*>(entry + 4), *reinterpret_cast<const int32_t*>(entry + 8),
                           *reinterpret_cast<const float*>(entry - 0xC)};
         }

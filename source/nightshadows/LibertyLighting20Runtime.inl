@@ -330,8 +330,7 @@ namespace Lighting20
                     (light.mFlags & rage::LF_VEHICLE) || !light.mCastShadows || light.mCastShadows == -1 ||
                     light.mShadowCacheIndex < 0 || light.mShadowCacheIndex >= static_cast<int>(fusionfix::shadows::cacheEntries) || !std::isfinite(light.mRadius) || light.mRadius <= 0)
                     continue;
-                const auto cached = *reinterpret_cast<const uint32_t*>(game + fusionfix::shadows::ce::allocation::CacheAge0Rva +
-                    static_cast<uint32_t>(light.mShadowCacheIndex) * 0x100 + 4);
+                const auto cached = *reinterpret_cast<const uint32_t*>(fusionfix::shadows::CacheRecord(game, static_cast<uint32_t>(light.mShadowCacheIndex)) + 0xE0);
                 if (cached != static_cast<uint32_t>(light.mCastShadows)) continue;
                 light.mFlags |= rage::LF_DYNAMIC_SHADOW;
                 ++lampsPromoted;

@@ -30,7 +30,8 @@ namespace ShadowLookupGuard {
         }
         fusionfix::shadows::ShadowLookupSnapshot s{};
         const auto dynamic = base + shadow_lookup_layout::DynamicKey0Rva + current * 0x880;
-        const auto cached = base + shadow_lookup_layout::StaticKey0Rva + current * 0x1000;
+        // The key (+0xE0) of the buffer's copy of cache record k
+        const auto cached = fusionfix::shadows::CacheCopy(base, current, 0) + 0xE0;
         if (nativeResult < 8) {
             const auto address = dynamic + nativeResult * 0x110;
             s.dynamicKeys[nativeResult] = *reinterpret_cast<const uint32_t*>(address);
