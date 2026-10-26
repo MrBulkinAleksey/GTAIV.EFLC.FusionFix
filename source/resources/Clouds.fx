@@ -503,7 +503,11 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
                 // then run at least past where the cloud was found and FINE_MISSES more: stopping
                 // as soon as they missed, where the detail had eaten the cloud at that point, the
                 // coarse step found it again, stepped back again and spent the ray going in circles.
-                t = max(t - fine * COARSE_STEP, t0);
+                // No nearer than the layer's edge and a pixel's share of a fine step: clamped to the
+                // edge itself, every ray into a closed deck started its fine steps there, with no
+                // jitter, and where the first of them came to lie above the deck's base drew a sharp
+                // ring round the sky at one height (about 47 degrees up in the rain).
+                t = max(t - fine * COARSE_STEP, t0 + fine * jitter);
                 fineLeft = COARSE_STEP + FINE_MISSES;
             }
             else
