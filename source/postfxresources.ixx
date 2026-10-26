@@ -967,6 +967,8 @@ public:
     // lights near them, up to PropShapesPerLight shapes a light (see VehicleBoxShadows); a lamp post's post is
     // PropShapePostRadius thick, its arm PropShapeArmRadius
     bool bPropShapeShadows = true;
+    // PropsInLampCaches (nightshadows): a cached lamp's map holds the props it lights, so they take no shapes from it
+    bool bPropsInLampCaches = true;
     float fPropShapeDistance = 80.0f, fPropShapePostRadius = 0.12f, fPropShapeArmRadius = 0.08f;
     float fPropShapeScale = 0.85f; // of the bounds across, for a capsule's radius and a box's length and width
     bool bPropShapeViewCulling = true; // props whose shadow cannot fall in the camera's view take no shapes
@@ -2044,6 +2046,7 @@ public:
             IniFlag("PERFORMANCE", "LightEarlyOut", &PostFxResource::bLightEarlyOut, 1),
             IniFlag("PERFORMANCE", "LightVolumeDepth", &PostFxResource::bLightVolumeDepth, 1),
             IniFlag("NIGHTSHADOWS", "PropShapeShadows", &PostFxResource::bPropShapeShadows, 1),
+            IniFlag("NIGHTSHADOWS", "PropsInLampCaches", &PostFxResource::bPropsInLampCaches, 1),
             IniFloat("NIGHTSHADOWS", "PropShapeDistance", &PostFxResource::fPropShapeDistance, 80.0f, 10.0f, 200.0f),
             IniFloat("NIGHTSHADOWS", "PropShapePostRadius", &PostFxResource::fPropShapePostRadius, 0.12f, 0.03f, 0.5f),
             IniFloat("NIGHTSHADOWS", "PropShapeArmRadius", &PostFxResource::fPropShapeArmRadius, 0.08f, 0.02f, 0.5f),

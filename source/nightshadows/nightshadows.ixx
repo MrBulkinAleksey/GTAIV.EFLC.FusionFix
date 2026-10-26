@@ -366,6 +366,7 @@ namespace CShadows
 #include "ShadowAllocationRuntime.inl"
 #include "ShadowCacheLogRuntime.inl"
 #include "ShadowCache16Runtime.inl"
+#include "PropCachesRuntime.inl"
 #include "NearbyVehicleRuntime36.inl"
 #include "ShadowLookupRuntime.inl"
 #include "ShadowCasterRuntime.inl"
@@ -634,6 +635,7 @@ public:
                         PlayerShadowAllocation::layOutCaches = ShadowCache16::LayOut;
                 }
                 else ShadowCache16::status = "allocation_unavailable";
+                PropCaches::Install(iniReader.ReadInteger("NIGHTSHADOWS", "PropsInLampCaches", 1) != 0);
             }
             else
             {

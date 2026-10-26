@@ -1313,6 +1313,9 @@ export struct VehicleBoxShadows
             // nothing there; its cache shows those with the bit (mode 0). Each a second, square shadow beside the real.
             if ((hasMap && !p.post) || (light.mShadowCacheIndex >= 0 && p.inMaps))
                 continue;
+            // Its cache has the props in it too (PropsInLampCaches)
+            if (light.mShadowCacheIndex >= 0 && !p.post && R.bPropsInLampCaches)
+                continue;
             // A car light's map with the posts in it (PostShadowsFromCarLights)
             if (hasMap && p.post && R.bPostShadowsFromCarLights && (light.mFlags & rage::LF_VEHICLE))
                 continue;
