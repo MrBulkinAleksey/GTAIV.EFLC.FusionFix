@@ -12,7 +12,10 @@ namespace ShadowLookupGuard {
     }
     static void Initialize() noexcept {
         base = GameBase();
-        ready = shadow_lookup_layout::Validate(base);
+        ready = fusionfix::shadows::cacheRecordsAt
+            ? shadow_lookup_layout::Validate(base, static_cast<uint32_t>(fusionfix::shadows::CacheRecord(base, 0) + 0xDC),
+                static_cast<uint32_t>(fusionfix::shadows::CacheCopy(base, 0, 0) + 0xE0))
+            : shadow_lookup_layout::Validate(base);
     }
     static int Filter(int nativeResult, uint32_t key, int cache, int before) noexcept {
         const auto traceResult=[&](int result,int buffer) noexcept {
