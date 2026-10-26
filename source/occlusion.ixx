@@ -458,6 +458,11 @@ namespace Occlusion
             // How far u and v move per metre across the view at w = 1
             const float perMetreU = g.turnU, perMetreV = g.turnV;
             const float grow = p.move * fMoveGrowth;
+            // Most are a texel or two of the first level, well inside the screen: read there straight away, as
+            // TestRect would; the rest go through it (the profile had the test cost more than half the quads it saved)
+            const float* level0 = g.data[0].data();
+            const int width0 = g.width[0], height0 = g.height[0];
+            const float scaleU = g.scaleU, scaleV = g.scaleV;
             kept = 0;
             for (size_t k = 0; k < drawn.size(); ++k)
             {
@@ -476,7 +481,25 @@ namespace Occlusion
                     const float inverse = 1.0f / w;
                     const float u = x * inverse * 0.5f + 0.5f, v = 0.5f - y * inverse * 0.5f;
                     const float du = r * perMetreU * g.wLength * inverse, dv = r * perMetreV * g.wLength * inverse;
-                    hidden = TestRect(p, u - du, u + du, v - dv, v + dv, nearest, nullptr) == Hidden;
+                    const float cx = u * scaleU, cy = v * scaleV, ex = du * scaleU, ey = dv * scaleV;
+                    if (ex < 1.5f && ey < 1.5f && cx - ex >= 0.0f && cy - ey >= 0.0f && cx + ex < scaleU && cy + ey < scaleV)
+                    {
+                        const int tx0 = int(cx - ex), tx1 = std::min(int(cx + ex), width0 - 1);
+                        const int ty0 = int(cy - ey), ty1 = std::min(int(cy + ey), height0 - 1);
+                        hidden = true;
+                        for (int ty = ty0; ty <= ty1 && hidden; ++ty)
+                        {
+                            const float* row = level0 + size_t(ty) * width0;
+                            for (int tx = tx0; tx <= tx1; ++tx)
+                                if (row[tx] >= nearest)
+                                {
+                                    hidden = false;
+                                    break;
+                                }
+                        }
+                    }
+                    else
+                        hidden = TestRect(p, u - du, u + du, v - dv, v + dv, nearest, nullptr) == Hidden;
                 }
                 coronasHidden += hidden;
                 if (!hidden || nCoronas == 2)
