@@ -405,8 +405,8 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     {
         const D3DXVECTOR4 style(float(R.nVolumetricCloudsStyle), R.fVolumetricCloudsStyleCut, R.fVolumetricCloudsStyleDetail, R.fVolumetricCloudsStyleBase);
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4Style"), &style);
-        const float styleSoft[2] = { R.fVolumetricCloudsStyleSoftBase, R.fVolumetricCloudsStyleSoftTop };
-        effect->SetFloatArray(effect->GetParameterByName(nullptr, "vec2StyleSoft"), styleSoft, 2);
+        const D3DXVECTOR4 styleSoft(R.fVolumetricCloudsStyleSoftBase, R.fVolumetricCloudsStyleSoftTop, R.fVolumetricCloudsStyleScale, 0.0f);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4StyleSoft"), &styleSoft);
         const D3DXVECTOR4 styleLight(float(R.nVolumetricCloudsStyleLight), R.fVolumetricCloudsStyleSun, R.fVolumetricCloudsStyleAmbient, R.fVolumetricCloudsStylePhase);
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4StyleLight"), &styleLight);
     }

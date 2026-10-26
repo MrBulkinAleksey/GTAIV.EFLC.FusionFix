@@ -600,13 +600,16 @@ public:
     float fVolumetricCloudsDetailFlow = 0.0f;
     // VolumetricCloudsStyle 1: the clouds built as CloudWorks builds them, the billows growing the heap (the heap's
     // density times 1 + StyleDetail times the billows, cut at StyleCut, StyleSoftBase to StyleSoftTop wide) instead
-    // of eating into it, and the density at the base StyleBase of the top's. Hidden, live.
+    // of eating into it, and the density at the base StyleBase of the top's. 2: the billows, StyleScale times ours in
+    // size, added to the heap (StyleDetail of them either way of their mean), so they grow the outline past the map's
+    // edge as well. Hidden, live.
     int nVolumetricCloudsStyle = 0;
     float fVolumetricCloudsStyleCut = 0.25f;
     float fVolumetricCloudsStyleDetail = 1.5f;
     float fVolumetricCloudsStyleBase = 0.2f;
     float fVolumetricCloudsStyleSoftBase = 0.35f;
     float fVolumetricCloudsStyleSoftTop = 0.1f;
+    float fVolumetricCloudsStyleScale = 0.3f;
     // VolumetricCloudsStyleLight 1: lit as CloudWorks lights them, the sun's beam alone (StyleSun) through a phase even
     // all round with a peak towards the sun (StylePhase), and the sky's light over the whole cloud (StyleAmbient),
     // without our lobes. Hidden, live.
@@ -2137,12 +2140,13 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsSaturation", &PostFxResource::fVolumetricCloudsSaturation, 1.0f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsMottle", &PostFxResource::fVolumetricCloudsMottle, 0.4f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsDetailFlow", &PostFxResource::fVolumetricCloudsDetailFlow, 0.0f, 0.0f, 4.0f),
-            IniInt("WEATHER", "VolumetricCloudsStyle", &PostFxResource::nVolumetricCloudsStyle, 0, 0, 1),
+            IniInt("WEATHER", "VolumetricCloudsStyle", &PostFxResource::nVolumetricCloudsStyle, 0, 0, 2),
             IniFloat("WEATHER", "VolumetricCloudsStyleCut", &PostFxResource::fVolumetricCloudsStyleCut, 0.25f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsStyleDetail", &PostFxResource::fVolumetricCloudsStyleDetail, 1.5f, 0.0f, 8.0f),
             IniFloat("WEATHER", "VolumetricCloudsStyleBase", &PostFxResource::fVolumetricCloudsStyleBase, 0.2f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsStyleSoftBase", &PostFxResource::fVolumetricCloudsStyleSoftBase, 0.35f, 0.01f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsStyleSoftTop", &PostFxResource::fVolumetricCloudsStyleSoftTop, 0.1f, 0.01f, 2.0f),
+            IniFloat("WEATHER", "VolumetricCloudsStyleScale", &PostFxResource::fVolumetricCloudsStyleScale, 0.3f, 0.05f, 2.0f),
             IniInt("WEATHER", "VolumetricCloudsStyleLight", &PostFxResource::nVolumetricCloudsStyleLight, 0, 0, 1),
             IniFloat("WEATHER", "VolumetricCloudsStyleSun", &PostFxResource::fVolumetricCloudsStyleSun, 1.0f, 0.0f, 10.0f),
             IniFloat("WEATHER", "VolumetricCloudsStyleAmbient", &PostFxResource::fVolumetricCloudsStyleAmbient, 1.0f, 0.0f, 10.0f),
