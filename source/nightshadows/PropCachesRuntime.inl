@@ -64,6 +64,12 @@ namespace PropCaches
         if (!bit || phaseFrame.load(std::memory_order_relaxed) != Frame()) return;
         const auto entity = static_cast<uintptr_t>(regs.esi);
         if (((*reinterpret_cast<const uint32_t*>(entity + 0x28) >> 6) & 15) != 4) return;
+        // A weapon in someone's hand is an object too (its model info's type, vfunc +0xC, is 4; a prop's 1):
+        // baked in, it would hang there and redraw the cache each time it moved
+        const auto model = *reinterpret_cast<const int16_t*>(entity + 0x2E);
+        const auto info = model >= 0 ? reinterpret_cast<const uintptr_t*>(game + 0xE95CD8)[model] : 0;
+        if (!info || reinterpret_cast<uint8_t(__thiscall*)(uintptr_t)>((*reinterpret_cast<const uintptr_t* const*>(info))[3])(info) >= 4)
+            return;
         const auto matrix = *reinterpret_cast<const float* const*>(entity + 0x20);
         if (!matrix) return;
         const float dx = matrix[12] - lamp[0].load(std::memory_order_relaxed), dy = matrix[13] - lamp[1].load(std::memory_order_relaxed),
@@ -95,7 +101,8 @@ namespace PropCaches
             .Bytes(0x978366, {0xB9}).Address(0x978367, 0x1214C90)   // mov ecx, 0x1614C90 (the phase numbers)
             .Bytes(0x6E73B1, {0xF7,0x46,0x24,0x00,0x80,0x00,0x00})  // test [esi+0x24], 0x8000
             .Bytes(0x977A88, {0x3B,0xBD}).Address(0x977A8A, 0xD9F1F4) // cmp edi, [ebp+0x119F1F4]
-            .Bytes(0x977D49, {0x89,0xB8}).Address(0x977D4B, 0xDA0BFC); // mov [eax+0x11A0BFC], edi
+            .Bytes(0x977D49, {0x89,0xB8}).Address(0x977D4B, 0xDA0BFC) // mov [eax+0x11A0BFC], edi
+            .Bytes(0x6E6FF5, {0x8B,0x04,0x85}).Address(0x6E6FF8, 0xE95CD8); // mov eax, [eax*4+0x1295CD8]: the model infos
         if (!check) { status = check.Status(); return; }
         numbered = safetyhook::create_mid(game + 0x978370, Numbered);
         collect = safetyhook::create_mid(game + 0x6E73B1, Collect);
