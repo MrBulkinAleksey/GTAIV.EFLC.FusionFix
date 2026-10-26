@@ -307,10 +307,8 @@ namespace Lighting20
         static bool modelLightsNeedCasters = true; // ModelLightShadowsNeedCasters
         static float modelLightCacheDistance = 15.0f; // ModelLightCacheDistance
         static std::atomic<uint32_t> modelLightsCached{0};
-        static uint32_t modelLightCacheBudget = 8; // ModelLightCacheBudget
-        static std::atomic<uint32_t> modelLightsBudgeted{0};
-        static uint32_t interiorLightCacheBudget = 8; // InteriorLightCacheBudget
-        static std::atomic<uint32_t> interiorLightsCached{0};
+        static uint32_t lampCacheBudget = 12; // LampCacheBudget
+        static std::atomic<uint32_t> lampsBudgeted{0}, modelLightsBudgeted{0}, interiorLightsBudgeted{0};
         static float mergeDistance = 1.5f; // ExtraLightMergeDistance
 
         struct CoronaSettings
@@ -437,8 +435,7 @@ namespace Lighting20
             modelLights = modelLightMode != 0;
             modelLightOwners = modelLightMode == 2 ? 1 : modelLightMode == 3 ? 2 : 0; // FindKeyOwner's kinds
             modelLightCacheDistance = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "ModelLightCacheDistance", 15.0f), 0.0f, 60.0f);
-            modelLightCacheBudget = static_cast<uint32_t>(std::clamp(ini.ReadInteger("NIGHTSHADOWS", "ModelLightCacheBudget", 8), 0, 24));
-            interiorLightCacheBudget = static_cast<uint32_t>(std::clamp(ini.ReadInteger("NIGHTSHADOWS", "InteriorLightCacheBudget", 8), 0, 24));
+            lampCacheBudget = static_cast<uint32_t>(std::clamp(ini.ReadInteger("NIGHTSHADOWS", "LampCacheBudget", 12), 0, 24));
             coronas = ini.ReadInteger("NIGHTSHADOWS", "CoronaLightShadows", 1) != 0;
             corona.approximate = ini.ReadInteger("NIGHTSHADOWS", "CoronaLightApproximation", 1) != 0;
             corona.radiusPerSize = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightRadiusPerSize", 12.0f), 0.1f, 1024.0f);
@@ -643,11 +640,15 @@ namespace Lighting20
     // Until it has a cache entry the game gives a light with flag 2 no slot either (the selection's candidate loop sends
     // it to the cache path only, CE 0x927D24).
     //
-    // ModelLightCacheBudget: beyond that distance, within the lamp shadow reach, the nearest model lights of this
-    // frame's list get flag 2 too, as many as make the model lights given it this many (those within the distance
-    // count). By distance alone a shop front's light seen from 30 m had neither a cache nor (idle) a slot, so no
-    // shadow until you came near; the budget keeps them from taking the street lamps' entries. A light given it last
-    // run competes as if CacheEvictMargin nearer, so two at about the same distance do not take turns at an entry.
+    // LampCacheBudget: one rule for every light that casts a shadow and has no cached map of its own (flag 4 without 2):
+    // the game's lamps with a dynamic shadow only, its lights inside (tunnel and room lamps, flags 0x25) and the model
+    // lights we give a shadow (those within ModelLightCacheDistance always, above). The nearest of them get flag 2 too,
+    // this many in all within the lamp shadow reach, so their static world comes from a cached map baked from cube faces
+    // (exact) and their slot draws only the cars and peds over it. Drawn straight into a slot's paraboloid halves each
+    // frame, a tunnel road shadowed itself in curved bands and a shop front's awning shadowed with a round hole. Nearest
+    // as the game picks which to bake next (LampCacheViewPriority): beyond 10 m one out of view counts up to three times
+    // as far. A light given it last run competes as if 1.25 times nearer, so two at about the same distance do not take
+    // turns at an entry; the street lamps the game caches itself keep theirs.
     struct CacheBudget
     {
         static constexpr float Margin = 1.25f;
@@ -686,69 +687,59 @@ namespace Lighting20
             return static_cast<uint32_t>(take);
         }
     };
-    static CacheBudget modelLightBudget;
+    static CacheBudget lampBudget;
 
-    static void CacheNearModelLights(rage::CLightSource* lights, uint32_t count) noexcept
+    static void CacheLamps(rage::CLightSource* lights, uint32_t count) noexcept
     {
-        auto& B = modelLightBudget;
-        if (!World::On() || World::modelLightCacheDistance <= 0.0f) { B.keptCount = 0; return; }
+        auto& B = lampBudget;
+        if (!bExtraNightShadows) { B.keptCount = 0; return; }
         const auto& state = PlayerShadowAllocation::state;
+        const bool models = World::On() && World::modelLightCacheDistance > 0.0f;
         const float close = World::modelLightCacheDistance;
         const int feet = fusionfix::shadows::ShadowReachFeet(ShadowReachStep(false));
         const float reach = (std::max)(close, feet > 0 ? feet * 0.3048f : 60.0f);
-        const uint32_t budget = World::modelLightCacheBudget;
+        const uint32_t budget = World::lampCacheBudget;
         uint32_t given = 0;
         B.candidates.clear();
         for (uint32_t i = 0; i < count; ++i)
         {
             auto& l = lights[i];
-            if ((l.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_VEHICLE)) || (l.mType != rage::LT_POINT && l.mType != rage::LT_SPOT) ||
-                Ours::Of(static_cast<uint32_t>(l.mCastShadows)) != Ours::ModelLight)
+            if ((l.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_VEHICLE)) || (l.mType != rage::LT_POINT && l.mType != rage::LT_SPOT))
+                continue;
+            // A model light idle (IdleModelLights took its flag 4) still lights from a cache
+            const bool model = Ours::Of(static_cast<uint32_t>(l.mCastShadows)) == Ours::ModelLight;
+            if (model ? !models : !(l.mFlags & rage::LF_DYNAMIC_SHADOW))
                 continue;
             const float dx = l.mPosition.x - state.player.x, dy = l.mPosition.y - state.player.y, dz = l.mPosition.z - state.player.z;
             const float d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 <= close * close)
+            if (model && d2 <= close * close)
             {
                 l.mFlags |= rage::LF_STATIC_SHADOW;
                 ++World::modelLightsCached;
                 ++given;
+                continue;
             }
-            else if (budget && d2 <= reach * reach)
-                B.Offer(l, i, std::sqrt(d2));
+            if (!budget || d2 > reach * reach)
+                continue;
+            float d = std::sqrt(d2);
+            if (d > 10.0f)
+            {
+                const float weight = fusionfix::shadows::ShadowViewWeight(state.view, { l.mPosition.x, l.mPosition.y, l.mPosition.z },
+                    { l.mDirection.x, l.mDirection.y, l.mDirection.z }, l.mRadius, false);
+                if (std::isfinite(weight) && weight >= 1.0f && weight < 3.0f)
+                    d *= 3.0f / weight;
+            }
+            B.Offer(l, i, d);
         }
-        World::modelLightsBudgeted += B.Give(lights, given < budget ? budget - given : 0);
-    }
-
-    // InteriorLightCacheBudget: the nearest lights inside (0x20) that cast a shadow, the game's tunnel and room lamps
-    // (flags 0x25), get a cached map (flag 2) too, this many within the lamp shadow reach. The game gives them none, so
-    // their slot drew the static world straight into the paraboloid halves each frame: the depth inside a tunnel road's
-    // big triangles is interpolated along the chord, a metre off the road either way, and the road shadowed itself in
-    // curved bands (shadow_probe: the map held 4.11 m for a point 5.30 m from the lamp, 6.35 m beside it). The cache is
-    // baked from cube faces, exact; cars and peds are still drawn over it in the slot.
-    static CacheBudget interiorLightBudget;
-
-    static void CacheInteriorLights(rage::CLightSource* lights, uint32_t count) noexcept
-    {
-        auto& B = interiorLightBudget;
-        const uint32_t budget = World::interiorLightCacheBudget;
-        if (!bExtraNightShadows || !budget) { B.keptCount = 0; return; }
-        const auto& state = PlayerShadowAllocation::state;
-        const int feet = fusionfix::shadows::ShadowReachFeet(ShadowReachStep(false));
-        const float reach = feet > 0 ? feet * 0.3048f : 60.0f;
-        B.candidates.clear();
+        const uint32_t room = given < budget ? budget - given : 0;
+        World::lampsBudgeted += B.Give(lights, room);
         for (uint32_t i = 0; i < count; ++i)
         {
             const auto& l = lights[i];
-            if ((l.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_VEHICLE)) || !(l.mFlags & rage::LF_DYNAMIC_SHADOW) ||
-                !(l.mFlags & rage::LF_INTERIOR) || (l.mType != rage::LT_POINT && l.mType != rage::LT_SPOT) ||
-                Ours::Of(static_cast<uint32_t>(l.mCastShadows)) != Ours::None)
-                continue;
-            const float dx = l.mPosition.x - state.player.x, dy = l.mPosition.y - state.player.y, dz = l.mPosition.z - state.player.z;
-            const float d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 <= reach * reach)
-                B.Offer(l, i, std::sqrt(d2));
+            if (!(l.mFlags & rage::LF_STATIC_SHADOW) || !B.Kept(static_cast<uint32_t>(l.mCastShadows))) continue;
+            if (Ours::Of(static_cast<uint32_t>(l.mCastShadows)) == Ours::ModelLight) ++World::modelLightsBudgeted;
+            else if (l.mFlags & rage::LF_INTERIOR) ++World::interiorLightsBudgeted;
         }
-        World::interiorLightsCached += B.Give(lights, budget);
     }
 
     // ---------------------------------------------------------------- lamp pairs
@@ -1193,8 +1184,7 @@ namespace Lighting20
         Arcade::Place(lights, count);
         MergeWithNative(lights, count);
         IdleModelLights(lights, count);
-        CacheNearModelLights(lights, count);
-        CacheInteriorLights(lights, count);
+        CacheLamps(lights, count);
         Sharing::Apply(lights, count);
         Sharing::Duplicates(lights, count);
         Pairs::Find(lights, count);
@@ -1247,7 +1237,7 @@ namespace Lighting20
                 << " corona_refused=" << World::coronasRefused.load() << " corona_capped=" << World::coronasCapped.load()
                 << " arcade_moved=" << Arcade::moved.load() << " merged: coronas=" << World::coronasMerged.load() << " model_lights=" << World::modelLightsMerged.load()
                 << " model_lights_without_casters=" << World::modelLightsIdle.load()
-                << " model_lights_cached=" << World::modelLightsCached.load() << " model_lights_budgeted=" << World::modelLightsBudgeted.load() << " interior_lights_cached=" << World::interiorLightsCached.load() << " model_lights_other_owner=" << World::modelLightsOtherOwner.load()
+                << " model_lights_cached=" << World::modelLightsCached.load() << " lamps_budgeted=" << World::lampsBudgeted.load() << " (model " << World::modelLightsBudgeted.load() << ", inside " << World::interiorLightsBudgeted.load() << ')' << " model_lights_other_owner=" << World::modelLightsOtherOwner.load()
                 << " | buildings " << (Buildings::On() ? "on" : "off") << " passes=" << Buildings::passes.load()
                 << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load()
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
