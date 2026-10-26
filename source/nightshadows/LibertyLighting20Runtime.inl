@@ -301,6 +301,8 @@ namespace Lighting20
         static std::atomic<uint32_t> lampsPromoted{0}, modelLightsPromoted{0}, coronaLights{0}, coronasRefused{0}, coronasCapped{0};
         static std::atomic<uint32_t> coronasMerged{0}, modelLightsMerged{0}, modelLightsIdle{0};
         static bool modelLightsNeedCasters = true; // ModelLightShadowsNeedCasters
+        static float modelLightCacheDistance = 15.0f; // ModelLightCacheDistance
+        static std::atomic<uint32_t> modelLightsCached{0};
         static float mergeDistance = 1.5f; // ExtraLightMergeDistance
 
         struct CoronaSettings
@@ -416,6 +418,7 @@ namespace Lighting20
             pref = FusionFixSettings.GetRef("PREF_WORLD_LIGHT_SHADOWS");
             cachedLamps = ini.ReadInteger("NIGHTSHADOWS", "CachedLampShadows", 1) != 0;
             modelLights = ini.ReadInteger("NIGHTSHADOWS", "ModelLightShadows", 1) != 0;
+            modelLightCacheDistance = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "ModelLightCacheDistance", 15.0f), 0.0f, 60.0f);
             coronas = ini.ReadInteger("NIGHTSHADOWS", "CoronaLightShadows", 1) != 0;
             corona.approximate = ini.ReadInteger("NIGHTSHADOWS", "CoronaLightApproximation", 1) != 0;
             corona.radiusPerSize = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "CoronaLightRadiusPerSize", 12.0f), 0.1f, 1024.0f);
@@ -608,6 +611,33 @@ namespace Lighting20
                 l.mFlags &= ~rage::LF_DYNAMIC_SHADOW;
                 ++World::modelLightsIdle;
             }
+        }
+    }
+
+    // ModelLightCacheDistance: a model light given a shadow by us (World::PromoteModelLight) within this distance of you
+    // also gets a cached map (flag 2). The cache is baked from six 90-degree cube faces resampled into the paraboloid
+    // (slot mode 3, the rewarp technique), so its static world keeps straight edges, while a dynamic slot draws the
+    // paraboloid halves directly and bends what is near the lamp: a shop front's awning 1-3 m under its light shadowed
+    // the shutters with a round hole. With a car or ped in its light it keeps flag 4 and draws them over the cache
+    // (mode 4 with a cache index); idle (IdleModelLights took flag 4), it lights from the cache alone, without a slot.
+    // Until it has a cache entry the game gives a light with flag 2 no slot either (the selection's candidate loop sends
+    // it to the cache path only, CE 0x927D24).
+    static void CacheNearModelLights(rage::CLightSource* lights, uint32_t count) noexcept
+    {
+        if (!World::On() || World::modelLightCacheDistance <= 0.0f) return;
+        const auto& state = PlayerShadowAllocation::state;
+        const float reach = World::modelLightCacheDistance;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            auto& l = lights[i];
+            if ((l.mFlags & (rage::LF_STATIC_SHADOW | rage::LF_VEHICLE)) || (l.mType != rage::LT_POINT && l.mType != rage::LT_SPOT) ||
+                Ours::Of(static_cast<uint32_t>(l.mCastShadows)) != Ours::ModelLight)
+                continue;
+            const float dx = l.mPosition.x - state.player.x, dy = l.mPosition.y - state.player.y, dz = l.mPosition.z - state.player.z;
+            if (dx * dx + dy * dy + dz * dz > reach * reach)
+                continue;
+            l.mFlags |= rage::LF_STATIC_SHADOW;
+            ++World::modelLightsCached;
         }
     }
 
@@ -1053,6 +1083,7 @@ namespace Lighting20
         Arcade::Place(lights, count);
         MergeWithNative(lights, count);
         IdleModelLights(lights, count);
+        CacheNearModelLights(lights, count);
         Sharing::Apply(lights, count);
         Sharing::Duplicates(lights, count);
         Pairs::Find(lights, count);
@@ -1105,6 +1136,7 @@ namespace Lighting20
                 << " corona_refused=" << World::coronasRefused.load() << " corona_capped=" << World::coronasCapped.load()
                 << " arcade_moved=" << Arcade::moved.load() << " merged: coronas=" << World::coronasMerged.load() << " model_lights=" << World::modelLightsMerged.load()
                 << " model_lights_without_casters=" << World::modelLightsIdle.load()
+                << " model_lights_cached=" << World::modelLightsCached.load()
                 << " | buildings " << (Buildings::On() ? "on" : "off") << " passes=" << Buildings::passes.load()
                 << " masks=" << Buildings::masks.load() << " draws=" << Buildings::draws.load()
                 << " | shared maps " << (Sharing::enabled ? "on" : "off") << " lights=" << Sharing::shared.load()
