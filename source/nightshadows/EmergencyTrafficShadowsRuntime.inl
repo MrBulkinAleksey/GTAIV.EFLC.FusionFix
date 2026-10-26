@@ -53,7 +53,7 @@ namespace EmergencyTrafficShadows
         const auto* lights = CurrentLights(); const auto count = CurrentCount();
         if (count > 4096 || (count && reinterpret_cast<uintptr_t>(lights) < 0x10000)) return false;
         for (uint32_t i = 0; i < count; ++i) if (static_cast<uint32_t>(lights[i].mCastShadows) == key) return false;
-        for (unsigned i = 0; i < 8; ++i)
+        for (unsigned i = 0; i < fusionfix::shadows::cacheEntries; ++i)
             if (*reinterpret_cast<const uint32_t*>(game + allocation::CacheAge0Rva + i * 0x100 + 4) == key) return false;
         for (unsigned i = 0; i < 7; ++i)
             if (*reinterpret_cast<const uint32_t*>(game + allocation::DynamicPassFirstPositionRva + i * 0x110 + 0x30) == key) return false;

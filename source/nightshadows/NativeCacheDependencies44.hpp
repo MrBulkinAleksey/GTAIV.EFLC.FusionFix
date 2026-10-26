@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include "ShadowCacheCount.hpp"
 
 namespace fusionfix::shadows {
 struct NativeCacheEntry44 {
@@ -13,11 +14,11 @@ struct NativeCacheEntry44 {
 // choose the occupied entry strictly farther than the candidate. Preserve
 // native tie order. The only added rule is an explicit dependency exclusion.
 inline int NativeCacheChoice44(float candidateDistance,
-    const std::array<NativeCacheEntry44,8>& cache,std::uint8_t excluded=0) noexcept {
+    const std::array<NativeCacheEntry44,MaxCacheEntries>& cache,std::uint16_t excluded=0) noexcept {
     int unused=-1,furthest=-1;
     std::int32_t oldest=0;
     float distance=candidateDistance;
-    for(unsigned i=0;i<cache.size();++i) {
+    for(unsigned i=0;i<cacheEntries;++i) {
         if(excluded&(1u<<i))continue;
         const auto& e=cache[i];
         if(e.state==-1) {
@@ -27,8 +28,8 @@ inline int NativeCacheChoice44(float candidateDistance,
     return unused!=-1?unused:furthest;
 }
 inline int ProtectNativeCacheChoice44(int nativeResult,float candidateDistance,
-    const std::array<NativeCacheEntry44,8>& cache,std::uint8_t dependencies) noexcept {
-    if(nativeResult<0 || nativeResult>=8 || !(dependencies&(1u<<nativeResult))) return nativeResult;
+    const std::array<NativeCacheEntry44,MaxCacheEntries>& cache,std::uint16_t dependencies) noexcept {
+    if(nativeResult<0 || nativeResult>=static_cast<int>(cacheEntries) || !(dependencies&(1u<<nativeResult))) return nativeResult;
     return NativeCacheChoice44(candidateDistance,cache,dependencies);
 }
 }

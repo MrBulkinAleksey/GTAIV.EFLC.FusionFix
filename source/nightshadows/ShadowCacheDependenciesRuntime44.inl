@@ -7,7 +7,7 @@
         if(!state.stackAnchor || regs.esp!=state.stackAnchor ||
            !CTimer::m_frameCount || *CTimer::m_frameCount!=state.frame) {++cacheDependencyRejected;return;}
         const int native=static_cast<int>(regs.edx);
-        if(native<0 || native>=8)return;
+        if(native<0 || native>=static_cast<int>(fusionfix::shadows::cacheEntries))return;
         const auto* lights=CurrentLights();const auto count=CurrentCount();
         const auto address=reinterpret_cast<uintptr_t>(lights);
         if(address<0x10000 || count>4096 || address>UINTPTR_MAX-count*sizeof(rage::CLightSource)) {++cacheDependencyRejected;return;}
@@ -15,8 +15,8 @@
         if(candidate<0 || static_cast<uint32_t>(candidate)>=count || regs.esi!=static_cast<uint32_t>(candidate)) {++cacheDependencyRejected;return;}
         const float distance=*reinterpret_cast<const float*>(regs.esp+0x2C);
         if(!std::isfinite(distance)||distance<0){++cacheDependencyRejected;return;}
-        std::array<fusionfix::shadows::NativeCacheEntry44,8> cache{};
-        for(unsigned i=0;i<cache.size();++i){
+        std::array<fusionfix::shadows::NativeCacheEntry44,fusionfix::shadows::MaxCacheEntries> cache{};
+        for(unsigned i=0;i<fusionfix::shadows::cacheEntries;++i){
             const auto entry=gameBase+allocation::CacheAge0Rva+i*0x100;
             cache[i]={*reinterpret_cast<const float*>(entry-0xC),
                       *reinterpret_cast<const int32_t*>(entry),
@@ -27,7 +27,7 @@
         // A mismatching layout or changing snapshot leaves native behavior alone.
         if(fusionfix::shadows::NativeCacheChoice44(distance,cache)!=native){++cacheDependencyRejected;return;}
         const auto* indices=reinterpret_cast<const int32_t*>(regs.esp+allocation::SelectedIndicesStackOffset);
-        uint8_t dependencies=0;
+        uint16_t dependencies=0;
         for(unsigned i=0;i<7;++i){
             const int index=indices[i];if(index==-1)continue;
             if(index<0 || static_cast<uint32_t>(index)>=count){++cacheDependencyRejected;return;}
@@ -35,8 +35,8 @@
             if(!state.nativeCandidates[index].observed || state.nativeCandidates[index].flags!=light.mFlags){++cacheDependencyRejected;return;}
             const int slot=light.mShadowCacheIndex;
             if(slot==-1)continue;
-            if(slot<0 || slot>=8 || cache[slot].key!=static_cast<uint32_t>(light.mCastShadows)) {++cacheDependencyRejected;return;}
-            dependencies|=static_cast<uint8_t>(1u<<slot);
+            if(slot<0 || slot>=static_cast<int>(fusionfix::shadows::cacheEntries) || cache[slot].key!=static_cast<uint32_t>(light.mCastShadows)) {++cacheDependencyRejected;return;}
+            dependencies|=static_cast<uint16_t>(1u<<slot);
         }
         ++cacheDependencyChecks;
         const int result=fusionfix::shadows::ProtectNativeCacheChoice44(native,distance,cache,dependencies);

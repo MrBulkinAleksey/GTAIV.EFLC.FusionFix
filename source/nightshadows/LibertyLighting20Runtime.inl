@@ -328,7 +328,7 @@ namespace Lighting20
                 auto& light = lights[i];
                 if ((light.mType != rage::LT_POINT && light.mType != rage::LT_SPOT) || (light.mFlags & 6) != rage::LF_STATIC_SHADOW ||
                     (light.mFlags & rage::LF_VEHICLE) || !light.mCastShadows || light.mCastShadows == -1 ||
-                    light.mShadowCacheIndex < 0 || light.mShadowCacheIndex >= 8 || !std::isfinite(light.mRadius) || light.mRadius <= 0)
+                    light.mShadowCacheIndex < 0 || light.mShadowCacheIndex >= static_cast<int>(fusionfix::shadows::cacheEntries) || !std::isfinite(light.mRadius) || light.mRadius <= 0)
                     continue;
                 const auto cached = *reinterpret_cast<const uint32_t*>(game + fusionfix::shadows::ce::allocation::CacheAge0Rva +
                     static_cast<uint32_t>(light.mShadowCacheIndex) * 0x100 + 4);

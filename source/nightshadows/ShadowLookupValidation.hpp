@@ -6,13 +6,14 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include "ShadowCacheCount.hpp"
 
 namespace fusionfix::shadows {
 struct ShadowLookupSnapshot {
     std::array<std::uint32_t, 8> dynamicKeys{};
     std::array<std::uint8_t, 8> dynamicActive{};
     std::array<int, 8> dynamicCache = [] { std::array<int,8> a{};a.fill(-1);return a; }();
-    std::array<std::uint32_t, 8> staticKeys{};
+    std::array<std::uint32_t, MaxCacheEntries> staticKeys{};
 };
 // A cache index is a location, not an identity. A recycled cache entry must
 // never shadow a different light. Returning -1 selects native unshadowed light.
@@ -22,13 +23,13 @@ inline int ValidateShadowLookup(int nativeResult, std::uint32_t key, int cache,
     if (nativeResult < 8) {
         const int dependency=slots.dynamicCache[nativeResult];
         const bool validDependency=dependency==-1 ||
-            (dependency>=0 && dependency<8 && slots.staticKeys[dependency]==key);
+            (dependency>=0 && dependency<static_cast<int>(cacheEntries) && slots.staticKeys[dependency]==key);
         if (slots.dynamicActive[nativeResult] == 1 && slots.dynamicKeys[nativeResult] == key && validDependency)
             return nativeResult;
-        if (cache >= 0 && cache < 8 && slots.staticKeys[cache] == key) return cache + 8;
+        if (cache >= 0 && cache < static_cast<int>(cacheEntries) && slots.staticKeys[cache] == key) return cache + 8;
         return -1;
     }
-    if (nativeResult < 16 && slots.staticKeys[nativeResult - 8] == key) return nativeResult;
+    if (nativeResult < 8 + static_cast<int>(cacheEntries) && slots.staticKeys[nativeResult - 8] == key) return nativeResult;
     return -1;
 }
 }

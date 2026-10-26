@@ -1,4 +1,4 @@
-// NightShadowsCacheLog: what the eight static lamp caches do while you move, to tell the two causes of lamp shadows
+// NightShadowsCacheLog: what the static lamp caches (8, or 16 with LampShadowCaches) do while you move, to tell the two causes of lamp shadows
 // coming and going apart. Either the entries are too few (a lamp still in view loses its entry to a nearer one and
 // gets it back later), or they are made too slowly (one new entry a selection run, and a lamp with flag 2 gets no
 // slot until its entry is baked). Each selection run compares the entries with the last run's; a key that changed
@@ -18,7 +18,7 @@ namespace PlayerShadowAllocation::CacheLog
     struct Evicted { uint64_t at{}; };
 
     // Selection (render thread) only
-    static std::array<Entry, 8> last{};
+    static std::array<Entry, fusionfix::shadows::MaxCacheEntries> last{};
     static bool haveLast = false;
     static std::unordered_map<uint32_t, Waiting> waiting;
     static std::unordered_map<uint32_t, Evicted> evicted;
@@ -40,10 +40,10 @@ namespace PlayerShadowAllocation::CacheLog
         ~Guard() { lock.clear(std::memory_order_release); }
     };
 
-    static std::array<Entry, 8> Read() noexcept
+    static std::array<Entry, fusionfix::shadows::MaxCacheEntries> Read() noexcept
     {
-        std::array<Entry, 8> entries{};
-        for (unsigned i = 0; i < entries.size(); ++i)
+        std::array<Entry, fusionfix::shadows::MaxCacheEntries> entries{};
+        for (unsigned i = 0; i < fusionfix::shadows::cacheEntries; ++i)
         {
             const auto entry = gameBase + allocation::CacheAge0Rva + i * 0x100;
             entries[i] = {*reinterpret_cast<const uint32_t*>(entry + 4), *reinterpret_cast<const int32_t*>(entry + 8),
@@ -100,7 +100,7 @@ namespace PlayerShadowAllocation::CacheLog
             std::string text;
             uint32_t created = 0, evictions = 0, listed = 0, nearEvicted = 0, regained = 0, waits = 0;
             uint64_t waitSum = 0, waitMost = 0;
-            for (unsigned i = 0; haveLast && i < entries.size(); ++i)
+            for (unsigned i = 0; haveLast && i < fusionfix::shadows::cacheEntries; ++i)
             {
                 const auto& entry = entries[i];
                 const auto& was = last[i];
@@ -183,10 +183,10 @@ namespace PlayerShadowAllocation::CacheLog
             if (summary)
             {
                 lastSummary = now;
-                text += std::format("summary runs={} new={} evicted={} evicted_listed={} evicted_listed_within_30m={} regained_within_10s={} "
+                text += std::format("summary caches={} runs={} new={} evicted={} evicted_listed={} evicted_listed_within_30m={} regained_within_10s={} "
                     "waiting_most={} waiting_within_30m_most={} waiting_within_30m_with_flag4_most={} nearest_waiting={:.1f} "
                     "wait_avg_ms={} wait_most_ms={}\n",
-                    s.runs, s.created, s.evictions, s.evictedListed, s.evictedNear, s.regained,
+                    fusionfix::shadows::cacheEntries, s.runs, s.created, s.evictions, s.evictedListed, s.evictedNear, s.regained,
                     s.waitingMost, s.waitingNearMost, s.waitingBlockedMost, s.nearestWaiting,
                     s.waits ? s.waitSum / s.waits : 0, s.waitMost);
             }

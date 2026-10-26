@@ -23,6 +23,7 @@ module;
 #include "ShadowCasterPresence.hpp"
 #include "ShadowSlotTrace.hpp"
 #include "ShadowLampSpacing.hpp"
+#include "ShadowCacheCount.hpp"
 #include "NativeCacheDependencies44.hpp"
 #include "ShadowInactiveSlots.hpp"
 #include "ShadowViewPriority.hpp"
@@ -364,6 +365,7 @@ namespace CShadows
 
 #include "ShadowAllocationRuntime.inl"
 #include "ShadowCacheLogRuntime.inl"
+#include "ShadowCache16Runtime.inl"
 #include "NearbyVehicleRuntime36.inl"
 #include "ShadowLookupRuntime.inl"
 #include "ShadowCasterRuntime.inl"
@@ -624,6 +626,14 @@ public:
                 PlayerShadowAllocation::stableOrdinals = iniReader.ReadInteger("NIGHTSHADOWS", "StableMapSlots", 1) != 0;
                 if (!PlayerShadowAllocation::InstallPreCache() && (PlayerShadowAllocation::stableOrdinals || PlayerShadowAllocation::preCacheVacancy))
                     PlayerShadowAllocation::installStatus += " pre_cache_hook_failed";
+                // Last, after every check of the selection's bytes; its tile layout is kept after each selection run.
+                if (PlayerShadowAllocation::ready.load(std::memory_order_acquire))
+                {
+                    ShadowCache16::Install(iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowCaches", 16) >= 16);
+                    if (ShadowCache16::enabled)
+                        PlayerShadowAllocation::layOutCaches = ShadowCache16::LayOut;
+                }
+                else ShadowCache16::status = "allocation_unavailable";
             }
             else
             {

@@ -37,11 +37,11 @@ namespace ShadowLookupGuard {
             s.dynamicActive[nativeResult] = *reinterpret_cast<const uint8_t*>(address - 0xB);
             const int dependency=*reinterpret_cast<const int*>(address - 8);
             s.dynamicCache[nativeResult]=dependency;
-            if(dependency>=0 && dependency<8)
+            if(dependency>=0 && dependency<static_cast<int>(fusionfix::shadows::cacheEntries))
                 s.staticKeys[dependency]=*reinterpret_cast<const uint32_t*>(cached+dependency*0x100);
-            if (cache >= 0 && cache < 8)
+            if (cache >= 0 && cache < static_cast<int>(fusionfix::shadows::cacheEntries))
                 s.staticKeys[cache] = *reinterpret_cast<const uint32_t*>(cached + cache * 0x100);
-        } else if (nativeResult < 16) {
+        } else if (nativeResult < 8 + static_cast<int>(fusionfix::shadows::cacheEntries)) {
             s.staticKeys[nativeResult - 8] = *reinterpret_cast<const uint32_t*>(cached + (nativeResult - 8) * 0x100);
         }
         const int result = fusionfix::shadows::ValidateShadowLookup(nativeResult,key,cache,s);
