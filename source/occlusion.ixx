@@ -38,6 +38,9 @@ import coronas;
 //   Hidden HiZOcclusionFrames frames running, the scene's phase is taken off it (HiZOcclusion = 1); its shadows,
 //   reflections, LOD bookkeeping and fade are the game's as before, those are kept in the lists' callers.
 // - HiZOcclusion = 2 tests and counts only: the log says what would have been left out.
+// - The sun's cascades (CascadeCasterOcclusion) at the same entry: a caster's ball swept away from the sun as far as
+//   its shadow can reach is tested the same way; behind the camera, off the screen or behind the world drawn, two
+//   frames running, the cascades' phase is taken off it (1), or it's counted (2).
 export namespace Occlusion
 {
     // HiZOcclusion: 0 off, 1 hidden entities left out of the scene, 2 tested and counted only
@@ -49,8 +52,11 @@ export namespace Occlusion
     int nOccluderCategories = 1;
     // CoronasOcclusion: 0 off, 1 the game camera's coronas hidden behind the world are given no quad, 2 counted only
     int nCoronas = 1;
+    // CascadeCasterOcclusion: 0 off, 1 an entity whose shadow can only land where the camera sees nothing (off the
+    // screen, behind the camera or behind the world drawn) is left out of the sun's cascades, 2 counted only
+    int nShadows = 2;
     // The grid is built while anything tests against it
-    bool Enabled() { return nMode != 0 || bLampShadows || nCoronas != 0; }
+    bool Enabled() { return nMode != 0 || bLampShadows || nCoronas != 0 || nShadows != 0; }
 
     // The latest grid with what this moment needs to test against it: how far the camera has moved and turned since.
     // Taken once for a batch of tests, on any thread.
@@ -108,6 +114,8 @@ namespace Occlusion
     std::atomic<uint64_t> texelsAll{ 0 }, texelsNothing{ 0 }, texelsSky{ 0 }, texelsNear{ 0 };
 
     uint32_t* pScenePhase = nullptr;    // CE 0x159af24
+    uint32_t* pCascadePhases = nullptr; // CE 0x159b760: those of type 0x15, the sun's cascades (all four are one phase)
+    size_t nSunDirectionIdx = SIZE_MAX; // gta_atmoscatt_clouds' SunDirection (y up), as c216 carries it to the lighting
     float* pCamera = nullptr;           // CE 0x128e340, the game camera's position (main thread)
 
     // The game's frame (counted in onGameProcessEvent); the rest belongs to the thread that builds the lists: the frame
@@ -117,12 +125,18 @@ namespace Occlusion
     uint32_t mainFrame = 0;
     Probe frameProbe;           // taken at the first entity of each frame
     uint8_t frameOutcome = 0;   // its Precheck
+    float frameSun[3]{};        // the way toward the sun (world, z up), unit length
+    bool frameSunUp = false;    // high enough (2 degrees) to test the cascades' casters by it
     struct EntityState
     {
         uint32_t frame = 0;
         uint16_t hiddenRunning = 0;
         bool hidden = false;    // this frame's test
         bool left = false;      // left out of the scene this frame
+        // The same for its shadow in the sun's cascades
+        uint32_t shadowFrame = 0;
+        uint16_t shadowHiddenRunning = 0;
+        bool shadowLeft = false;
     };
     // Each entity's state by its address, open addressing: the lists add some 2000 a frame, each looked up once a call
     struct Slot
@@ -141,7 +155,7 @@ namespace Occlusion
         for (const auto& slot : old)
         {
             // Entities not seen for a while go, so a freed one's address starts afresh
-            if (!slot.entity || mainFrame - slot.state.frame > 60)
+            if (!slot.entity || mainFrame - std::max(slot.state.frame, slot.state.shadowFrame) > 60)
                 continue;
             size_t i = (slot.entity >> 3) * 2654435761u & mask;
             while (table[i].entity)
@@ -193,11 +207,17 @@ namespace Occlusion
         uint32_t left = 0;              // left out (or would be, mode 2)
         uint32_t adds = 0, addsLeft = 0; // calls into the lists with the scene's phase, and of those left out
         uint32_t grids = 0;             // grids taken
+        uint32_t shadows = 0;           // entities of the cascades tested, once a frame each
+        uint32_t shadowOutcomes[5]{};   // by ShadowOutcome
+        uint32_t shadowLeft = 0;        // left out of the cascades (or would be, mode 2)
+        uint32_t shadowAdds = 0, shadowAddsLeft = 0; // calls into the lists with the cascades' phase, and of those left out
+        uint32_t sunLowFrames = 0;      // frames with the sun too low (or the moon's cascades) to test
         uint64_t ageFrames = 0;         // render frames from the grid's to the render thread's when taken, summed
     } stats;
     DWORD hookThread = 0;
     std::atomic<uint32_t> otherThreads{ 0 };
     uint64_t frameTicks = 0, maxFrameTicks = 0, ticks = 0; // __rdtsc: the test's time this frame, worst, this block
+    uint64_t shadowTicks = 0;   // the shadows' part of it, this block
     LARGE_INTEGER windowQpc{};
     uint64_t windowTsc = 0;
     LARGE_INTEGER qpcFrequency{};
@@ -420,6 +440,67 @@ namespace Occlusion
         return TestProjected(p, clips, nearest, atEdge);
     }
 
+    // A caster of the sun's cascades: its ball swept away from the sun as far as its shadow can reach (to ShadowFloor,
+    // ShadowReach at most), by that sweep's box along the world's axes, grown by how far the camera moved. Its shadow
+    // can only land in there, so it's of no use when all of that lies behind the camera, off the screen by more than
+    // the margin (and the turn since the grid), or behind the world drawn. Volumetric light and fog read the cascades
+    // only in front of the depth on the screen too. Cars and people are nothing in the way in the grid: what lands on
+    // them stays. After Precheck; sun the way toward the sun, unit length, well above the horizon
+    enum ShadowOutcome : uint8_t { ShadowSeen, ShadowBehindCamera, ShadowOffScreen, ShadowHidden, ShadowNear, ShadowOutcomes };
+    constexpr const char* ShadowOutcomeNames[ShadowOutcomes] = { "seen", "behind the camera", "off the screen", "behind the world",
+                                                                 "too near" };
+    constexpr float ShadowFloor = -20.0f;   // metres: no ground lower than this takes the sun's shadows
+    constexpr float ShadowReach = 1500.0f;  // metres a shadow is followed at most
+    float fShadowMargin = 0.1f;             // CascadeCasterMargin: share of the screen past its edges still taken as on it
+    ShadowOutcome TestShadow(const Probe& p, const float sun[3], const float centre[3], float radius)
+    {
+        const Grid& g = *p.grid;
+        const float reach = std::clamp((centre[2] + radius - ShadowFloor) / sun[2], 0.0f, ShadowReach);
+        const float grow = radius + p.move * fMoveGrowth;
+        float low[3], high[3];
+        for (int i = 0; i < 3; ++i)
+        {
+            const float end = centre[i] - sun[i] * reach;
+            low[i] = std::min(centre[i], end) - grow;
+            high[i] = std::max(centre[i], end) + grow;
+        }
+        const float* m = g.viewProjection;
+        float minU = 1e30f, maxU = -1e30f, minV = 1e30f, maxV = -1e30f, nearest = 1e30f;
+        int behind = 0;
+        for (int corner = 0; corner < 8; ++corner)
+        {
+            const float x = (corner & 1) ? high[0] : low[0], y = (corner & 2) ? high[1] : low[1], z = (corner & 4) ? high[2] : low[2];
+            const float w = x * m[3] + y * m[7] + z * m[11] + m[15];
+            if (!(w > g.nearPlane))
+            {
+                ++behind;
+                continue;
+            }
+            const float inverse = 1.0f / w;
+            const float u = (x * m[0] + y * m[4] + z * m[8] + m[12]) * inverse * 0.5f + 0.5f;
+            const float v = 0.5f - (x * m[1] + y * m[5] + z * m[9] + m[13]) * inverse * 0.5f;
+            minU = std::min(minU, u);
+            maxU = std::max(maxU, u);
+            minV = std::min(minV, v);
+            maxV = std::max(maxV, v);
+            nearest = std::min(nearest, w);
+        }
+        if (behind == 8)
+            return ShadowBehindCamera;
+        // Across the camera's plane: some of it may be in front, anywhere
+        if (behind)
+            return ShadowNear;
+        const float margin = fShadowMargin + std::max(p.bandU, p.bandV);
+        if (maxU < -margin || minU > 1.0f + margin || maxV < -margin || minV > 1.0f + margin)
+            return ShadowOffScreen;
+        // Partly off the grid's screen: what lies beyond can't be told
+        if (minU < 0.0f || minV < 0.0f || maxU > 1.0f || maxV > 1.0f)
+            return ShadowSeen;
+        if (nearest <= g.nearPlane * 2.0f)
+            return ShadowNear;
+        return TestRect(p, minU, maxU, minV, maxV, nearest, nullptr) == Hidden ? ShadowHidden : ShadowSeen;
+    }
+
     Probe Take()
     {
         std::shared_ptr<const Grid> g;
@@ -580,10 +661,13 @@ namespace Occlusion
     // The lists' entry: the phases to add the entity to
     uint32_t Phases(uintptr_t entity, uint32_t phases)
     {
-        if (!pScenePhase || !entity || !nMode)
+        if (!pScenePhase || !entity || (!nMode && !nShadows))
             return phases;
         const uint32_t scene = *pScenePhase;
-        if (!(phases & scene))
+        const uint32_t cascades = nShadows && pCascadePhases ? *pCascadePhases & ~scene : 0;
+        const bool inScene = nMode && (phases & scene);
+        const bool inCascades = (phases & cascades) != 0;
+        if (!inScene && !inCascades)
             return phases;
 
         // All of this belongs to one thread: were the lists built on others too, those are counted and drawn
@@ -596,7 +680,6 @@ namespace Occlusion
             return phases;
         }
         const uint64_t start = __rdtsc();
-        ++stats.adds;
 
         // A new frame: the last one counted, and a new grid if there's one
         if (const uint32_t frame = gameFrame.load(std::memory_order_relaxed); frame != mainFrame)
@@ -606,6 +689,21 @@ namespace Occlusion
             mainFrame = frame;
             frameProbe = Take();
             frameOutcome = Precheck(frameProbe);
+            frameSunUp = false;
+            if (nSunDirectionIdx != SIZE_MAX)
+            {
+                const auto& sky = rage::grmShaderInfo::getShaderParamData(nSunDirectionIdx);
+                const float sun[3] = { sky[0], -sky[2], sky[1] };
+                const float length = std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]);
+                if (length > 0.5f && std::isfinite(length))
+                {
+                    for (int i = 0; i < 3; ++i)
+                        frameSun[i] = sun[i] / length;
+                    frameSunUp = frameSun[2] > 0.035f;
+                }
+            }
+            if (nShadows && !frameSunUp)
+                ++stats.sunLowFrames;
             if (frameProbe.grid)
             {
                 ++stats.grids;
@@ -614,6 +712,55 @@ namespace Occlusion
         }
 
         auto& state = StateOf(entity);
+        auto vtable = *(void***)entity;
+        alignas(16) float centre[4]{};
+        float radius = NAN;
+        bool bounds = false;
+        auto takeBounds = [&]()
+        {
+            if (bounds)
+                return std::isfinite(radius) && std::isfinite(centre[0] + centre[1] + centre[2]);
+            bounds = true;
+            reinterpret_cast<void(__thiscall*)(uintptr_t, float*)>(vtable[0x50 / 4])(entity, centre);
+            radius = reinterpret_cast<float(__thiscall*)(uintptr_t)>(vtable[0x58 / 4])(entity);
+            return std::isfinite(radius) && std::isfinite(centre[0] + centre[1] + centre[2]);
+        };
+
+        if (inCascades && state.shadowFrame != mainFrame)
+        {
+            const uint64_t shadowStart = __rdtsc();
+            const bool repeat = state.shadowFrame + 1 == mainFrame;
+            state.shadowFrame = mainFrame;
+            bool hidden = false;
+            if (frameOutcome == Visible && frameSunUp && takeBounds())
+            {
+                const ShadowOutcome outcome = TestShadow(frameProbe, frameSun, centre, radius);
+                ++stats.shadows;
+                ++stats.shadowOutcomes[outcome];
+                hidden = outcome == ShadowBehindCamera || outcome == ShadowOffScreen || outcome == ShadowHidden;
+            }
+            state.shadowHiddenRunning = hidden ? uint16_t(std::min<int>(repeat ? state.shadowHiddenRunning + 1 : 1, 0xFFFF)) : 0;
+            state.shadowLeft = hidden && state.shadowHiddenRunning >= nFrames;
+            stats.shadowLeft += state.shadowLeft;
+            shadowTicks += __rdtsc() - shadowStart;
+        }
+        if (inCascades)
+        {
+            ++stats.shadowAdds;
+            if (state.shadowLeft)
+            {
+                ++stats.shadowAddsLeft;
+                if (nShadows == 1)
+                    phases &= ~cascades;
+            }
+        }
+        if (!inScene)
+        {
+            frameTicks += __rdtsc() - start;
+            return phases;
+        }
+
+        ++stats.adds;
         if (state.frame != mainFrame)
         {
             // Once a frame: the entity may be added to several buckets
@@ -623,11 +770,7 @@ namespace Occlusion
             bool atEdge = false;
             if (outcome == Visible)
             {
-                alignas(16) float centre[4]{};
-                auto vtable = *(void***)entity;
-                reinterpret_cast<void(__thiscall*)(uintptr_t, float*)>(vtable[0x50 / 4])(entity, centre);
-                const float radius = reinterpret_cast<float(__thiscall*)(uintptr_t)>(vtable[0x58 / 4])(entity);
-                if (!std::isfinite(radius) || !std::isfinite(centre[0] + centre[1] + centre[2]))
+                if (!takeBounds())
                     outcome = Visible;
                 else
                 {
@@ -718,8 +861,21 @@ namespace Occlusion
             share(texelsNothing), share(texelsSky), share(texelsNear), hookThread, gameThread, otherThreads.exchange(0), tableUsed,
             s.boxes * perFrame, s.boxHidden * perFrame, s.boxSphereHidden * perFrame, s.boxByMatrix * perFrame, s.boxByHeading * perFrame,
             s.boxByHeadingSwapped * perFrame, s.boxMismatch * perFrame);
+        if (nShadows)
+        {
+            std::string shadowOutcomes;
+            for (int i = 0; i < ShadowOutcomes; ++i)
+                if (s.shadowOutcomes[i])
+                    shadowOutcomes += std::format("{}{} {:.0f}", shadowOutcomes.empty() ? "" : ", ", ShadowOutcomeNames[i], s.shadowOutcomes[i] * perFrame);
+            FusionLog::Write("Occlusion", "Shadows",
+                "%s, per frame: %.0f casters of the sun's cascades tested (%s); %.0f %s, %.0f of %.0f list adds; test %.3f ms a frame; "
+                "%u frames with the sun too low to test; the sun's way %.2f %.2f %.2f\n",
+                nShadows == 1 ? "left out of the cascades" : "counted only", s.shadows * perFrame, shadowOutcomes.c_str(), s.shadowLeft * perFrame,
+                nShadows == 1 ? "left out" : "would be left out", s.shadowAddsLeft * perFrame, s.shadowAdds * perFrame,
+                double(shadowTicks) * msPerTick * perFrame, s.sunLowFrames, frameSun[0], frameSun[1], frameSun[2]);
+        }
         stats = {};
-        ticks = maxFrameTicks = 0;
+        ticks = maxFrameTicks = shadowTicks = 0;
     }
 }
 
@@ -743,15 +899,21 @@ public:
             nCoronas = std::clamp(iniReader.ReadInteger("PERFORMANCE", "CoronasOcclusion", 1), 0, 2);
             nOccluderCategories = iniReader.ReadInteger("PERFORMANCE", "HiZOccluderCategories", 1) & 0xFF;
             bBoxes = iniReader.ReadInteger("PERFORMANCE", "HiZOcclusionBoxes", 1) != 0;
+            const int shadows = std::clamp(iniReader.ReadInteger("PERFORMANCE", "CascadeCasterOcclusion", 2), 0, 2);
+            fShadowMargin = std::clamp(iniReader.ReadFloat("PERFORMANCE", "CascadeCasterMargin", 0.1f), 0.0f, 2.0f);
             if (hooked)
             {
                 nMode = mode;
+                nShadows = shadows;
                 FusionLog::Write("Occlusion", "Settings", "%s: hidden %d frames running, camera moved at most %.1f m, radius from %.1f m, %s\n",
                     nMode == 1 ? "hidden entities are left out of the scene" : nMode == 2 ? "hidden entities are counted only" : "nothing tested",
                     nFrames, fMaxMove, fMinRadius, bBoxes ? "buildings by box" : "all by sphere");
             }
             else if (!started)
+            {
                 nMode = mode;
+                nShadows = shadows;
+            }
         };
 
         FusionFix::onInitEventAsync() += []()
@@ -766,7 +928,7 @@ public:
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
             if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
                 pCamera = *camera.get_first<float*>(12);
-            if (!nMode)
+            if (!nMode && !nShadows)
                 return;
 
             // The scene's phase: test [0x159af24], edx in the render list after the shadow phases are dropped (CE 0xae7076)
@@ -776,10 +938,16 @@ public:
             if (scene.empty() || add.empty())
             {
                 nMode = 0;
+                nShadows = 0;
                 FusionLog::Write("Occlusion", "Settings", "the render lists weren't found, nothing is tested\n");
                 return;
             }
             pScenePhase = *scene.get_first<uint32_t*>(0xD);
+            // mov eax, [0x159b760]; not eax; and ecx, eax before the render list's first add: the sun's cascades
+            if (auto list = hook::pattern("F7 43 40 00 01 00 00 F3 0F 10 47 04"); !list.empty() && *list.get_first<uint8_t>(-9) == 0xA1)
+                pCascadePhases = *list.get_first<uint32_t*>(-8);
+            // At init: the hook that fills the parameters walks the same vector
+            nSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
             // The base entity's box (CE 0xa319c0): movsx eax, word [ecx+0x2e]; mov eax, [eax*4+models]; add eax, 0x20; ret
             if (auto box = hook::pattern("0F BF 41 2E 8B 04 85 ? ? ? ? 83 C0 20 C3"); !box.empty())
             {
@@ -793,8 +961,12 @@ public:
                 args[0] = Phases(uintptr_t(args[1]), args[0]);
             });
             hooked = true;
-            FusionLog::Write("Occlusion", "Settings", "%s: hidden %d frames running, camera moved at most %.1f m, radius from %.1f m\n",
-                nMode == 1 ? "hidden entities are left out of the scene" : "hidden entities are counted only", nFrames, fMaxMove, fMinRadius);
+            FusionLog::Write("Occlusion", "Settings", "%s: hidden %d frames running, camera moved at most %.1f m, radius from %.1f m; "
+                "the sun's cascades: %s (%s)\n",
+                nMode == 1 ? "hidden entities are left out of the scene" : nMode == 2 ? "hidden entities are counted only" : "the scene untested",
+                nFrames, fMaxMove, fMinRadius,
+                nShadows == 1 ? "casters whose shadow lands where nothing is seen left out" : nShadows == 2 ? "casters counted only" : "untested",
+                pCascadePhases ? "their phase found" : "their phase not found");
         };
 
         FusionFix::onGameProcessEvent() += []()
