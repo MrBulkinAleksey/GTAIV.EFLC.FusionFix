@@ -87,20 +87,12 @@ import postfxprofiler;
 
 export std::optional<std::reference_wrapper<int32_t>> UsePostFxAA;
 
-// SMAA hangs the game on D3D9on12, it counts as off there
-export bool IsSMAASupported()
-{
-    static bool d3d9on12 = false;
-    d3d9on12 = d3d9on12 || GetModuleHandleW(L"d3d9on12.dll");
-    return !d3d9on12;
-}
-
 export bool IsPostFxAA()
 {
     if (!UsePostFxAA)
         return false;
     auto aa = UsePostFxAA->get();
-    return aa == FusionFixSettings.AntialiasingText.eFXAA || (aa == FusionFixSettings.AntialiasingText.eSMAA && IsSMAASupported());
+    return aa == FusionFixSettings.AntialiasingText.eFXAA || aa == FusionFixSettings.AntialiasingText.eSMAA;
 }
 
 // Binding through both the game's device wrapper and the real device: see RageDirect3DDevice9::SetTextureBoth. SSGI's

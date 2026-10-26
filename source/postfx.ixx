@@ -1318,7 +1318,6 @@ private:
 
         HRESULT hr = S_FALSE;
 
-        DWORD OldSRGB = 0;
         DWORD OldSampler = 0;
 
         // save render state between post processing steps, 
@@ -1577,17 +1576,21 @@ private:
                            PostFxResources.SMAA_areaTex && PostFxResources.SMAA_searchTex && PostFxResources.edgesTex && PostFxResources.blendTex
                            )
                         {
-                            DWORD oldSample = 0;
-
-                            for (int i = 0; i <= 4; ++i)
-                            {
-                                pDevice->GetSamplerState(i, D3DSAMP_MINFILTER, &oldSample);
-                                pDevice->GetSamplerState(i, D3DSAMP_MAGFILTER, &oldSample);
-                                pDevice->GetSamplerState(i, D3DSAMP_MIPFILTER, &oldSample);
-                                pDevice->GetSamplerState(i, D3DSAMP_ADDRESSU, &oldSample);
-                                pDevice->GetSamplerState(i, D3DSAMP_ADDRESSV, &oldSample);
-                                pDevice->GetSamplerState(i, D3DSAMP_ADDRESSW, &oldSample);
-                            }
+                            // The sampler states of the game's five samplers, each one restored to its own value afterwards
+                            // (one shared value left them all alike before; D3D9on12 rejects such sampler addressing)
+                            static constexpr D3DSAMPLERSTATETYPE smaaSamplerStates[] = {
+                                D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_MIPFILTER,
+                                D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW
+                            };
+                            DWORD oldSamplers[5][std::size(smaaSamplerStates)]{};
+                            bool gotSamplers[5][std::size(smaaSamplerStates)]{};
+                            for (DWORD sampler = 0; sampler < 5; ++sampler)
+                                for (size_t state = 0; state < std::size(smaaSamplerStates); ++state)
+                                    gotSamplers[sampler][state] = SUCCEEDED(pDevice->GetSamplerState(sampler, smaaSamplerStates[state], &oldSamplers[sampler][state]));
+                            DWORD oldSrgbTexture = 0;
+                            DWORD oldSrgbWrite = 0;
+                            auto gotSrgbTexture = SUCCEEDED(pDevice->GetSamplerState(0, D3DSAMP_SRGBTEXTURE, &oldSrgbTexture));
+                            auto gotSrgbWrite = SUCCEEDED(pDevice->GetRenderState(D3DRS_SRGBWRITEENABLE, &oldSrgbWrite));
 
                             // colorTex / colorGammaTex
                             pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
@@ -1657,25 +1660,20 @@ private:
                             SetTextureBoth(pDevice, 0, PostFxResources.FullScreenTex_temp2->mD3DTexture);
                             SetTextureBoth(pDevice, 4, PostFxResources.blendTex->mD3DTexture);
 
-                            pDevice->GetSamplerState(0, D3DSAMP_SRGBTEXTURE, &oldSample);
-                            pDevice->GetRenderState(D3DRS_SRGBWRITEENABLE, &OldSRGB); // save srgb state
                             pDevice->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, 1);
                             pDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, 1);
 
                             pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
-                            pDevice->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, oldSample);
-                            pDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, OldSRGB); // restore srgb state
+                            if (gotSrgbTexture)
+                                pDevice->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, oldSrgbTexture);
+                            if (gotSrgbWrite)
+                                pDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, oldSrgbWrite);
 
-                            for (int i = 0; i <= 4; ++i)
-                            {
-                                pDevice->SetSamplerState(i, D3DSAMP_MINFILTER, oldSample);
-                                pDevice->SetSamplerState(i, D3DSAMP_MAGFILTER, oldSample);
-                                pDevice->SetSamplerState(i, D3DSAMP_MIPFILTER, oldSample);
-                                pDevice->SetSamplerState(i, D3DSAMP_ADDRESSU, oldSample);
-                                pDevice->SetSamplerState(i, D3DSAMP_ADDRESSV, oldSample);
-                                pDevice->SetSamplerState(i, D3DSAMP_ADDRESSW, oldSample);
-                            }
+                            for (DWORD sampler = 0; sampler < 5; ++sampler)
+                                for (size_t state = 0; state < std::size(smaaSamplerStates); ++state)
+                                    if (gotSamplers[sampler][state])
+                                        pDevice->SetSamplerState(sampler, smaaSamplerStates[state], oldSamplers[sampler][state]);
 
                             SetTextureBoth(pDevice, 0, PostFxResources.prePostFx[0]);
                             SetTextureBoth(pDevice, 1, PostFxResources.prePostFx[1]);
@@ -2069,6 +2067,8 @@ private:
             {
                 Init();
                 NewPostFX();
+                // What the scene phase draws after the post processing is not resolved, it must not be jittered
+                TemporalAA::OnPostFXDrawn();
             }
         }
         else if (bInsteadDrawPrimitiveDownsample)
