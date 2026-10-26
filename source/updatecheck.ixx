@@ -47,7 +47,7 @@ class UpdateCheck
         parts.dwUrlPathLength = DWORD(std::size(path));
         if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts))
             return body;
-        auto ua = std::wstring(L"GTAIV.EFLC.FusionFix/") + asi_settings::text::Widen(rsc_FileVersion);
+        auto ua = std::wstring(L"GTAIV.EFLC.FusionFix/") + GetThisModuleVersionValue(L"FileVersion");
         HINTERNET session = WinHttpOpen(ua.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
         if (!session)
             return body;
@@ -110,25 +110,13 @@ class UpdateCheck
     // without it (an old one) counts from its file's time, as the hub does
     static int64_t BuildTime()
     {
+        auto value = GetThisModuleVersionValue(L"BuildTimeUtc");
+        int64_t fromResource = value.empty() ? -1 : ParseUtc(asi_settings::text::Narrow(value));
+        if (fromResource >= 0)
+            return fromResource;
         HMODULE self = nullptr;
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&BuildTime), &self);
-        wchar_t path[MAX_PATH * 4] = {};
-        GetModuleFileNameW(self, path, DWORD(std::size(path)));
-        int64_t fromResource = -1;
-        DWORD handle = 0, size = GetFileVersionInfoSizeW(path, &handle);
-        std::vector<uint8_t> info(size);
-        struct Translation { WORD language, codepage; }* translations = nullptr;
-        UINT length = 0;
-        wchar_t* value = nullptr;
-        if (size && GetFileVersionInfoW(path, 0, size, info.data()) &&
-            VerQueryValueW(info.data(), L"\\VarFileInfo\\Translation", reinterpret_cast<void**>(&translations), &length) && length >= sizeof(Translation))
-        {
-            wchar_t key[64];
-            swprintf_s(key, L"\\StringFileInfo\\%04x%04x\\BuildTimeUtc", translations[0].language, translations[0].codepage);
-            if (VerQueryValueW(info.data(), key, reinterpret_cast<void**>(&value), &length) && value)
-                fromResource = ParseUtc(asi_settings::text::Narrow(value));
-        }
-        return fromResource >= 0 ? fromResource : FileTime(path);
+        return FileTime(GetModulePath<std::wstring>(self).c_str());
     }
 
     static void Check()

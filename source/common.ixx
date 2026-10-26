@@ -365,6 +365,31 @@ T GetThisModulePath()
     return r;
 }
 
+#pragma comment(lib, "version.lib")
+
+// A value of this module's version resource (Versioninfo.rc: "FileVersion", "ProductVersion", "BuildTimeUtc"), empty
+// when it has none. The version is no define of the C++ files: a new commit would change every compile command, and
+// the CI's kept objects would all be built again.
+export std::wstring GetThisModuleVersionValue(const wchar_t* name)
+{
+    HMODULE hm = NULL;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&FusionFix::onInitEvent, &hm);
+    const auto path = GetModulePath<std::wstring>(hm);
+    DWORD handle = 0, size = GetFileVersionInfoSizeW(path.c_str(), &handle);
+    std::vector<uint8_t> info(size);
+    struct Translation { WORD language, codepage; }* translations = nullptr;
+    UINT length = 0;
+    wchar_t* value = nullptr;
+    if (!size || !GetFileVersionInfoW(path.c_str(), 0, size, info.data()) ||
+        !VerQueryValueW(info.data(), L"\\VarFileInfo\\Translation", reinterpret_cast<void**>(&translations), &length) || length < sizeof(Translation))
+        return {};
+    wchar_t key[96];
+    swprintf_s(key, L"\\StringFileInfo\\%04x%04x\\%s", translations[0].language, translations[0].codepage, name);
+    if (!VerQueryValueW(info.data(), key, reinterpret_cast<void**>(&value), &length) || !value)
+        return {};
+    return value;
+}
+
 export template<class T = std::filesystem::path>
 T GetThisModuleName()
 {

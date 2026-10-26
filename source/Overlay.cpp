@@ -185,7 +185,7 @@ namespace GTAIVOverlay
         {
             asi_overlay::Overlay::AddPage("Debug", "Info", [](asi_overlay::OverlayUI& ui)
             {
-                ui.Value("Fusion Fix version", rsc_ProductVersion);
+                ui.Value("Fusion Fix version", asi_settings::text::Narrow(GetThisModuleVersionValue(L"ProductVersion")));
                 ui.Value("Build", __DATE__ " " __TIME__);
                 // What the plugin applied (graphics_api.h): the API asked for, the one running, why they differ
                 auto graphics = FusionFixGraphicsApi::State();
