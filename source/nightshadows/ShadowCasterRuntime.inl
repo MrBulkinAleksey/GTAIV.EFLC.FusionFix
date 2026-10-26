@@ -254,6 +254,7 @@ namespace ShadowDiagnostics
                 if (log.good()) startupWritten = true;
             }
             log << "tick=" << now << " admission_installed=" << admissionInstalled
+                << " lamp_axis=" << LampShadowAxis::status << " lamp_axis_mode=" << LampShadowAxis::mode.load()
                 << " lamp_size_gate=" << LampShadowSizeGate::status << " lamp_size_gate_kept=" << LampShadowSizeGate::kept.load()
                 << " lamp_size_gate_retained=" << LampShadowSizeGate::retained.load() << " lamp_size_gate_indoor=" << LampShadowSizeGate::indoor.load()
                 << " lamp_size_gate_fade=" << LampShadowSizeGate::fade << " lamp_size_gate_faded=" << LampShadowSizeGate::faded.load()

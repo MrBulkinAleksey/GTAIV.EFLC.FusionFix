@@ -73,6 +73,7 @@ static float fTailLightShadowDistance = 25.0f;
 #include "BeamTraceRuntime.inl"
 #include "HeadlightEnhancementRuntime.inl"
 #include "LampShadowSizeGateRuntime.inl"
+#include "LampShadowAxisRuntime.inl"
 #include "ModelReferenceQueueRuntime.inl"
 
 // Queried for every light on every frame; a lookup by name scans the whole preference table.
@@ -469,6 +470,7 @@ class NightShadows
     static void ReadLiveSettings(CIniReader& iniReader)
     {
         bLampShadowsInDaylight = iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowsInDaylight", 0) != 0;
+        LampShadowAxis::mode.store(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowAxis", 1), 0, 1), std::memory_order_relaxed);
         if (!ceAdapter)
             return;
         bCloseHeadlightRelevance = iniReader.ReadInteger("NIGHTSHADOWS", "CloseHeadlightRelevance", 0) != 0;
@@ -610,6 +612,7 @@ public:
                     iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowRetention", 0) != 0,
                     iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowFade", 0) != 0,
                     iniReader.ReadInteger("NIGHTSHADOWS", "IndoorShadowBubble", 0) != 0);
+                LampShadowAxis::Install();
                 // Liberty's Shadows 2.0: dual headlights, tail lights, world lights, buildings in dynamic maps.
                 // Each family is switched in the graphics menu; its hooks stay in place.
                 Lighting20::Install(iniReader);
