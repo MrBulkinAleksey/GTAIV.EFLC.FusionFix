@@ -295,8 +295,8 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
     // Style 2: the billows added to the heap instead, which goes on below zero past the map's edge and
     // above the dome, so a billow can stand out of the outline as well as bite into it; the billows
     // StyleScale times ours in size, big enough to make the heap's florets, the fine ones on their surface.
-    // Style 3: style 2's billows build the heap alone, less StyleCut, and ours take it from there: the
-    // fine billows eat into it, the compressor and the rest as without a style.
+    // Style 3: style 2's billows build the heap's edge alone, less StyleCut, and ours take it from there:
+    // the fine billows eat into it, the compressor and the rest as without a style.
     [branch]
     if (vec4Style.x > 0.0)
     {
@@ -334,7 +334,10 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
             soft = saturate((grown - vec4Style.y) / lerp(vec4StyleSoft.x, vec4StyleSoft.y, h));
             return soft * lerp(vec4Style.w, 1.0, smoothstep(0.0, 0.5, h)) * (add ? top : 1.0);
         }
-        d = saturate(grown - vec4Style.y) * top;
+        // Only the heap's edge: inside, where it is whole, and under an overcast sheet the billows and the
+        // cut thinned it, holes opened in the rain's sheet and the sun showed through it in any weather.
+        float edge = (1.0 - saturate(heap)) * (1.0 - fStratus);
+        d = saturate(heap + edge * (grown - heap - vec4Style.y)) * top;
     }
     else
         d = saturate((d - dome) / max(1.0 - dome, 0.05)) * smoothstep(1.0, 0.85, h);
