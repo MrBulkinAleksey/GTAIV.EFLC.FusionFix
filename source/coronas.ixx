@@ -247,6 +247,8 @@ namespace CoronaRender
     // True while the pass is one RenderSkip leaves out (its target never locked, its draws dropped): the water's
     // reflection while no water is seen still called this every frame, 14000 quads built for nothing (renderskip.ixx)
     export bool (*pPassDropped)() = nullptr;
+    // The game camera's pass: takes out of the indices into the list those hidden behind the world drawn (occlusion.ixx)
+    export void (*pCullHidden)(std::vector<uint32_t>& drawn, const uint8_t* list) = nullptr;
 
     int32_t nMode = 1;                      // 0: the game's, 1: ours without what is out of view, 2: ours, all of them
     float* pCamera = nullptr;               // CE 0x128e340, the game camera's position, where it looks 8 floats before
@@ -523,6 +525,8 @@ namespace CoronaRender
             }
             drawn.push_back(uint32_t(i));
         }
+        if (skipBehind && pCullHidden && !drawn.empty())
+            pCullHidden(drawn, list);
         if (bOtherView)
         {
             nOtherListed += uint32_t(count - first);
