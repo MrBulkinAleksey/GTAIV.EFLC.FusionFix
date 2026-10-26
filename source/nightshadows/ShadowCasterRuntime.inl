@@ -255,7 +255,7 @@ namespace ShadowDiagnostics
             }
             log << "tick=" << now << " admission_installed=" << admissionInstalled
                 << " lamp_shadow_caches=" << ShadowCache16::status << " props_in_caches=" << PropCaches::status
-                << " prop_cache_bakes=" << PropCaches::bakes.load() << " prop_cache_added=" << PropCaches::added.load() << " prop_cache_redraws=" << PropCaches::redraws.load() << " lamp_axis=" << LampShadowAxis::status << " lamp_axis_mode=" << LampShadowAxis::mode.load()
+                << " prop_cache_bakes=" << PropCaches::bakes.load() << " prop_cache_added=" << PropCaches::added.load() << " prop_cache_redraws=" << PropCaches::redraws.load() << " own_object_skipped=" << PropCaches::ownSkipped.load() << " lamp_axis=" << LampShadowAxis::status << " lamp_axis_mode=" << LampShadowAxis::mode.load()
                 << " lamp_size_gate=" << LampShadowSizeGate::status << " lamp_size_gate_kept=" << LampShadowSizeGate::kept.load()
                 << " lamp_size_gate_retained=" << LampShadowSizeGate::retained.load() << " lamp_size_gate_indoor=" << LampShadowSizeGate::indoor.load()
                 << " lamp_size_gate_fade=" << LampShadowSizeGate::fade << " lamp_size_gate_faded=" << LampShadowSizeGate::faded.load()

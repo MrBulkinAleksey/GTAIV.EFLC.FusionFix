@@ -91,10 +91,11 @@ namespace PropCaches
         ++redraws;
     }
 
-    static void Install(bool requested) noexcept
+    static void Install(bool requested, bool skipOwnObject) noexcept
     {
-        if (!requested) return;
         game = GameBase();
+        skipOwn = skipOwnObject;
+        if (!requested) return;
         using HeadlightEnhancement::CodeCheck;
         const auto check = CodeCheck()
             .Bytes(0x978370, {0xFF,0xB6,0x40,0x09,0x00,0x00})       // push [esi+0x940]
@@ -110,4 +111,41 @@ namespace PropCaches
         enabled = numbered && collect && redraw;
         status = enabled ? "on" : "hook failed";
     }
+
+    // LampsSkipOwnObject: a light of an object (its 2dfx; the light's key is the object's address plus an offset under
+    // 0x320, 0xC1E183) leaves that object out of its own map, the slot's and the cache's. A scaffold walkway's ceiling
+    // lights hang inside the scaffold (lamp 16.1 m up, the object 12.6 to 20.4 m): drawn into their own maps, the
+    // fitting right at the lamp covered all below it, and the light went out each time the lamp took a slot (you
+    // standing under it, a car going by). A lamp post's own post and head go the same way.
+    static bool skipOwn = true;
+    static thread_local uint32_t scopeKey = 0;
+    static std::atomic<uint32_t> ownSkipped{0};
+
+    static bool OwnObject(uintptr_t entity, uint32_t type) noexcept
+    {
+        if (type != 4 || !scopeKey || scopeKey - static_cast<uint32_t>(entity) >= 0x320) return false;
+        ++ownSkipped;
+        return true;
+    }
+
+    // Around a phase's render (0xD77A00): the light of the slot it draws (+0x940, record +0xF8), slots 0 to 7
+    class OwnScope
+    {
+        uint32_t previous;
+    public:
+        explicit OwnScope(void* phase) noexcept : previous(scopeKey)
+        {
+            scopeKey = 0;
+            if (!skipOwn || !bExtraNightShadows || !phase || !game) return;
+            const auto slot = *reinterpret_cast<const uint32_t*>(reinterpret_cast<uintptr_t>(phase) + 0x940);
+            if (slot > 7 || *reinterpret_cast<const int32_t*>(reinterpret_cast<uintptr_t>(phase) + 0x938) == -1) return;
+            const auto record = game + 0xD9F100 + slot * 0x110;
+            if (*reinterpret_cast<const uint8_t*>(record + 0xED) != 1) return;
+            const auto key = *reinterpret_cast<const uint32_t*>(record + 0xF8);
+            if (key && key != UINT32_MAX) scopeKey = key;
+        }
+        ~OwnScope() noexcept { scopeKey = previous; }
+        OwnScope(const OwnScope&) = delete;
+        OwnScope& operator=(const OwnScope&) = delete;
+    };
 }

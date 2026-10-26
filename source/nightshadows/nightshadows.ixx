@@ -432,6 +432,7 @@ static void __fastcall sub_D77A00(void* _this, void* edx)
                                                 OwnHeadlightCaster::Capture(_this));
     const Lighting20::Buildings::Scope buildings(_this);
     const PostCarLightShadows::Scope posts(_this);
+    const PropCaches::OwnScope own(_this);
     return shsub_D77A00.unsafe_fastcall(_this, edx);
 }
 
@@ -635,7 +636,8 @@ public:
                         PlayerShadowAllocation::layOutCaches = ShadowCache16::LayOut;
                 }
                 else ShadowCache16::status = "allocation_unavailable";
-                PropCaches::Install(iniReader.ReadInteger("NIGHTSHADOWS", "PropsInLampCaches", 1) != 0);
+                PropCaches::Install(iniReader.ReadInteger("NIGHTSHADOWS", "PropsInLampCaches", 1) != 0,
+                    iniReader.ReadInteger("NIGHTSHADOWS", "LampsSkipOwnObject", 1) != 0);
             }
             else
             {
@@ -733,6 +735,9 @@ public:
                             const bool artificial = !*reinterpret_cast<const uint8_t*>(regs.esp + 0x0B);
                             if (bCEAdapter)
                             {
+                                // A light's own object (LampsSkipOwnObject)
+                                if (PropCaches::OwnObject(regs.esi, regs.eax))
+                                    return_to(loc_AE3867);
                                 // Exclude the occupied car/occupants only in their own
                                 // immediate headlight pass; retain their lamp shadows.
                                 if (OwnHeadlightCaster::Exclude(regs.esi, regs.eax, artificial))
