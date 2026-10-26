@@ -1,8 +1,8 @@
 diff --git a/win32_30_nv8/shadowZ/shadowZPS1.asm b/win32_30_nv8/shadowZ/shadowZPS1.asm
-index e15faf0f..a159176a 100644
+index e15faf0f..38fe304a 100644
 --- a/win32_30_nv8/shadowZ/shadowZPS1.asm
 +++ b/win32_30_nv8/shadowZ/shadowZPS1.asm
-@@ -11,16 +11,68 @@
+@@ -11,16 +11,70 @@
  //   Name                 Reg   Size
  //   -------------------- ----- ----
  //   gShadowParam14151617 c56      1
@@ -69,6 +69,8 @@ index e15faf0f..a159176a 100644
 +    min r10.x, r10.x, r10.y
 +    min r10.x, r10.x, r9.w
 +    cmp r10.x, r10.x, r9.z, v0.w
++    abs r11.x, c56.x
++    cmp r10.x, -r11.x, r10.x, v0.w // only the paraboloid halves (c56.x 0), not the cube faces a cached map is baked from (3)
 +    cmp r10.x, -c49_abs.w, v0.w, r10.x
 +    mov oC0, r10.x
  

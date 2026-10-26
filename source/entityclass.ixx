@@ -464,7 +464,6 @@ namespace
         // for each; none when not known
         float viewPlanes[18][4];
         uint8_t viewPlaneCount;
-        bool cache;         // a half of a cached map's render (mode 3): for the plane depth only, never culled
     };
     FaceOrigin faceOrigins[256]{};
     uint8_t nextFaceOrigin = 0;
@@ -484,7 +483,7 @@ namespace
     bool bFaceHooks = false;
     int currentFace = -1;
     FaceOrigin currentOrigin{};
-    bool planeFace = false;     // a marked half of either mode is being drawn, its lamp in currentOrigin
+    bool planeFace = false;     // a marked half is being drawn, its lamp in currentOrigin
 
     // The planes of the convex hull of the camera's frustum (viewport, row vectors: clip = world * view * projection)
     // and the lamp, moved out by kViewHullMargin; 0 planes when the viewport makes no sense
@@ -614,7 +613,7 @@ namespace
         return count;
     }
 
-    void MarkFace(uintptr_t dc, uintptr_t slotOffset, uintptr_t slotRender, bool cache = false)
+    void MarkFace(uintptr_t dc, uintptr_t slotOffset, uintptr_t slotRender)
     {
         if (!dc || !slotRecords)
             return;
@@ -625,7 +624,6 @@ namespace
         std::memcpy(origin.xAxis, reinterpret_cast<const float*>(slot + 0x40), sizeof(origin.xAxis));
         std::memcpy(origin.direction, reinterpret_cast<const float*>(slot + 0xd0), sizeof(origin.direction));
         origin.radius = *reinterpret_cast<const float*>(slot + 0xe0);
-        origin.cache = cache;
         origin.coneAngle = -1.0f;
         if (const auto index = slotOffset / 0x110; index < std::size(slotLights) && slotLights[index].key &&
             slotLights[index].key == *reinterpret_cast<const uint32_t*>(slot + 0xf8))
@@ -696,7 +694,7 @@ namespace
         planeFace = bytes[kFaceMarkByte] == kFaceMark && (face == 0 || face == 1);
         if (planeFace)
             currentOrigin = faceOrigins[bytes[kFaceOriginByte]];
-        currentFace = planeFace && !currentOrigin.cache ? face : -1;
+        currentFace = planeFace ? face : -1;
         faceExecute(dc);
         SetPlaneDepthLamp();
     }
@@ -1086,15 +1084,6 @@ namespace
                 auto** colorWriteVtable = *reinterpret_cast<void***>(colorWriteCtor + 0x26);
                 static auto face0Hook = safetyhook::create_mid(face0.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp, regs.esi); });
                 static auto face1Hook = safetyhook::create_mid(face1.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp, regs.esi); });
-                // The halves of a cached map's render (mode 3, CE 0xD77B69 / 0xD77C16), for LampShadowPlaneDepth
-                auto cache0 = hook::pattern("C7 44 24 34 FF FF FF FF E8 ? ? ? ? EB 02 33 C0 50 E8");
-                auto cache1 = hook::pattern("C7 44 24 30 FF FF FF FF E8 ? ? ? ? EB 02 33 C0 50 E8");
-                if (cache0.size() == 1 && cache1.size() == 1 && callTarget(cache0.get_first<uint8_t>(8)) == faceCtor &&
-                    callTarget(cache1.get_first<uint8_t>(8)) == faceCtor)
-                {
-                    static auto cache0Hook = safetyhook::create_mid(cache0.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp, regs.esi, true); });
-                    static auto cache1Hook = safetyhook::create_mid(cache1.get_first(17), [](SafetyHookContext& regs) { MarkFace(regs.eax, regs.ebp, regs.esi, true); });
-                }
                 faceExecute = reinterpret_cast<DrawExecute>(faceVtable[1]);
                 injector::WriteMemory(&faceVtable[1], reinterpret_cast<void*>(&FaceExecute), true);
                 colorWriteExecute = reinterpret_cast<DrawExecute>(colorWriteVtable[1]);
