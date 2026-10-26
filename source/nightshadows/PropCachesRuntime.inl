@@ -19,6 +19,7 @@
 namespace PropCaches
 {
     static bool enabled = false;
+    static bool skipOwn = true; // LampsSkipOwnObject, below
     static std::string status = "off";
     static uintptr_t game = 0;
     static SafetyHookMid numbered, collect, redraw;
@@ -117,7 +118,6 @@ namespace PropCaches
     // lights hang inside the scaffold (lamp 16.1 m up, the object 12.6 to 20.4 m): drawn into their own maps, the
     // fitting right at the lamp covered all below it, and the light went out each time the lamp took a slot (you
     // standing under it, a car going by). A lamp post's own post and head go the same way.
-    static bool skipOwn = true;
     static thread_local uint32_t scopeKey = 0;
     static std::atomic<uint32_t> ownSkipped{0};
 
