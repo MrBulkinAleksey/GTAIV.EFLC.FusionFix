@@ -436,89 +436,50 @@ namespace Occlusion
                std::isfinite(centre[0] + centre[1] + centre[2]) && Test(probe, centre, radius) == Hidden;
     }
 
-    // The coronas the game camera's pass would draw (coronas.ixx, render thread), by their index into the list
-    // (0x20 bytes each: position, +0xc size, +0x14 how far the vertex shader moves it toward the camera): those whose
-    // quad lies wholly behind the world drawn are taken out. A corona's own vertex shader hides it behind the depth
-    // anyway, so only the CPU's work on its quad goes: from a river bank most of the city's distant lights are behind
-    // its first row of buildings. One projected point a corona, its quad's ball (1.5 times its size and half a metre,
-    // as the view cone takes it, and the move toward the camera, grown by the camera's move) a square of texels
-    uint64_t coronaPasses = 0, coronasTested = 0, coronasHidden = 0, coronaTicks = 0;
-    void CullCoronas(std::vector<uint32_t>& drawn, const uint8_t* list)
+    // The game camera's corona pass (coronas.ixx, render thread) tests its coronas against the grid's first level in
+    // its view cone loop: from a river bank most of the city's distant lights are behind its first row of buildings.
+    // The grid taken at the pass's start is held until its end
+    Probe coronaProbe;
+    uint64_t coronaPasses = 0, coronasTested = 0, coronasHidden = 0;
+    bool CoronasBegin(CoronaRender::HiZPoints& points)
     {
         if (!nCoronas)
-            return;
-        LARGE_INTEGER start;
-        QueryPerformanceCounter(&start);
-        const Probe p = Take();
-        size_t kept = drawn.size();
-        if (p.usable && Precheck(p) == Visible)
+            return false;
+        coronaProbe = Take();
+        const Probe& p = coronaProbe;
+        if (!p.usable || Precheck(p) != Visible || p.grid->data[0].empty())
         {
-            const Grid& g = *p.grid;
-            const float* m = g.viewProjection;
-            // How far u and v move per metre across the view at w = 1
-            const float perMetreU = g.turnU, perMetreV = g.turnV;
-            const float grow = p.move * fMoveGrowth;
-            // Most are a texel or two of the first level, well inside the screen: read there straight away, as
-            // TestRect would; the rest go through it (the profile had the test cost more than half the quads it saved)
-            const float* level0 = g.data[0].data();
-            const int width0 = g.width[0], height0 = g.height[0];
-            const float scaleU = g.scaleU, scaleV = g.scaleV;
-            kept = 0;
-            for (size_t k = 0; k < drawn.size(); ++k)
-            {
-                const uint32_t index = drawn[k];
-                const uint8_t* item = list + size_t(index) * 0x20;
-                const float* pos = (const float*)item;
-                const float r = 1.5f * std::fabs(*(const float*)(item + 0xC)) + 0.5f + grow;
-                const float toward = std::fabs(*(const float*)(item + 0x14));
-                const float x = pos[0] * m[0] + pos[1] * m[4] + pos[2] * m[8] + m[12];
-                const float y = pos[0] * m[1] + pos[1] * m[5] + pos[2] * m[9] + m[13];
-                const float w = pos[0] * m[3] + pos[1] * m[7] + pos[2] * m[11] + m[15];
-                const float nearest = w - (r + toward) * g.wLength;
-                bool hidden = false;
-                if (nearest > g.nearPlane * 2.0f && std::isfinite(x + y + w))
-                {
-                    const float inverse = 1.0f / w;
-                    const float u = x * inverse * 0.5f + 0.5f, v = 0.5f - y * inverse * 0.5f;
-                    const float du = r * perMetreU * g.wLength * inverse, dv = r * perMetreV * g.wLength * inverse;
-                    const float cx = u * scaleU, cy = v * scaleV, ex = du * scaleU, ey = dv * scaleV;
-                    if (ex < 1.5f && ey < 1.5f && cx - ex >= 0.0f && cy - ey >= 0.0f && cx + ex < scaleU && cy + ey < scaleV)
-                    {
-                        const int tx0 = int(cx - ex), tx1 = std::min(int(cx + ex), width0 - 1);
-                        const int ty0 = int(cy - ey), ty1 = std::min(int(cy + ey), height0 - 1);
-                        hidden = true;
-                        for (int ty = ty0; ty <= ty1 && hidden; ++ty)
-                        {
-                            const float* row = level0 + size_t(ty) * width0;
-                            for (int tx = tx0; tx <= tx1; ++tx)
-                                if (row[tx] >= nearest)
-                                {
-                                    hidden = false;
-                                    break;
-                                }
-                        }
-                    }
-                    else
-                        hidden = TestRect(p, u - du, u + du, v - dv, v + dv, nearest, nullptr) == Hidden;
-                }
-                coronasHidden += hidden;
-                if (!hidden || nCoronas == 2)
-                    drawn[kept++] = index;
-            }
-            coronasTested += drawn.size();
+            coronaProbe = {};
+            return false;
         }
-        drawn.resize(kept);
-        LARGE_INTEGER end;
-        QueryPerformanceCounter(&end);
-        coronaTicks += uint64_t(end.QuadPart - start.QuadPart);
+        const Grid& g = *p.grid;
+        points.viewProjection = g.viewProjection;
+        points.depth = g.data[0].data();
+        points.width = g.width[0];
+        points.height = g.height[0];
+        points.scaleU = g.scaleU;
+        points.scaleV = g.scaleV;
+        points.texelsPerMetreU = g.turnU * g.wLength * g.scaleU;
+        points.texelsPerMetreV = g.turnV * g.wLength * g.scaleV;
+        points.wLength = g.wLength;
+        points.nearPlane = g.nearPlane;
+        points.grow = p.move * fMoveGrowth;
+        points.cull = nCoronas == 1;
+        return true;
+    }
+
+    void CoronasEnd(uint32_t tested, uint32_t hidden)
+    {
+        coronaProbe = {};
+        coronasTested += tested;
+        coronasHidden += hidden;
         if (++coronaPasses >= 600)
         {
             const double perPass = 1.0 / double(coronaPasses);
-            FusionLog::Write("Occlusion", "Coronas", "%s, per pass of the game camera over %llu: %.0f tested, %.0f hidden (%.1f%%), "
-                "test %.3f ms\n", nCoronas == 1 ? "hidden ones get no quad" : "counted only", coronaPasses, coronasTested * perPass,
-                coronasHidden * perPass, coronasTested ? 100.0 * double(coronasHidden) / double(coronasTested) : 0.0,
-                double(coronaTicks) * 1000.0 / double(qpcFrequency.QuadPart) * perPass);
-            coronaPasses = coronasTested = coronasHidden = coronaTicks = 0;
+            FusionLog::Write("Occlusion", "Coronas", "%s, per pass of the game camera over %llu: %.0f tested, %.0f hidden (%.1f%%)\n",
+                nCoronas == 1 ? "hidden ones get no quad" : "counted only", coronaPasses, coronasTested * perPass, coronasHidden * perPass,
+                coronasTested ? 100.0 * double(coronasHidden) / double(coronasTested) : 0.0);
+            coronaPasses = coronasTested = coronasHidden = 0;
         }
     }
 
@@ -800,7 +761,8 @@ public:
             started = true;
             IniReload::Add(readIni);
             QueryPerformanceFrequency(&qpcFrequency);
-            CoronaRender::pCullHidden = &CullCoronas;
+            CoronaRender::pHiZBegin = &CoronasBegin;
+            CoronaRender::pHiZEnd = &CoronasEnd;
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
             if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
                 pCamera = *camera.get_first<float*>(12);
