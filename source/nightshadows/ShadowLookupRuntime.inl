@@ -6,7 +6,7 @@
 namespace ShadowLookupGuard {
     static bool ready = false;
     static uintptr_t base = 0;
-    static std::atomic<uint32_t> rejectedDynamic{0}, rejectedStatic{0}, changedBuffer{0};
+    static std::atomic<uint32_t> rejectedDynamic{0}, rejectedStatic{0}, changedBuffer{0}, notBaked{0};
     static int ReadBuffer() noexcept {
         return ready ? *reinterpret_cast<const int*>(base + shadow_lookup_layout::ReadBufferRva) : -1;
     }
@@ -30,6 +30,24 @@ namespace ShadowLookupGuard {
         if (current < 0 || current > 1 || current != before) {
             ++changedBuffer;
             return traceResult(-1,current);
+        }
+        // A cache's tile only once baked for this lamp where it now lies: the lamp's own (8 + cache) and the one its
+        // slot copies its static world from (the slot's +0xF0); else no map this frame rather than another lamp's
+        const auto bakedHere = [&](int i) noexcept
+        {
+            const auto copy = fusionfix::shadows::CacheCopy(base, current, unsigned(i));
+            return fusionfix::shadows::BakedFor(unsigned(i), key, reinterpret_cast<const float*>(copy + 0xC0));
+        };
+        if (nativeResult >= 8 && nativeResult < 8 + static_cast<int>(fusionfix::shadows::cacheEntries) && !bakedHere(nativeResult - 8)) {
+            ++notBaked;
+            return traceResult(-1,current);
+        }
+        if (nativeResult < 8) {
+            const int dependency = *reinterpret_cast<const int*>(base + shadow_lookup_layout::DynamicKey0Rva + current * 0x880 + nativeResult * 0x110 - 8);
+            if (dependency >= 0 && dependency < static_cast<int>(fusionfix::shadows::cacheEntries) && !bakedHere(dependency)) {
+                ++notBaked;
+                return traceResult(-1,current);
+            }
         }
         fusionfix::shadows::ShadowLookupSnapshot s{};
         const auto dynamic = base + shadow_lookup_layout::DynamicKey0Rva + current * 0x880;

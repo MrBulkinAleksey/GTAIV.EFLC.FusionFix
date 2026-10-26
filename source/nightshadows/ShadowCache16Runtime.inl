@@ -162,6 +162,13 @@ namespace ShadowCache16
         const unsigned i = regs.esi >> 8;
         if (i >= fusionfix::shadows::cacheEntries) return;
         const auto* r = reinterpret_cast<const float*>(fusionfix::shadows::CacheRecord(GameBase(), i) + 0xC0);
+        // The lamp slot 0 bakes for this entry (its record +0xF8, mode 3 and cache index +0xF0), else the entry's key
+        const auto slot0 = GameBase() + 0xD9F100;
+        const bool baking = *reinterpret_cast<const uint32_t*>(slot0 + 0xFC) == 3 && *reinterpret_cast<const int32_t*>(slot0 + 0xF0) == int(i);
+        const uint32_t key = baking ? *reinterpret_cast<const uint32_t*>(slot0 + 0xF8)
+            : *reinterpret_cast<const uint32_t*>(fusionfix::shadows::CacheRecord(GameBase(), i) + 0xE0);
+        fusionfix::shadows::bakedRect[i].store(fusionfix::shadows::BakeRect(r), std::memory_order_relaxed);
+        fusionfix::shadows::bakedKey[i].store(key, std::memory_order_release);
         auto* quad = reinterpret_cast<float*>(regs.esp);
         quad[0] = r[0] * 2.0f - 1.0f;
         quad[1] = -(r[1] * 2.0f - 1.0f);
@@ -253,6 +260,7 @@ namespace ShadowCache16
         moved = true;
         rewarpHook = safetyhook::create_mid(base + 0x526852, RewarpQuad);
         copyHook = safetyhook::create_mid(base + 0x525CEA, CopySource);
+        fusionfix::shadows::bakeTracked = bool(rewarpHook);
         return true;
     }
 

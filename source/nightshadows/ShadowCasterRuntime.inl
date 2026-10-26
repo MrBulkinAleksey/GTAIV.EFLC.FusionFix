@@ -321,6 +321,7 @@ namespace ShadowDiagnostics
                 << " lamp_dropped_present=" << PlayerShadowAllocation::lampDroppedPresent.load()
                 << " rejected_dynamic_map=" << ShadowLookupGuard::rejectedDynamic.load()
                 << " rejected_static_map=" << ShadowLookupGuard::rejectedStatic.load()
+                << " map_not_baked_yet=" << ShadowLookupGuard::notBaked.load()
                 << " lookup_buffer_changed=" << ShadowLookupGuard::changedBuffer.load()
                 << " stale_keys_cleared=" << PlayerShadowAllocation::staleKeysCleared.load()
                 << " rejected_adapter=" << PlayerShadowAllocation::rejectedAdapterChecks.load()

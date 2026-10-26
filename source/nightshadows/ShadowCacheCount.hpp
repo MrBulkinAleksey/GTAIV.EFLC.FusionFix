@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 
 namespace fusionfix::shadows {
@@ -21,5 +22,29 @@ inline uintptr_t CacheRecord(uintptr_t gameBase, unsigned i) noexcept
 inline uintptr_t CacheCopy(uintptr_t gameBase, int buffer, unsigned i) noexcept
 {
     return (cacheCopiesAt ? cacheCopiesAt : gameBase + 0xD9D0F0) + buffer * cacheCopyStride + i * 0x100;
+}
+
+// What each cache's tile holds: the key of the lamp it was last baked for and the rectangle it was drawn into (a
+// BakeRect), set where the bake's rewarp draws the tile (ShadowCache16's RewarpQuad, LampShadowCaches 32). An entry
+// takes its new key and, moved from a quarter tile to a whole one, its new rectangle at once, but is baked there only
+// a run or more later: until then its tile holds another lamp's map, or another entry's, and a lamp lit from it threw
+// shadows where none could be, coming and going as you drove.
+inline bool bakeTracked = false;
+inline std::atomic<uint32_t> bakedKey[MaxCacheEntries]{};
+inline std::atomic<uint32_t> bakedRect[MaxCacheEntries]{};
+
+// A tile rectangle (x, y, 0, size as shares of the atlas) in twentieths: tiles and quarter tiles fall on them
+inline uint32_t BakeRect(const float* rect) noexcept
+{
+    const auto twentieths = [](float v) { return static_cast<uint32_t>(v * 20.0f + 0.5f) & 0xFF; };
+    return twentieths(rect[0]) | twentieths(rect[1]) << 8 | twentieths(rect[3]) << 16 | 1u << 24;
+}
+
+// Whether cache i's tile holds the map baked for key at rect; always, while the bakes are not tracked
+inline bool BakedFor(unsigned i, uint32_t key, const float* rect) noexcept
+{
+    if (!bakeTracked) return true;
+    if (i >= MaxCacheEntries) return false;
+    return bakedKey[i].load(std::memory_order_acquire) == key && bakedRect[i].load(std::memory_order_relaxed) == BakeRect(rect);
 }
 }
