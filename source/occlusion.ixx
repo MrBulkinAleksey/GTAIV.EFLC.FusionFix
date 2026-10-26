@@ -19,6 +19,7 @@ import common;
 import comvars;
 import framehistory;
 import inireload;
+import coronas;
 
 // Occlusion culling against the depth already drawn (Hi-Z). The game leaves out of its scene only what is outside the
 // view (and interiors behind closed portals; its rmOccluderSystem is never used), so in the city every building, prop
@@ -46,8 +47,10 @@ export namespace Occlusion
     // HiZOccluderCategories: a bit per material category (the material ID less its 128 and 8 bits, as WetGround takes
     // it) whose pixels hide what is behind them; the rest count as nothing in the way
     int nOccluderCategories = 1;
+    // CoronasOcclusion: 0 off, 1 the game camera's coronas hidden behind the world are given no quad, 2 counted only
+    int nCoronas = 1;
     // The grid is built while anything tests against it
-    bool Enabled() { return nMode != 0 || bLampShadows; }
+    bool Enabled() { return nMode != 0 || bLampShadows || nCoronas != 0; }
 
     // The latest grid with what this moment needs to test against it: how far the camera has moved and turned since.
     // Taken once for a batch of tests, on any thread.
@@ -306,24 +309,11 @@ namespace Occlusion
         return Visible;
     }
 
-    // A projected box (its eight corners' clip x, y, w) against the grid: hidden when its nearest point lies behind
-    // the farthest depth of every texel its screen rectangle covers
-    Outcome TestProjected(const Probe& p, const float (&clips)[8][3], float nearest, bool* atEdge)
+    // A screen rectangle (shares of the grid's screen) against the grid: hidden when nearest (w) lies behind the
+    // farthest depth of every texel it covers
+    Outcome TestRect(const Probe& p, float minU, float maxU, float minV, float maxV, float nearest, bool* atEdge)
     {
         const Grid& g = *p.grid;
-        if (nearest <= g.nearPlane * 2.0f)
-            return NearCamera;
-        float minU = 1e30f, maxU = -1e30f, minV = 1e30f, maxV = -1e30f;
-        for (const auto& c : clips)
-        {
-            if (c[2] <= g.nearPlane)
-                return NearCamera;
-            const float u = c[0] / c[2] * 0.5f + 0.5f, v = 0.5f - c[1] / c[2] * 0.5f;
-            minU = std::min(minU, u);
-            maxU = std::max(maxU, u);
-            minV = std::min(minV, v);
-            maxV = std::max(maxV, v);
-        }
         // Beyond the band it's off the screen now; within, the grid's edge stands for it
         if (p.bandU > EdgeBand || p.bandV > EdgeBand)
         {
@@ -355,6 +345,27 @@ namespace Occlusion
                 if (g.At(level, x, y) >= nearest)
                     return Visible;
         return Hidden;
+    }
+
+    // A projected box (its eight corners' clip x, y, w) against the grid: hidden when its nearest point lies behind
+    // the farthest depth of every texel its screen rectangle covers
+    Outcome TestProjected(const Probe& p, const float (&clips)[8][3], float nearest, bool* atEdge)
+    {
+        const Grid& g = *p.grid;
+        if (nearest <= g.nearPlane * 2.0f)
+            return NearCamera;
+        float minU = 1e30f, maxU = -1e30f, minV = 1e30f, maxV = -1e30f;
+        for (const auto& c : clips)
+        {
+            if (c[2] <= g.nearPlane)
+                return NearCamera;
+            const float u = c[0] / c[2] * 0.5f + 0.5f, v = 0.5f - c[1] / c[2] * 0.5f;
+            minU = std::min(minU, u);
+            maxU = std::max(maxU, u);
+            minV = std::min(minV, v);
+            maxV = std::max(maxV, v);
+        }
+        return TestRect(p, minU, maxU, minV, maxV, nearest, atEdge);
     }
 
     // A sphere, by its bounding box along the world's axes, grown by how far the camera moved; after Precheck
@@ -423,6 +434,92 @@ namespace Occlusion
     {
         return probe.usable && Precheck(probe) == Visible && std::isfinite(radius) &&
                std::isfinite(centre[0] + centre[1] + centre[2]) && Test(probe, centre, radius) == Hidden;
+    }
+
+    // The coronas the game camera's pass would draw (coronas.ixx, render thread), by their index into the list
+    // (0x20 bytes each: position, +0xc size, +0x14 how far the vertex shader moves it toward the camera): those whose
+    // quad lies wholly behind the world drawn are taken out. A corona's own vertex shader hides it behind the depth
+    // anyway, so only the CPU's work on its quad goes: from a river bank most of the city's distant lights are behind
+    // its first row of buildings. One projected point a corona, its quad's ball (1.5 times its size and half a metre,
+    // as the view cone takes it, and the move toward the camera, grown by the camera's move) a square of texels
+    uint64_t coronaPasses = 0, coronasTested = 0, coronasHidden = 0, coronaTicks = 0;
+    void CullCoronas(std::vector<uint32_t>& drawn, const uint8_t* list)
+    {
+        if (!nCoronas)
+            return;
+        LARGE_INTEGER start;
+        QueryPerformanceCounter(&start);
+        const Probe p = Take();
+        size_t kept = drawn.size();
+        if (p.usable && Precheck(p) == Visible)
+        {
+            const Grid& g = *p.grid;
+            const float* m = g.viewProjection;
+            // How far u and v move per metre across the view at w = 1
+            const float perMetreU = g.turnU, perMetreV = g.turnV;
+            const float grow = p.move * fMoveGrowth;
+            // Most are a texel or two of the first level, well inside the screen: read there straight away, as
+            // TestRect would; the rest go through it (the profile had the test cost more than half the quads it saved)
+            const float* level0 = g.data[0].data();
+            const int width0 = g.width[0], height0 = g.height[0];
+            const float scaleU = g.scaleU, scaleV = g.scaleV;
+            kept = 0;
+            for (size_t k = 0; k < drawn.size(); ++k)
+            {
+                const uint32_t index = drawn[k];
+                const uint8_t* item = list + size_t(index) * 0x20;
+                const float* pos = (const float*)item;
+                const float r = 1.5f * std::fabs(*(const float*)(item + 0xC)) + 0.5f + grow;
+                const float toward = std::fabs(*(const float*)(item + 0x14));
+                const float x = pos[0] * m[0] + pos[1] * m[4] + pos[2] * m[8] + m[12];
+                const float y = pos[0] * m[1] + pos[1] * m[5] + pos[2] * m[9] + m[13];
+                const float w = pos[0] * m[3] + pos[1] * m[7] + pos[2] * m[11] + m[15];
+                const float nearest = w - (r + toward) * g.wLength;
+                bool hidden = false;
+                if (nearest > g.nearPlane * 2.0f && std::isfinite(x + y + w))
+                {
+                    const float inverse = 1.0f / w;
+                    const float u = x * inverse * 0.5f + 0.5f, v = 0.5f - y * inverse * 0.5f;
+                    const float du = r * perMetreU * g.wLength * inverse, dv = r * perMetreV * g.wLength * inverse;
+                    const float cx = u * scaleU, cy = v * scaleV, ex = du * scaleU, ey = dv * scaleV;
+                    if (ex < 1.5f && ey < 1.5f && cx - ex >= 0.0f && cy - ey >= 0.0f && cx + ex < scaleU && cy + ey < scaleV)
+                    {
+                        const int tx0 = int(cx - ex), tx1 = std::min(int(cx + ex), width0 - 1);
+                        const int ty0 = int(cy - ey), ty1 = std::min(int(cy + ey), height0 - 1);
+                        hidden = true;
+                        for (int ty = ty0; ty <= ty1 && hidden; ++ty)
+                        {
+                            const float* row = level0 + size_t(ty) * width0;
+                            for (int tx = tx0; tx <= tx1; ++tx)
+                                if (row[tx] >= nearest)
+                                {
+                                    hidden = false;
+                                    break;
+                                }
+                        }
+                    }
+                    else
+                        hidden = TestRect(p, u - du, u + du, v - dv, v + dv, nearest, nullptr) == Hidden;
+                }
+                coronasHidden += hidden;
+                if (!hidden || nCoronas == 2)
+                    drawn[kept++] = index;
+            }
+            coronasTested += drawn.size();
+        }
+        drawn.resize(kept);
+        LARGE_INTEGER end;
+        QueryPerformanceCounter(&end);
+        coronaTicks += uint64_t(end.QuadPart - start.QuadPart);
+        if (++coronaPasses >= 600)
+        {
+            const double perPass = 1.0 / double(coronaPasses);
+            FusionLog::Write("Occlusion", "Coronas", "%s, per pass of the game camera over %llu: %.0f tested, %.0f hidden (%.1f%%), "
+                "test %.3f ms\n", nCoronas == 1 ? "hidden ones get no quad" : "counted only", coronaPasses, coronasTested * perPass,
+                coronasHidden * perPass, coronasTested ? 100.0 * double(coronasHidden) / double(coronasTested) : 0.0,
+                double(coronaTicks) * 1000.0 / double(qpcFrequency.QuadPart) * perPass);
+            coronaPasses = coronasTested = coronasHidden = coronaTicks = 0;
+        }
     }
 
     // The model's box for entities whose box is their model's (vtable +0x60 the base entity's, CE 0xa319c0: model info
@@ -682,6 +779,7 @@ public:
             nFrames = std::clamp(iniReader.ReadInteger("PERFORMANCE", "HiZOcclusionFrames", 2), 1, 60);
             fMinRadius = std::clamp(iniReader.ReadFloat("PERFORMANCE", "HiZOcclusionMinRadius", 0.0f), 0.0f, 100.0f);
             bLampShadows = iniReader.ReadInteger("PERFORMANCE", "LampShadowsOcclusion", 1) != 0;
+            nCoronas = std::clamp(iniReader.ReadInteger("PERFORMANCE", "CoronasOcclusion", 1), 0, 2);
             nOccluderCategories = iniReader.ReadInteger("PERFORMANCE", "HiZOccluderCategories", 1) & 0xFF;
             bBoxes = iniReader.ReadInteger("PERFORMANCE", "HiZOcclusionBoxes", 1) != 0;
             if (hooked)
@@ -702,6 +800,7 @@ public:
             started = true;
             IniReload::Add(readIni);
             QueryPerformanceFrequency(&qpcFrequency);
+            CoronaRender::pCullHidden = &CullCoronas;
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
             if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
                 pCamera = *camera.get_first<float*>(12);
