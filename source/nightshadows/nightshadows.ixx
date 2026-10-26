@@ -542,9 +542,9 @@ public:
             IniReload::Add(ReadLiveSettings);
             if (reader.ReadInteger("DEBUG", "NightShadowsCrashDiagnostics", 0) != 0)
             {
-                const auto crashPath = reader.GetIniPath().parent_path() /
+                const auto crashPath = GetThisModulePath() /
                     (L"GTAIV-shadow-crash-" + std::to_wstring(GetCurrentProcessId()) + L".bin");
-                const auto contextPath = reader.GetIniPath().parent_path() /
+                const auto contextPath = GetThisModulePath() /
                     (L"GTAIV-path-context-" + std::to_wstring(GetCurrentProcessId()) + L".bin");
                 crash_path_context::Install(contextPath.c_str());
                 shadow_crash_trace::Install(crashPath.c_str());
