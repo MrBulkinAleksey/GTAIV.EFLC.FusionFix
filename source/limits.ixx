@@ -163,6 +163,9 @@ public:
                 poolNames.push_back("Dummy Object");
                 poolNames.push_back("EntryInfoNodes");
                 poolNames.push_back("PtrNode Double");
+
+                // Physics instances of buildings and objects (4760): CE 0xa322a0 does not check the pool and crashes on a full one
+                poolNames.push_back("phInstGta");
             }
 
             if (nVehicleBudget)
