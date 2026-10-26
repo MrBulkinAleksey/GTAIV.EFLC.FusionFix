@@ -363,6 +363,7 @@ namespace CShadows
 }
 
 #include "ShadowAllocationRuntime.inl"
+#include "ShadowCacheLogRuntime.inl"
 #include "NearbyVehicleRuntime36.inl"
 #include "ShadowLookupRuntime.inl"
 #include "ShadowCasterRuntime.inl"
@@ -533,7 +534,7 @@ public:
         }
 
         // Registered before game callbacks start, independent of async init.
-        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); PlayerShadowAllocation::CaptureCasters(); PlayerShadowAllocation::SlotTraceStatus(); PlayerShadowAllocation::FlushSlotTrace(); EmergencyTrafficShadows::Update(); Lighting20::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
+        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); PlayerShadowAllocation::CaptureCasters(); PlayerShadowAllocation::SlotTraceStatus(); PlayerShadowAllocation::FlushSlotTrace(); PlayerShadowAllocation::CacheLog::Flush(); EmergencyTrafficShadows::Update(); Lighting20::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
@@ -584,6 +585,9 @@ public:
                     PlayerShadowAllocation::cameraPriority = PlayerShadowAllocation::InstallCameraCapture();
                 PlayerShadowAllocation::slotTrace.enabled = iniReader.ReadInteger("DEBUG", "NightShadowsSlotLog", 0) != 0;
                 PlayerShadowAllocation::slotTrace.describeOwner = PlayerShadowAllocation::DescribeKeyOwner;
+                PlayerShadowAllocation::CacheLog::enabled = iniReader.ReadInteger("DEBUG", "NightShadowsCacheLog", 0) != 0;
+                if (PlayerShadowAllocation::CacheLog::enabled)
+                    PlayerShadowAllocation::observeCaches = PlayerShadowAllocation::CacheLog::Observe;
                 PlayerShadowAllocation::lampSpacing.spacing = PlayerShadowAllocation::lampSpacing.base;
                 PlayerShadowAllocation::InstallLampSight(iniReader.ReadInteger("NIGHTSHADOWS", "LampsBehindWalls", 1) != 0,
                     static_cast<uint32_t>(iniReader.ReadInteger("NIGHTSHADOWS", "LampsBehindWallsFlags", 6)));

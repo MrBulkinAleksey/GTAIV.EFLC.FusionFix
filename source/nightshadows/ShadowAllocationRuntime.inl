@@ -19,6 +19,7 @@ namespace PlayerShadowAllocation
     static bool (*labPointSource)(const rage::CLightSource&) noexcept=nullptr;
     static uint64_t (*labLampGeneration)(const rage::CLightSource&) noexcept=nullptr;
     static void (*observeShadowResult)() noexcept=nullptr;
+    static void (*observeCaches)() noexcept=nullptr; // NightShadowsCacheLog
     static void (*observeSubmittedLights)(const rage::CLightSource*,uint32_t) noexcept = nullptr;
     // Changes the frame's lights before the game picks the slots (Lighting20: stale lamp keys, cached lamps).
     static void (*prepareSources)(rage::CLightSource*,uint32_t) noexcept = nullptr;
@@ -1424,6 +1425,7 @@ namespace PlayerShadowAllocation
         // hook-object mutex around native execution (including recursion).
         selectionHook.unsafe_ccall<void>();
         if(observeShadowResult && state.depth==1)observeShadowResult();
+        if(observeCaches && state.depth==1)observeCaches();
         // Native copying marks holes inactive but leaves their previous keys.
         // Clear only those dead identities before native frame-buffer copying.
         // This prevents lighting lookup from finding a stale, unrendered map.
