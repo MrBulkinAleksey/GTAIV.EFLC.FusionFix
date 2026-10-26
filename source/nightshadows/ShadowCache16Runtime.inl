@@ -107,9 +107,17 @@ namespace ShadowCache16
             wholeFree = state == -1 || *reinterpret_cast<const float*>(record + 0xD0) > wholeDistance * evictMargin + 2.0f;
         }
         if (!wholeFree) return;
+        uint32_t inUse = 0; // the caches the active slots copy their static world from
+        for (unsigned slot = 1; slot < 8; ++slot)
+        {
+            const auto record = base + 0xD9F100 + slot * 0x110;
+            const int cache = *reinterpret_cast<const int32_t*>(record + 0xF0);
+            if (*reinterpret_cast<const uint8_t*>(record + 0xED) == 1 && cache >= 0 && cache < 32) inUse |= 1u << cache;
+        }
         for (unsigned i = WholeTiles; i < fusionfix::shadows::cacheEntries; ++i)
         {
             const auto record = fusionfix::shadows::CacheRecord(base, i);
+            if (inUse & (1u << i)) continue;
             if (*reinterpret_cast<const int32_t*>(record + 0xE4) != 1) continue;
             if (*reinterpret_cast<const float*>(record + 0xD0) >= wholeDistance * 0.75f) continue;
             Reset(record);
@@ -121,7 +129,7 @@ namespace ShadowCache16
     // The selection's pick of an entry for a new cache (0x927E29, EDX; -1 none) for a lamp at distance (game's measure):
     // the same rule as the game's (the oldest unused entry, else the farthest one farther than the lamp), first among
     // the whole tiles for a near lamp and the quarter ones for a far one, then the other kind.
-    static int CacheChoice(int native, float distance) noexcept
+    static int CacheChoice(int native, float distance, uint32_t inUse) noexcept
     {
         if (!moved || !std::isfinite(distance)) return native;
         const auto base = GameBase();
@@ -131,6 +139,7 @@ namespace ShadowCache16
             float most = distance * evictMargin + 2.0f;
             for (unsigned i = from; i < to; ++i)
             {
+                if (inUse & (1u << i)) continue; // a slot copies its static world from it this frame
                 const auto record = fusionfix::shadows::CacheRecord(base, i);
                 const int state = *reinterpret_cast<const int32_t*>(record + 0xE4);
                 const int age = *reinterpret_cast<const int32_t*>(record + 0xDC);

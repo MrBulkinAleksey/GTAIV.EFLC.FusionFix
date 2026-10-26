@@ -49,11 +49,33 @@
 
     // LampShadowCaches 32: a near lamp's new cache in a whole tile, a far one's in a quarter (ShadowCache16::CacheChoice),
     // when the protection above left the game's pick as it was. [esp+0x2C] the lamp's distance.
-    static int (*cacheChoice)(int native, float distance) noexcept = nullptr;
+    // It must leave alone the entries a slot copies its static world from this frame: the cache of each light the
+    // selection picked for a slot (the 7 light indices on the stack) and of each slot record still active. Given to
+    // another lamp and baked over, that slot drew the other lamp's static shadow (shadows where none should be).
+    static int (*cacheChoice)(int native, float distance, uint32_t inUse) noexcept = nullptr;
+    static uint32_t CachesInUse(const SafetyHookContext& regs) noexcept {
+        uint32_t used=0;
+        const auto* lights=CurrentLights();const auto count=CurrentCount();
+        if(reinterpret_cast<uintptr_t>(lights)>=0x10000 && count<=4096) {
+            const auto* indices=reinterpret_cast<const int32_t*>(regs.esp+allocation::SelectedIndicesStackOffset);
+            for(unsigned i=0;i<7;++i) {
+                const int index=indices[i];
+                if(index<0 || static_cast<uint32_t>(index)>=count) continue;
+                const int cache=lights[index].mShadowCacheIndex;
+                if(cache>=0 && cache<32) used|=1u<<cache;
+            }
+        }
+        for(unsigned slot=1;slot<8;++slot) {
+            const auto record=gameBase+0xD9F100+slot*0x110;
+            const int cache=*reinterpret_cast<const int32_t*>(record+0xF0);
+            if(*reinterpret_cast<const uint8_t*>(record+0xED)==1 && cache>=0 && cache<32) used|=1u<<cache;
+        }
+        return used;
+    }
     static void ProtectCacheDependencies(SafetyHookContext& regs) noexcept {
         const FloatingPointState fp;
         const auto native=regs.edx;
         ProtectCacheDependenciesNative(regs);
         if(cacheChoice && regs.edx==native && !unsupportedThread.load(std::memory_order_relaxed))
-            regs.edx=static_cast<uint32_t>(cacheChoice(static_cast<int>(native),*reinterpret_cast<const float*>(regs.esp+0x2C)));
+            regs.edx=static_cast<uint32_t>(cacheChoice(static_cast<int>(native),*reinterpret_cast<const float*>(regs.esp+0x2C),CachesInUse(regs)));
     }
