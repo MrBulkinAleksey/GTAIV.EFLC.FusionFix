@@ -43,7 +43,7 @@
         regs.edx=static_cast<uint32_t>(result);
         if(result<0)++cacheDependencyDeferred;else ++cacheDependencyRedirected;
         ShadowTrace34::Emit({11,state.frame,GetTickCount(),cache[native].key,
-            native,result,dependencies,static_cast<int>(lights[candidate].mCastShadows),
+            native,result,static_cast<int>(dependencies),static_cast<int>(lights[candidate].mCastShadows),
             distance,cache[native].distance,static_cast<float>(cache[native].age),static_cast<float>(cache[native].state)});
     }
 

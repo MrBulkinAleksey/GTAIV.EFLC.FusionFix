@@ -134,9 +134,9 @@ namespace ShadowCache16
             }
             return unused != -1 ? unused : farthest;
         };
-        const bool near = distance < wholeDistance;
-        int choice = near ? pick(0, WholeTiles) : pick(WholeTiles, fusionfix::shadows::cacheEntries);
-        if (choice < 0) choice = near ? pick(WholeTiles, fusionfix::shadows::cacheEntries) : pick(0, WholeTiles);
+        const bool close = distance < wholeDistance;
+        int choice = close ? pick(0, WholeTiles) : pick(WholeTiles, fusionfix::shadows::cacheEntries);
+        if (choice < 0) choice = close ? pick(WholeTiles, fusionfix::shadows::cacheEntries) : pick(0, WholeTiles);
         ++choices;
         return choice;
     }
