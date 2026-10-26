@@ -2,7 +2,7 @@ diff --git a/win32_30_nv8/shadowZ/shadowZPS1.asm b/win32_30_nv8/shadowZ/shadowZP
 index e15faf0f..38fe304a 100644
 --- a/win32_30_nv8/shadowZ/shadowZPS1.asm
 +++ b/win32_30_nv8/shadowZ/shadowZPS1.asm
-@@ -11,16 +11,72 @@
+@@ -11,16 +11,73 @@
  //   Name                 Reg   Size
  //   -------------------- ----- ----
  //   gShadowParam14151617 c56      1
@@ -71,7 +71,8 @@ index e15faf0f..38fe304a 100644
 +    cmp r10.x, r10.x, r9.z, v0.w
 +    abs r11.x, c56.x
 +    cmp r10.x, -r11.x, r10.x, v0.w // only the paraboloid halves (c56.x 0), not the cube faces a cached map is baked from (3)
-+    add r11.y, c49.w, c2.z // on only with c49.w the key: c49 is other shaders' too, and this shader draws outside a marked half
++    mov r11.y, c49.w
++    add r11.y, r11.y, c2.z // on only with c49.w the key: c49 is other shaders' too, and this shader draws outside a marked half
 +    add r11.y, r11_abs.y, -c2.w
 +    cmp r10.x, r11.y, v0.w, r10.x
 +    mov oC0, r10.x
