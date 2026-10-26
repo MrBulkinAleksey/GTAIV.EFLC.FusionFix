@@ -14,6 +14,7 @@ export module renderskip;
 
 import common;
 import comvars;
+import settings;
 import temporal;
 import vtablepatch;
 import inireload;
@@ -931,24 +932,24 @@ public:
 
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
-            bCascadesAtNight = iniReader.ReadInteger("PERFORMANCE", "SunShadowsAtNight", 1) != 0;
-            bReflectionsHalfRate = iniReader.ReadInteger("PERFORMANCE", "ReflectionsHalfRate", 1) != 0;
-            bWaterReflectionWhenSeen = iniReader.ReadInteger("PERFORMANCE", "WaterReflectionWhenSeen", 1) != 0;
-            bFarCascadesHalfRate = iniReader.ReadInteger("PERFORMANCE", "FarCascadesHalfRate", 1) != 0;
-            bMidCascadeHalfRate = iniReader.ReadInteger("PERFORMANCE", "MidCascadeHalfRate", 0) != 0;
-            bTrace = iniReader.ReadInteger("DEBUG", "RenderSkipTrace", 0) != 0;
+            SettingsReader reader;
+            bCascadesAtNight = reader.ReadInteger("PERFORMANCE", "SunShadowsAtNight", 1) != 0;
+            bReflectionsHalfRate = reader.ReadInteger("PERFORMANCE", "ReflectionsHalfRate", 1) != 0;
+            bWaterReflectionWhenSeen = reader.ReadInteger("PERFORMANCE", "WaterReflectionWhenSeen", 1) != 0;
+            bFarCascadesHalfRate = reader.ReadInteger("PERFORMANCE", "FarCascadesHalfRate", 1) != 0;
+            bMidCascadeHalfRate = reader.ReadInteger("PERFORMANCE", "MidCascadeHalfRate", 0) != 0;
+            bTrace = reader.ReadInteger("DEBUG", "RenderSkipTrace", 0) != 0;
             CoronaRender::pPassDropped = &DropsDraws;
-            fSunLowBelow = iniReader.ReadFloat("PERFORMANCE", "SunShadowsMinElevation", 8.0f);
+            fSunLowBelow = reader.ReadFloat("PERFORMANCE", "SunShadowsMinElevation", 8.0f);
             // At init: the hook that fills the parameters walks the same vector
             nSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
             if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
                 pCamera = *camera.get_first<float*>(12);
-            bMatrixTrace = iniReader.ReadInteger("DEBUG", "CascadeMatrixTrace", 0) != 0;
+            bMatrixTrace = reader.ReadInteger("DEBUG", "CascadeMatrixTrace", 0) != 0;
             // Ctrl+Shift+F10 (IniReload). Half rate cascades turned on in game without the hooks below (put in when one
             // of them is on at startup) take turns only while the camera keeps still.
-            IniReload::Add([](CIniReader& ini)
+            IniReload::Add([](SettingsReader& ini)
             {
                 bCascadesAtNight = ini.ReadInteger("PERFORMANCE", "SunShadowsAtNight", 1) != 0;
                 bReflectionsHalfRate = ini.ReadInteger("PERFORMANCE", "ReflectionsHalfRate", 1) != 0;

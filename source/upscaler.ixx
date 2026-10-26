@@ -5,7 +5,7 @@ module;
 #include <cstdio>
 #include <d3d12.h>
 #include <d3d9on12.h>
-#include <dxvk_interop.hpp>
+#include "includes/dxvk_interop.hpp"
 #include <upscaler_protocol.hpp>
 
 #include "FusionLog.hpp"

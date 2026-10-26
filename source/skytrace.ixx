@@ -14,6 +14,7 @@ export module skytrace;
 
 import common;
 import comvars;
+import settings;
 import d3dx9_43;
 import vtablepatch;
 
@@ -460,9 +461,9 @@ public:
     {
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
-            SkyTrace::bEnabled = iniReader.ReadInteger("DEBUG", "SkyTrace", 0) != 0;
-            SkyTrace::bMoonPass = iniReader.ReadInteger("DEBUG", "SkyMoonPass", 1) != 0;
+            SettingsReader reader;
+            SkyTrace::bEnabled = reader.ReadInteger("DEBUG", "SkyTrace", 0) != 0;
+            SkyTrace::bMoonPass = reader.ReadInteger("DEBUG", "SkyMoonPass", 1) != 0;
         };
     }
 } SkyTraceInitInstance;

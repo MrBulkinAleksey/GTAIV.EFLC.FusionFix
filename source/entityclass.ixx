@@ -16,6 +16,7 @@ export module entityclass;
 
 import common;
 import comvars;
+import settings;
 import inireload;
 import renderskip;
 import temporal;
@@ -1127,20 +1128,20 @@ namespace
                 LARGE_INTEGER frequency;
                 QueryPerformanceFrequency(&frequency);
                 qpcFrequency = frequency.QuadPart;
-                auto readIni = [](CIniReader& iniReader)
+                auto readIni = [](SettingsReader& reader)
                 {
-                    bDrawLog = iniReader.ReadInteger("DEBUG", "EntityDrawLog", 0) != 0;
-                    bFaceCullingSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowFaceCulling", 1) != 0;
+                    bDrawLog = reader.ReadInteger("DEBUG", "EntityDrawLog", 0) != 0;
+                    bFaceCullingSetting = reader.ReadInteger("PERFORMANCE", "LampShadowFaceCulling", 1) != 0;
                     bFaceCulling = bFaceCullingSetting && bFaceHooks;
-                    bRangeCullingSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowRangeCulling", 1) != 0;
+                    bRangeCullingSetting = reader.ReadInteger("PERFORMANCE", "LampShadowRangeCulling", 1) != 0;
                     bRangeCulling = bRangeCullingSetting && bFaceHooks;
-                    bSmallCullSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowSmallCull", 1) != 0;
+                    bSmallCullSetting = reader.ReadInteger("PERFORMANCE", "LampShadowSmallCull", 1) != 0;
                     bSmallCulling = bSmallCullSetting && bFaceHooks;
-                    bConeCullSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowConeCulling", 1) != 0;
+                    bConeCullSetting = reader.ReadInteger("PERFORMANCE", "LampShadowConeCulling", 1) != 0;
                     bConeCulling = bConeCullSetting && bFaceHooks && bConeHook;
-                    bViewCullSetting = iniReader.ReadInteger("PERFORMANCE", "LampShadowViewCulling", 1) != 0;
+                    bViewCullSetting = reader.ReadInteger("PERFORMANCE", "LampShadowViewCulling", 1) != 0;
                     bViewCulling = bViewCullSetting && bFaceHooks;
-                    bSkipLeftOut = iniReader.ReadInteger("PERFORMANCE", "SkipLeftOutDraws", 1) != 0;
+                    bSkipLeftOut = reader.ReadInteger("PERFORMANCE", "SkipLeftOutDraws", 1) != 0;
                     FusionLog::Write("EntityClass", "Settings", "EntityDrawLog %d, LampShadowFaceCulling %d (%s), LampShadowRangeCulling %d (%s), LampShadowSmallCull %d (%s), LampShadowConeCulling %d (%s), LampShadowViewCulling %d (%s), SkipLeftOutDraws %d\n",
                         int(bDrawLog), int(bFaceCullingSetting), !bFaceCullingSetting ? "off" : bFaceCulling ? "on" : "no hooks",
                         int(bRangeCullingSetting), !bRangeCullingSetting ? "off" : bRangeCulling ? "on" : "no hooks",
@@ -1148,8 +1149,8 @@ namespace
                         int(bConeCullSetting), !bConeCullSetting ? "off" : bConeCulling ? "on" : "no hooks",
                         int(bViewCullSetting), !bViewCullSetting ? "off" : bViewCulling ? "on" : "no hooks", int(bSkipLeftOut));
                 };
-                CIniReader iniReader("");
-                readIni(iniReader);
+                SettingsReader reader;
+                readIni(reader);
                 IniReload::Add(readIni);
             };
         }

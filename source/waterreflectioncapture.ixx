@@ -15,6 +15,7 @@ export module waterreflectioncapture;
 
 import common;
 import comvars;
+import settings;
 import drawcapture;
 import entityclass;
 import framehistory;
@@ -174,9 +175,9 @@ namespace WaterReflectionCapture
             text += std::format("{:4} {:<56} prim {} x{} | {}\n", draws, what, int(type), primitives, DrawCapture::States(real));
     }
 
-    static void ReadIni(CIniReader& iniReader)
+    static void ReadIni(SettingsReader& reader)
     {
-        if (iniReader.ReadInteger("DEBUG", "WaterReflectionCapture", 0) != 0 && !capturing)
+        if (reader.ReadInteger("DEBUG", "WaterReflectionCapture", 0) != 0 && !capturing)
             armed = true;
     }
 }
@@ -188,8 +189,8 @@ public:
     {
         FusionFix::onInitEvent() += []()
         {
-            CIniReader iniReader("");
-            WaterReflectionCapture::ReadIni(iniReader);
+            SettingsReader reader;
+            WaterReflectionCapture::ReadIni(reader);
             IniReload::Add(WaterReflectionCapture::ReadIni);
             DrawCapture::AddObserver(&WaterReflectionCapture::DrawObserver);
             EntityClass::AddDrawHooks([](EntityClass::Kind kind) { WaterReflectionCapture::currentKind = kind; },

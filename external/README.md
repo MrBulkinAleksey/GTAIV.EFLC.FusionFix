@@ -1,8 +1,6 @@
-# Vendored SDK subsets
+# External code
 
-Only the files needed to build `GTAIV.EFLC.FusionFix.exe` (the 64-bit DLSS/FSR helper) are kept here,
-copied unmodified from the official repositories. The full repositories are 250 MB (FidelityFX SDK)
-and 1.4 GB (DLSS SDK) per checkout, almost entirely prebuilt libraries for other platforms.
+Submodules (see .gitmodules). The Vulkan headers are the `Vulkan-Headers` submodule.
 
 | Folder | Source | Version | Commit |
 |---|---|---|---|

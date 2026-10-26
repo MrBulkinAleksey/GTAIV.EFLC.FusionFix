@@ -17,6 +17,7 @@ export module occlusion;
 
 import common;
 import comvars;
+import settings;
 import framehistory;
 import inireload;
 
@@ -675,15 +676,15 @@ public:
         // All but whether the lists' hook is installed is taken on the fly (Ctrl+Shift+F10): with the hook in, HiZOcclusion
         // moves between 0, 1 and 2 for comparing the same view
         static bool hooked = false, started = false;
-        static auto readIni = [](CIniReader& iniReader)
+        static auto readIni = [](SettingsReader& reader)
         {
-            const int mode = std::clamp(iniReader.ReadInteger("PERFORMANCE", "HiZOcclusion", 1), 0, 2);
-            fMaxMove = std::clamp(iniReader.ReadFloat("PERFORMANCE", "HiZOcclusionMaxMove", 4.0f), 0.0f, 50.0f);
-            nFrames = std::clamp(iniReader.ReadInteger("PERFORMANCE", "HiZOcclusionFrames", 2), 1, 60);
-            fMinRadius = std::clamp(iniReader.ReadFloat("PERFORMANCE", "HiZOcclusionMinRadius", 0.0f), 0.0f, 100.0f);
-            bLampShadows = iniReader.ReadInteger("PERFORMANCE", "LampShadowsOcclusion", 1) != 0;
-            nOccluderCategories = iniReader.ReadInteger("PERFORMANCE", "HiZOccluderCategories", 1) & 0xFF;
-            bBoxes = iniReader.ReadInteger("PERFORMANCE", "HiZOcclusionBoxes", 1) != 0;
+            const int mode = std::clamp(reader.ReadInteger("PERFORMANCE", "HiZOcclusion", 1), 0, 2);
+            fMaxMove = std::clamp(reader.ReadFloat("PERFORMANCE", "HiZOcclusionMaxMove", 4.0f), 0.0f, 50.0f);
+            nFrames = std::clamp(reader.ReadInteger("PERFORMANCE", "HiZOcclusionFrames", 2), 1, 60);
+            fMinRadius = std::clamp(reader.ReadFloat("PERFORMANCE", "HiZOcclusionMinRadius", 0.0f), 0.0f, 100.0f);
+            bLampShadows = reader.ReadInteger("PERFORMANCE", "LampShadowsOcclusion", 1) != 0;
+            nOccluderCategories = reader.ReadInteger("PERFORMANCE", "HiZOccluderCategories", 1) & 0xFF;
+            bBoxes = reader.ReadInteger("PERFORMANCE", "HiZOcclusionBoxes", 1) != 0;
             if (hooked)
             {
                 nMode = mode;
@@ -697,8 +698,8 @@ public:
 
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
-            readIni(iniReader);
+            SettingsReader reader;
+            readIni(reader);
             started = true;
             IniReload::Add(readIni);
             QueryPerformanceFrequency(&qpcFrequency);

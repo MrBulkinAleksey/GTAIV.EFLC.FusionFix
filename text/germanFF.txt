@@ -394,9 +394,6 @@ Aerial Perspective
 [Zoomed Movement]
 Bewegung beim Zoomen erlauben
 
-[Distant Lights]
-Ferne Lichter
-
 [CenteredVehCam]
 Zentrierte Fahrzeugkamera
 
@@ -414,18 +411,6 @@ Kamera bei Zaunklettern & Fahrzeugklauen
 
 [FE_STEAMPAD]
 Steam Controller
-
-[CutscAudioSync]
-Synchronen Ton in Zwischensequenzen erzwingen
-
-[CutscAudioSync0]
-Synchroner Zwischensequenz-Ton - Aus
-
-[CutscAudioSync1]
-Synchroner Zwischensequenz-Ton - Alternativ
-
-[CutscAudioSync2]
-Synchroner Zwischensequenz-Ton - An
 
 [Turn Indicators]
 Blinker
@@ -520,9 +505,6 @@ Alternativ
 [FF_WARN6]
 ~r~ACHTUNG: CHSS bewirkt nur etwas, wenn die Schattenqualität auf "Sehr hoch" eingestellt ist.
 
-[FF_WARN7]
-~r~ACHTUNG: "Synchronen Ton in Zwischensequenzen erzwingen" nur bei auffallend asynchronem Ton aktivieren, für flüssige Animationen deaktiviert lassen. Kann während Zwischensequenzen mit ~PAD_UP~ ein- und ausgeschaltet werden.
-
 [USJ_FRST_KMB]
 Verwende während der Stuntkamera ~INPUT_MOUSE_WHEEL_UP~ und ~INPUT_MOUSE_WHEEL_DOWN~, um das Zeitlupentempo zu regulieren.
 
@@ -543,6 +525,18 @@ Mit ~PAD_LSTICK_ALL~ bewegst du dich in der Luft. ~n~Drücke ~INPUT_MOUSE_LMB~, 
 
 [ESS_PARA1_PC]
 Steuere in der Luft mit ~PAD_LSTICK_ALL~. Drücke im freien Fall ~INPUT_MOUSE_LMB~, um den Fallschirm zu öffnen. ~n~Halte ~INPUT_VEH_CIN_CAM~ gedrückt, um verschiedene Kameraperspektiven zu sehen.
+
+[FF_HDRCAL_PEAK]
+Erhöhen, bis das Logo im Feld kaum noch sichtbar ist. Zuerst HGIG am Fernseher einschalten, falls vorhanden.
+
+[FF_HDRCAL_PAPER]
+Auf eine angenehme Helligkeit für Menüs und HUD einstellen. Das Logo im Feld zeigt diese Helligkeit.
+
+[FF_HDRCAL_HDR]
+Eine Helligkeitseinstellung unten auswählen, um ihr Kalibrierungsbild zu sehen.
+
+[FF_HDRCAL_SDR]
+Die Kalibrierungsbilder der Helligkeitseinstellungen erscheinen hier, wenn die HDR-Ausgabe aktiv ist.
 
 [DUMMY_l11]
 Dummy label.

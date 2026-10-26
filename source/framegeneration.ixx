@@ -886,16 +886,16 @@ namespace
     }
 
     // The frame generation's settings, at startup and on Ctrl+Shift+F10 (IniReload)
-    void ReadSettings(CIniReader& iniReader)
+    void ReadSettings(SettingsReader& reader)
     {
-        fDelay = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
-        Upscaler::SetTimingLog(iniReader.ReadInteger("DEBUG", "UpscalerTimingLog", 0) != 0);
-        nDebug = iniReader.ReadInteger("DEBUG", "FrameGenerationDebug", 0) & (Debug::Similarity | Debug::PacingLog);
-        nPacing = std::clamp(iniReader.ReadInteger("ANTIALIASING", "FrameGenerationPacing", 2), 0, 2);
-        bDeferredSetting = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationDeferred", 1) != 0;
-        bAsyncCompute = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationAsyncCompute", 1) != 0;
-        fShowGeneratedAt = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FrameGenerationShowGeneratedAt", 0.2f), 0.0f, 0.9f);
-        auto helperPresent = std::clamp(iniReader.ReadInteger("ANTIALIASING", "HelperPresent", 1), 0, 2);
+        fDelay = std::clamp(reader.ReadFloat("ANTIALIASING", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
+        Upscaler::SetTimingLog(reader.ReadInteger("DEBUG", "UpscalerTimingLog", 0) != 0);
+        nDebug = reader.ReadInteger("DEBUG", "FrameGenerationDebug", 0) & (Debug::Similarity | Debug::PacingLog);
+        nPacing = std::clamp(reader.ReadInteger("ANTIALIASING", "FrameGenerationPacing", 2), 0, 2);
+        bDeferredSetting = reader.ReadInteger("ANTIALIASING", "FrameGenerationDeferred", 1) != 0;
+        bAsyncCompute = reader.ReadInteger("ANTIALIASING", "FrameGenerationAsyncCompute", 1) != 0;
+        fShowGeneratedAt = std::clamp(reader.ReadFloat("ANTIALIASING", "FrameGenerationShowGeneratedAt", 0.2f), 0.0f, 0.9f);
+        auto helperPresent = std::clamp(reader.ReadInteger("ANTIALIASING", "HelperPresent", 1), 0, 2);
         bHelperPresent = helperPresent != 0;
         bAmdPacing = helperPresent == 1;
         // The aims may have changed
@@ -1427,9 +1427,9 @@ public:
         FusionFix::onInitEventAsync() += []()
         {
             QueryPerformanceFrequency(&Frequency);
-            CIniReader iniReader("");
-            ReadSettings(iniReader);
-            IniReload::Add([](CIniReader& reader) { ReadSettings(reader); });
+            SettingsReader reader;
+            ReadSettings(reader);
+            IniReload::Add([](SettingsReader& reader) { ReadSettings(reader); });
 
             // Offered once the helper found AMD's frame generation library, and not with DLSS-IV. The choice comes back
             // with them: the cfg keeps it.

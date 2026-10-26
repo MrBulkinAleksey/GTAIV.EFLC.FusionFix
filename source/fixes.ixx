@@ -11,8 +11,6 @@ import natives;
 import settings;
 import shaders;
 
-int nRadarZoomDelay = 0;
-
 namespace CTaskComplexGangDriveby
 {
     SafetyHookInline shPlayerWantsToDoDriveby = {};
@@ -76,22 +74,15 @@ namespace CDeferredLightingHelper
     }
 }
 
-int (__cdecl* sub_5ADB20Original)() = nullptr;
-int sub_5ADB20()
-{
-    if (Natives::IsUsingController())
-        return 0;
-
-    return sub_5ADB20Original();
-}
+uint32_t nRadarZoomDelay = 0;
 
 namespace CRadarNY
 {
     injector::hook_back<bool(*)()> hbsub_5DCA80;
     bool sub_5DCA80()
     {
-        static int ZoomOutEndTime = 0;
-        int CurrentTime = *CTimer::m_snTimeInMilliseconds;
+        static uint32_t ZoomOutEndTime = 0;
+        uint32_t CurrentTime = *CTimer::m_snTimeInMilliseconds;
 
         // Call the original function to check the zoom key state
         if (hbsub_5DCA80.fun())
@@ -129,7 +120,7 @@ namespace CHeli
 {
     static inline uint32_t* dword_1670CD0 = nullptr; // Light's last drawn frame
     static inline void* pActiveSearchlight = nullptr; // Pointer to the helicopter that draws the light
-    static inline int SearchlightLockTime = 0; // Timestamp of when the lock expires
+    static inline uint32_t SearchlightLockTime = 0; // Timestamp of when the lock expires
 
     SafetyHookInline shPreRender2 = {};
     void __fastcall PreRender2(void* _this, void* edx)
@@ -137,7 +128,7 @@ namespace CHeli
         // Check if a searchlight is active
         if (*(int8_t*)((uintptr_t)_this + 8044) != 0 && *(float*)((uintptr_t)_this + 8036) > 0.0f && *(int8_t*)((uintptr_t)_this + 8240) == 0)
         {
-            auto CurrentTime = *CTimer::m_snTimeInMilliseconds;
+            uint32_t CurrentTime = *CTimer::m_snTimeInMilliseconds;
 
             // A helicopter can acquire the lock if:
             // - No one has it (pActiveSearchlight is nullptr)
@@ -185,6 +176,132 @@ SafetyHookInline shNATIVE_COMPARE_STRING = {};
 bool __cdecl NATIVE_COMPARE_STRING_2(const char* a1, const char* a2)
 {
     return a1 && a2 && IsBadReadPtr(a1, 1) == 0 && IsBadReadPtr(a2, 1) == 0 && strcmp(a1, a2) == 0;
+}
+
+namespace CWater
+{
+    static uint32_t* pBufferIndex = nullptr;
+    static uint32_t* pSharedBufferIndex = nullptr;
+    static uint32_t RenderBufferIndex = 0;
+    static uint8_t* pSyncMode = nullptr;
+    static uintptr_t FlipResume = 0;
+    static uintptr_t SafetyHookContext::*pFlipRegister = nullptr;
+    // Both callbacks access this state on the producer thread.
+    static uint32_t PendingBufferIndex = 0;
+    static bool bFlipPending = false;
+
+    void DeferBufferFlip(SafetyHookContext& regs)
+    {
+        // Mode 1 already waits at the end of the previous Synchronise.
+        if (*pSyncMode != 0)
+            return;
+
+        if (!bFlipPending)
+        {
+            PendingBufferIndex = regs.*pFlipRegister;
+            bFlipPending = true;
+        }
+        regs.eip = FlipResume;
+    }
+
+    void CommitBufferFlip(SafetyHookContext&)
+    {
+        if (pSharedBufferIndex)
+            RenderBufferIndex = *pSharedBufferIndex;
+        else if (bFlipPending)
+        {
+            *pBufferIndex = PendingBufferIndex;
+            bFlipPending = false;
+        }
+    }
+
+    void FixBufferFlip()
+    {
+        // Look for a second match so ambiguous signatures are rejected.
+        auto pattern = find_pattern<2>(
+            "2B 0D ? ? ? ? FF 05 ? ? ? ? 89 0D ? ? ? ? 5E C3",
+            "BA 01 00 00 00 2B 15 ? ? ? ? 89 15 ? ? ? ? 83 05 ? ? ? ? 01 C3",
+            "B8 01 00 00 00 2B 05 ? ? ? ? 83 05 ? ? ? ? 01 A3 ? ? ? ? C3");
+        if (pattern.size() != 1)
+            return;
+
+        auto pFlip = pattern.get_first<uint8_t>();
+        uint8_t* pStore = nullptr;
+        uint32_t* pReadIndex = nullptr;
+        if (*pFlip == 0x2B) // Complete Edition
+        {
+            pStore = pFlip + 12;
+            pReadIndex = *(uint32_t**)(pFlip + 2);
+            pFlipRegister = &SafetyHookContext::ecx;
+        }
+        else // 1.0.7.0 / 1.0.8.0
+        {
+            pStore = pFlip + (*pFlip == 0xBA ? 11 : 18);
+            pReadIndex = *(uint32_t**)(pFlip + 7);
+            pFlipRegister = *pFlip == 0xBA ? &SafetyHookContext::edx : &SafetyHookContext::eax;
+        }
+        pBufferIndex = *(uint32_t**)(pStore + (*pStore == 0xA3 ? 1 : 2));
+        FlipResume = (uintptr_t)pStore + (*pStore == 0xA3 ? 5 : 6);
+        if (pBufferIndex != pReadIndex)
+            return;
+
+        pattern = find_pattern<2>(
+            "51 56 8B F1 80 BE C8 0F 00 00 00 75 0B 8D 8E AC 0F 00 00 E8 ? ? ? ? 80 3D ? ? ? ? 00 57 BF 01 00 00 00",
+            "51 56 8B F1 80 BE C8 0F 00 00 00 75 0F 8B 86 B8 0F 00 00 50 E8 ? ? ? ? 83 C4 04 80 3D ? ? ? ? 00 57 BF 01 00 00 00");
+        if (pattern.size() != 1)
+            return;
+
+        auto pSynchronise = pattern.get_first<uint8_t>();
+        // The mode check branches to the first instruction after the wait.
+        auto pAfterWait = pSynchronise + 13 + pSynchronise[12];
+        pattern = hook::pattern("B9 ? ? ? ? E8 ? ? ? ? 83 3F 00 76 ? FF");
+        if (pattern.size() != 1 || injector::GetBranchDestination(pattern.get_first(5)).get<void>() != pSynchronise)
+            return;
+
+        pSyncMode = *pattern.get_first<uint8_t*>(1) + 0xFC8;
+
+        std::vector<uint32_t**> RenderBufferReads;
+        if (*pFlip == 0xBA)
+        {
+            // Patch 7 shares its selector with surface textures; redirect only geometry reads.
+            for (auto signature : {
+                "A1 ? ? ? ? 69 C0 C4 10 00 00 89 0D ? ? ? ? 89 15",
+                "8B 0D ? ? ? ? 8B 7D 08 8B D1 69 D2 31 04 00 00 8B C7 2B C2 03 C0 8B B4",
+                "8B 0D ? ? ? ? 8B D1 69 D2 31 04 00 00 8B C7 2B C2 03 C0 8B 94",
+                "8B 0D ? ? ? ? 8B 7D 08 8B D1 69 D2 31 04 00 00 8B C7 2B C2 03 C0 8B 94",
+                "8B 0D ? ? ? ? F3 0F 10 0D ? ? ? ? 83 C4 20 8B D1 69 D2 31 04 00 00" })
+            {
+                auto readPattern = find_pattern<2>(signature);
+                if (readPattern.size() != 1)
+                    return;
+
+                auto pRead = readPattern.get_first<uint8_t>();
+                auto pOperand = (uint32_t**)(pRead + (*pRead == 0xA1 ? 1 : 2));
+                if (*pOperand != pBufferIndex)
+                    return;
+
+                RenderBufferReads.push_back(pOperand);
+            }
+            pSharedBufferIndex = pBufferIndex;
+            RenderBufferIndex = *pSharedBufferIndex;
+        }
+
+        // Install the commit hook before changing any selector access.
+        static auto CommitBufferFlipHook = safetyhook::create_mid(pAfterWait, CommitBufferFlip);
+        if (!CommitBufferFlipHook)
+            return;
+
+        if (pSharedBufferIndex)
+        {
+            for (auto pOperand : RenderBufferReads)
+                injector::WriteMemory(pOperand, &RenderBufferIndex, true);
+            return;
+        }
+
+        static auto DeferBufferFlipHook = safetyhook::create_mid(pStore, DeferBufferFlip);
+        if (!DeferBufferFlipHook)
+            (void)CommitBufferFlipHook.disable();
+    }
 }
 
 class Fixes
@@ -255,8 +372,8 @@ public:
         // lets the scheduler move the thread. Patched synchronously, before the game's entry point runs it.
         FusionFix::onInitEvent() += []()
         {
-            CIniReader iniReader("");
-            if (iniReader.ReadInteger("PERFORMANCE", "UnpinMainThread", 1) == 0)
+            SettingsReader reader;
+            if (reader.ReadInteger("PERFORMANCE", "UnpinMainThread", 1) == 0)
                 return;
 
             // push 1 / mov esi, ecx / call GetCurrentThread / push eax / call SetThreadAffinityMask
@@ -336,23 +453,23 @@ public:
 
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
+            SettingsReader reader;
 
             // [MAIN]
-            int nAimingZoomFix = iniReader.ReadInteger("MAIN", "AimingZoomFix", 1);
-            bool bRecoilFix = iniReader.ReadInteger("MAIN", "RecoilFix", 1) != 0;
+            int nAimingZoomFix = reader.ReadInteger("MAIN", "AimingZoomFix", 1);
+            bool bRecoilFix = reader.ReadInteger("MAIN", "RecoilFix", 1) != 0;
 
             // [MISC]
-            bool bDefaultCameraAngleInTLaD = iniReader.ReadInteger("MISC", "DefaultCameraAngleInTLaD", 1) != 0;
-            bool bPedDeathAnimFixFromTBoGT = iniReader.ReadInteger("MISC", "PedDeathAnimFixFromTBoGT", 1) != 0;
-            bool bDisableCameraCenteringInCover = iniReader.ReadInteger("MISC", "DisableCameraCenteringInCover", 1) != 0;
-            bool bAlwaysDisplayHealthOnReticle = iniReader.ReadInteger("MISC", "AlwaysDisplayHealthOnReticle", 1) != 0;
-            int bFixHelicopterSearchlights = iniReader.ReadInteger("MISC", "FixHelicopterSearchlights", 1);
+            bool bDefaultCameraAngleInTLaD = reader.ReadInteger("MISC", "DefaultCameraAngleInTLaD", 1) != 0;
+            bool bPedDeathAnimFixFromTBoGT = reader.ReadInteger("MISC", "PedDeathAnimFixFromTBoGT", 1) != 0;
+            bool bDisableCameraCenteringInCover = reader.ReadInteger("MISC", "DisableCameraCenteringInCover", 1) != 0;
+            bool bAlwaysDisplayHealthOnReticle = reader.ReadInteger("MISC", "AlwaysDisplayHealthOnReticle", 1) != 0;
+            int bFixHelicopterSearchlights = reader.ReadInteger("MISC", "FixHelicopterSearchlights", 1);
 
-            int nMenuEnteringDelay = std::clamp(iniReader.ReadInteger("MISC", "MenuEnteringDelay", 0), 20, 400);
-            int nMenuExitingDelay = std::clamp(iniReader.ReadInteger("MISC", "MenuExitingDelay", 0), 0, 800);
-            int nMenuAccessDelayOnStartup = std::clamp(iniReader.ReadInteger("MISC", "MenuAccessDelayOnStartup", 0), 300, 3000);
-            nRadarZoomDelay = std::clamp(iniReader.ReadInteger("MISC", "RadarZoomDelay", 3000), 0, 60000);
+            int nMenuEnteringDelay = std::clamp(reader.ReadInteger("MISC", "MenuEnteringDelay", 0), 20, 400);
+            int nMenuExitingDelay = std::clamp(reader.ReadInteger("MISC", "MenuExitingDelay", 0), 0, 800);
+            int nMenuAccessDelayOnStartup = std::clamp(reader.ReadInteger("MISC", "MenuAccessDelayOnStartup", 0), 300, 3000);
+            nRadarZoomDelay = std::clamp(reader.ReadInteger("MISC", "RadarZoomDelay", 3000), 0, 60000);
 
             // Fix weapon zoom states in TBoGT
             if (nAimingZoomFix)
@@ -544,8 +661,8 @@ public:
             // Camera centering delay/turn speed
             {
                 // Timers
-                static int nTimeToPassBeforeCenteringCameraFollowPed = 0;
-                static int nTimeToPassBeforeCenteringCameraFollowVehicle = 0;
+                static uint32_t nTimeToPassBeforeCenteringCameraFollowPed = 0;
+                static uint32_t nTimeToPassBeforeCenteringCameraFollowVehicle = 0;
 
                 // Settings
                 static auto nTimeToWaitBeforeCenteringCameraFollowPed_KB = FusionFixSettings.GetRef("PREF_KBCAMCENTERDELAY");
@@ -557,10 +674,10 @@ public:
                 static auto nCameraTurnSpeedFollowVehicle_KB = FusionFixSettings.GetRef("PREF_KBCAMTURNSPEEDVEH");
                 static auto nCameraTurnSpeedFollowVehicle_Pad = FusionFixSettings.GetRef("PREF_PADCAMTURNSPEEDVEH");
 
-                static auto ShouldCenter = [&](int& DelayTime, int DelaySetting, bool IsUsingPad) -> bool
+                static auto ShouldCenter = [&](uint32_t& DelayTime, int DelaySetting, bool IsUsingPad) -> bool
                 {
-                    static int LastTime = 0;
-                    int CurrentTime = *CTimer::m_snTimeInMilliseconds;
+                    static uint32_t LastTime = 0;
+                    uint32_t CurrentTime = *CTimer::m_snTimeInMilliseconds;
 
                     if (CurrentTime < LastTime)
                         DelayTime = 0;
@@ -738,13 +855,12 @@ public:
 
             // Hide the mouse cursor texture when using a gamepad
             // Note: It only disables it visually, so a mouse can still be used simultaneously with a controller to select things. The start menu also uses a different cursor, so this won't also hide that one.
-            // TODO: Improve this in the future? Like locking the mouse positions in place at least when a gamepad is used?
+            // TODO: Improve and refactor this properly in the future? Like locking the mouse positions in place at least when a gamepad is used?
             {
-                // Its callers are redirected instead of its entry: other mods find and call it by its first bytes
-                auto pattern = hook::pattern("83 EC ? 53 55 56 57 6A ? E8 ? ? ? ? 83 C4");
-                sub_5ADB20Original = pattern.get_first<int(__cdecl)()>(0);
-                for (auto call : FindModuleCallsTo(reinterpret_cast<uintptr_t>(sub_5ADB20Original)))
-                    injector::MakeCALL(call, sub_5ADB20, true);
+                auto pattern = hook::pattern("75 ? 83 3D ? ? ? ? ? 75 ? 6A ? E8 ? ? ? ? 83 C4 ? 84 C0");
+                injector::WriteMemory<uint16_t>(pattern.get_first(0), 0x840F, true); // jnz short --> jz long
+                injector::WriteMemory(pattern.get_first(2), (uintptr_t)hook::get_pattern("C6 05 ? ? ? ? ? 5F 5E 5D 5B 83 C4 ? C3", 7) - (uintptr_t)pattern.get_first(6), true);
+                injector::MakeNOP(pattern.get_first(6), 23, true);
             }
 
             // Pause menu map crosshair aspect ratio scaling
@@ -814,7 +930,6 @@ public:
 
             // Remove free camera boundary limits in the video editor
             {
-                // Long patterns: in a relocated exe, address bytes can match short ones elsewhere
                 auto pattern = hook::pattern("39 77 14 73 ? 56 6A 00 6A 01 E8");
                 if (!pattern.empty())
                 {
@@ -1077,6 +1192,9 @@ public:
                         return_to(loc_BA91F2);
                 });
             }
+
+            // Keep the water render buffer stable until the render thread finishes.
+            CWater::FixBufferFlip();
 
             // Water flicker mitigation experiment
             {

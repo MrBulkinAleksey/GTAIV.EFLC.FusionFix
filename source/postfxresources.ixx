@@ -87,20 +87,12 @@ import postfxprofiler;
 
 export std::optional<std::reference_wrapper<int32_t>> UsePostFxAA;
 
-// SMAA hangs the game on D3D9on12, it counts as off there
-export bool IsSMAASupported()
-{
-    static bool d3d9on12 = false;
-    d3d9on12 = d3d9on12 || GetModuleHandleW(L"d3d9on12.dll");
-    return !d3d9on12;
-}
-
 export bool IsPostFxAA()
 {
     if (!UsePostFxAA)
         return false;
     auto aa = UsePostFxAA->get();
-    return aa == FusionFixSettings.AntialiasingText.eFXAA || (aa == FusionFixSettings.AntialiasingText.eSMAA && IsSMAASupported());
+    return aa == FusionFixSettings.AntialiasingText.eFXAA || aa == FusionFixSettings.AntialiasingText.eSMAA;
 }
 
 // Binding through both the game's device wrapper and the real device: see RageDirect3DDevice9::SetTextureBoth. SSGI's
@@ -1980,20 +1972,20 @@ public:
     }
 
     template <size_t N>
-    void ReadIniSettings(CIniReader& iniReader, const IniSetting (&settings)[N])
+    void ReadIniSettings(SettingsReader& reader, const IniSetting (&settings)[N])
     {
         for (const auto& s : settings)
         {
             switch (s.kind)
             {
             case IniSetting::Kind::Float:
-                this->*s.floatField = std::clamp(iniReader.ReadFloat(s.section, s.key, s.floatDefault), s.floatMin, s.floatMax);
+                this->*s.floatField = std::clamp(reader.ReadFloat(s.section, s.key, s.floatDefault), s.floatMin, s.floatMax);
                 break;
             case IniSetting::Kind::Int:
-                this->*s.intField = std::clamp(iniReader.ReadInteger(s.section, s.key, s.intDefault), s.intMin, s.intMax);
+                this->*s.intField = std::clamp(reader.ReadInteger(s.section, s.key, s.intDefault), s.intMin, s.intMax);
                 break;
             case IniSetting::Kind::Flag:
-                this->*s.flagField = iniReader.ReadInteger(s.section, s.key, s.intDefault) != 0;
+                this->*s.flagField = reader.ReadInteger(s.section, s.key, s.intDefault) != 0;
                 break;
             }
         }
@@ -2001,7 +1993,7 @@ public:
 
     // The settings used afresh every frame, which Ctrl+Shift+F10 reads again from the ini while the
     // game runs (TickIniReload). Anything that sizes targets or builds shaders stays in Readini.
-    void ReadLiveIni(CIniReader& iniReader)
+    void ReadLiveIni(SettingsReader& reader)
     {
         static constexpr IniSetting kSettings[] =
         {
@@ -2173,28 +2165,28 @@ public:
             IniFloat("POSTFX", "AmbientOcclusionGTAOThinOccluders", &PostFxResource::fAmbientOcclusionGTAOThinOccluders, 0.5f, 0.0f, 1.0f),
             IniFlag("POSTFX", "AmbientOcclusionGTAOMultiBounce", &PostFxResource::bAmbientOcclusionMultiBounce, 1),
         };
-        ReadIniSettings(iniReader, kSettings);
-        fSSRMaxDistance = std::max(1.0f, iniReader.ReadFloat("REFLECTIONS", "SSRMaxDistance", 24.0f));
-        fSSRThickness = std::max(0.0f, iniReader.ReadFloat("REFLECTIONS", "SSRThickness", 0.3f));
-        fSSRWaterLevelOffset = iniReader.ReadFloat("REFLECTIONS", "SSRWaterLevelOffset", 0.0f);
-        nVolumetricLightHeadlightAddFlags = uint32_t(iniReader.ReadInteger("LIGHTING", "VolumetricLightHeadlightAddFlags", 0));
+        ReadIniSettings(reader, kSettings);
+        fSSRMaxDistance = std::max(1.0f, reader.ReadFloat("REFLECTIONS", "SSRMaxDistance", 24.0f));
+        fSSRThickness = std::max(0.0f, reader.ReadFloat("REFLECTIONS", "SSRThickness", 0.3f));
+        fSSRWaterLevelOffset = reader.ReadFloat("REFLECTIONS", "SSRWaterLevelOffset", 0.0f);
+        nVolumetricLightHeadlightAddFlags = uint32_t(reader.ReadInteger("LIGHTING", "VolumetricLightHeadlightAddFlags", 0));
 
         if (bVehicleBoxShadowsBlend)
             fVehicleBoxShadowContact = 1.0f;
-        nVehicleBoxShadowSizeFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "VehicleBoxShadowsSizeFade", 300), 0, 5000));
-        nVehicleBoxShadowFadeInMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "VehicleBoxShadowsFadeIn", 300), 0, 5000));
-        nVehicleBoxShadowFadeOutMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "VehicleBoxShadowsFadeOut", 300), 0, 5000));
-        nVehicleBoxShadowSlotFadeMs = static_cast<uint32_t>(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "VehicleBoxShadowsSlotFade", 600), 0, 5000));
-        fVehicleBoxShadowScale[0] = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "VehicleBoxShadowsLength", 1.0f), 0.3f, 1.2f);
-        fVehicleBoxShadowScale[1] = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "VehicleBoxShadowsWidth", 0.95f), 0.3f, 1.2f);
-        fVehicleBoxShadowScale[2] = std::clamp(iniReader.ReadFloat("NIGHTSHADOWS", "VehicleBoxShadowsHeight", 0.95f), 0.3f, 1.2f);
-        PostFxProfiler::bEnabled = iniReader.ReadInteger("DEBUG", "PostFxProfiler", 0) != 0;
-        nWetGroundMaterials = iniReader.ReadInteger("WEATHER", "WetGroundMaterials", 1) & 0xFF;
+        nVehicleBoxShadowSizeFadeMs = static_cast<uint32_t>(std::clamp(reader.ReadInteger("NIGHTSHADOWS", "VehicleBoxShadowsSizeFade", 300), 0, 5000));
+        nVehicleBoxShadowFadeInMs = static_cast<uint32_t>(std::clamp(reader.ReadInteger("NIGHTSHADOWS", "VehicleBoxShadowsFadeIn", 300), 0, 5000));
+        nVehicleBoxShadowFadeOutMs = static_cast<uint32_t>(std::clamp(reader.ReadInteger("NIGHTSHADOWS", "VehicleBoxShadowsFadeOut", 300), 0, 5000));
+        nVehicleBoxShadowSlotFadeMs = static_cast<uint32_t>(std::clamp(reader.ReadInteger("NIGHTSHADOWS", "VehicleBoxShadowsSlotFade", 600), 0, 5000));
+        fVehicleBoxShadowScale[0] = std::clamp(reader.ReadFloat("NIGHTSHADOWS", "VehicleBoxShadowsLength", 1.0f), 0.3f, 1.2f);
+        fVehicleBoxShadowScale[1] = std::clamp(reader.ReadFloat("NIGHTSHADOWS", "VehicleBoxShadowsWidth", 0.95f), 0.3f, 1.2f);
+        fVehicleBoxShadowScale[2] = std::clamp(reader.ReadFloat("NIGHTSHADOWS", "VehicleBoxShadowsHeight", 0.95f), 0.3f, 1.2f);
+        PostFxProfiler::bEnabled = reader.ReadInteger("DEBUG", "PostFxProfiler", 0) != 0;
+        nWetGroundMaterials = reader.ReadInteger("WEATHER", "WetGroundMaterials", 1) & 0xFF;
     }
 
     void Readini()
     {
-        CIniReader iniReader("");
+        SettingsReader reader;
         static constexpr IniSetting kSettings[] =
         {
             IniFlag("SRF", "StippleFilter", &PostFxResource::useStippleFilter, 1),
@@ -2210,21 +2202,21 @@ public:
             IniFloat("POSTFX", "AmbientOcclusionGTAOTemporal", &PostFxResource::fAmbientOcclusionTemporal, 0.9f, 0.0f, 0.98f),
             IniFlag("PERFORMANCE", "AmbientOcclusionHalfResolution", &PostFxResource::bAmbientOcclusionHalfRes, 1),
         };
-        ReadIniSettings(iniReader, kSettings);
+        ReadIniSettings(reader, kSettings);
 
-        EnablePostfx = iniReader.ReadInteger("SRF", "EnablePostfx", 1);
+        EnablePostfx = reader.ReadInteger("SRF", "EnablePostfx", 1);
 
 
 
-        ReadLiveIni(iniReader);
-        nVolumetricLightHeadlightFlag = uint32_t(iniReader.ReadInteger("LIGHTING", "VolumetricLightHeadlightFlag", rage::LF_VEHICLE));
+        ReadLiveIni(reader);
+        nVolumetricLightHeadlightFlag = uint32_t(reader.ReadInteger("LIGHTING", "VolumetricLightHeadlightFlag", rage::LF_VEHICLE));
 
-        nAmbientOcclusionBlurPasses = iniReader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
-        nAmbientOcclusionSamples = iniReader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
-        nAmbientOcclusionLogMaxOffset = iniReader.ReadInteger("POSTFX", "AmbientOcclusionLogMaxOffset", 3);
-        nAmbientOcclusionMaxMipLevel = iniReader.ReadInteger("POSTFX", "AmbientOcclusionMaxMipLevel", 5);
-        fAmbientOcclusionFarClip = iniReader.ReadFloat("POSTFX", "AmbientOcclusionFarClip", 150.0f);
-        fAmbientOcclusionBlurRadius = iniReader.ReadFloat("POSTFX", "AmbientOcclusionBlurRadius", 2.0f);
+        nAmbientOcclusionBlurPasses = reader.ReadInteger("POSTFX", "AmbientOcclusionBlurPasses", 1);
+        nAmbientOcclusionSamples = reader.ReadInteger("POSTFX", "AmbientOcclusionSamples", 9);
+        nAmbientOcclusionLogMaxOffset = reader.ReadInteger("POSTFX", "AmbientOcclusionLogMaxOffset", 3);
+        nAmbientOcclusionMaxMipLevel = reader.ReadInteger("POSTFX", "AmbientOcclusionMaxMipLevel", 5);
+        fAmbientOcclusionFarClip = reader.ReadFloat("POSTFX", "AmbientOcclusionFarClip", 150.0f);
+        fAmbientOcclusionBlurRadius = reader.ReadFloat("POSTFX", "AmbientOcclusionBlurRadius", 2.0f);
 
         nAmbientOcclusionBlurPasses = std::max(0, nAmbientOcclusionBlurPasses);
         nAmbientOcclusionSamples = std::clamp(nAmbientOcclusionSamples, 0, 128);
@@ -2235,16 +2227,16 @@ public:
 
         AOCamDepthSurf.resize(nAmbientOcclusionMaxMipLevel);
 
-        fAmbientOcclusionRadius = iniReader.ReadFloat("POSTFX", "AmbientOcclusionRadius", 1.125f);
-        fAmbientOcclusionBias = iniReader.ReadFloat("POSTFX", "AmbientOcclusionBias", 0.03f);
-        fAmbientOcclusionIntensity = iniReader.ReadFloat("POSTFX", "AmbientOcclusionIntensity", 0.4f);
+        fAmbientOcclusionRadius = reader.ReadFloat("POSTFX", "AmbientOcclusionRadius", 1.125f);
+        fAmbientOcclusionBias = reader.ReadFloat("POSTFX", "AmbientOcclusionBias", 0.03f);
+        fAmbientOcclusionIntensity = reader.ReadFloat("POSTFX", "AmbientOcclusionIntensity", 0.4f);
 
         fAmbientOcclusionRadius = std::max(fAmbientOcclusionRadius, 0.0f);
         fAmbientOcclusionBias = std::max(fAmbientOcclusionBias, 0.0f);
         fAmbientOcclusionIntensity = std::max(fAmbientOcclusionIntensity, 0.0f);
         // 0 off, 1 horizontal, 2 vertical, 3 horizontal e vertical.
-        //useScreenSpaceShadowsBlur = iniReader.ReadInteger("SRF", "ScreenSpaceShadowsBlur", 0);
-        //useHardwareBilinearSampling = iniReader.ReadInteger("SRF", "NewShadowAtlas", 0) != 0;
+        //useScreenSpaceShadowsBlur = reader.ReadInteger("SRF", "ScreenSpaceShadowsBlur", 0);
+        //useHardwareBilinearSampling = reader.ReadInteger("SRF", "NewShadowAtlas", 0) != 0;
     }
 
     void createTextures(UINT Width, UINT Height, HMODULE hm)

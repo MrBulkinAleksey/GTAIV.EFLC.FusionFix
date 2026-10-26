@@ -248,19 +248,19 @@ class GrassWind
         MakeModelList();
     }
 
-    static void ReadIni(CIniReader& iniReader)
+    static void ReadIni(SettingsReader& reader)
     {
-        bWind = iniReader.ReadInteger("PROCEDURAL", "GrassWind", 1) != 0;
-        bBending = iniReader.ReadInteger("PROCEDURAL", "GrassBending", 1) != 0;
-        bTrample = iniReader.ReadInteger("PROCEDURAL", "GrassTrample", 1) != 0;
-        bBush = iniReader.ReadInteger("PROCEDURAL", "BushShake", 1) != 0;
-        fStrength = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GrassWindStrength", 1.0f), 0.0f, 4.0f);
-        fTrampleSeconds = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GrassTrampleSeconds", 12.0f), 1.0f, 300.0f);
-        bLog = iniReader.ReadInteger("DEBUG", "GrassWindLog", 0) != 0;
+        bWind = reader.ReadInteger("PROCEDURAL", "GrassWind", 1) != 0;
+        bBending = reader.ReadInteger("PROCEDURAL", "GrassBending", 1) != 0;
+        bTrample = reader.ReadInteger("PROCEDURAL", "GrassTrample", 1) != 0;
+        bBush = reader.ReadInteger("PROCEDURAL", "BushShake", 1) != 0;
+        fStrength = std::clamp(reader.ReadFloat("PROCEDURAL", "GrassWindStrength", 1.0f), 0.0f, 4.0f);
+        fTrampleSeconds = std::clamp(reader.ReadFloat("PROCEDURAL", "GrassTrampleSeconds", 12.0f), 1.0f, 300.0f);
+        bLog = reader.ReadInteger("DEBUG", "GrassWindLog", 0) != 0;
         {
             std::lock_guard lock(extraModelsMutex);
-            sExtraModels = iniReader.ReadString("PROCEDURAL", "GrassWindModels", "");
-            sBushTextures = iniReader.ReadString("PROCEDURAL", "BushTextures", kBushTextures);
+            sExtraModels = reader.ReadString("PROCEDURAL", "GrassWindModels", "");
+            sBushTextures = reader.ReadString("PROCEDURAL", "BushTextures", kBushTextures);
         }
         bRemakeList = true;
     }
@@ -904,8 +904,8 @@ public:
     {
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
-            ReadIni(iniReader);
+            SettingsReader reader;
+            ReadIni(reader);
             IniReload::Add(ReadIni);
         };
 

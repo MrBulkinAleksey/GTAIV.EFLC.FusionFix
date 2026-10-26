@@ -16,6 +16,7 @@ export module farpropinstancing;
 
 import common;
 import comvars;
+import settings;
 import d3dx9_43;
 import inireload;
 import entityclass;
@@ -114,10 +115,10 @@ class FarPropInstancing
     static inline uint64_t logInstances = 0, logGroups = 0, logDraws = 0, logOneByOne = 0, logCapped = 0, logEmptyDropped = 0;
     static inline uint32_t logShadersMade = 0, logShadersFailed = 0;
 
-    static void ReadIni(CIniReader& iniReader)
+    static void ReadIni(SettingsReader& reader)
     {
-        bEnabled = iniReader.ReadInteger("PERFORMANCE", "FarPropInstancing", 1) != 0;
-        bLog = iniReader.ReadInteger("DEBUG", "FarPropInstancingLog", 0) != 0;
+        bEnabled = reader.ReadInteger("PERFORMANCE", "FarPropInstancing", 1) != 0;
+        bLog = reader.ReadInteger("DEBUG", "FarPropInstancingLog", 0) != 0;
     }
 
     static bool Candidate(uint16_t model)
@@ -761,8 +762,8 @@ public:
     {
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
-            ReadIni(iniReader);
+            SettingsReader reader;
+            ReadIni(reader);
             IniReload::Add(ReadIni);
             EntityClass::SetEntityCommandHook(&OnCommand);
             ProceduralGround::DrawnInstanced = &DrawnInstanced;

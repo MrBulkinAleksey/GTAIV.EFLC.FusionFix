@@ -215,17 +215,17 @@ namespace GpuGrass
         return v - std::floor(v);
     }
 
-    void ReadIni(CIniReader& iniReader)
+    void ReadIni(SettingsReader& reader)
     {
-        fRange = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassRange", 100.0f), 5.0f, 150.0f);
-        fFullRange = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassFullRange", 22.0f), 0.0f, fRange - 1.0f);
-        bHideProps = iniReader.ReadInteger("PROCEDURAL", "GpuGrassHideProps", 1) != 0;
-        fDensity = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassDensity", 1.0f), 0.1f, 1.0f);
-        fGroundTint = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassGroundTint", 0.5f), 0.0f, 1.0f);
-        bLog = iniReader.ReadInteger("DEBUG", "GpuGrassLog", 0) != 0;
+        fRange = std::clamp(reader.ReadFloat("PROCEDURAL", "GpuGrassRange", 100.0f), 5.0f, 150.0f);
+        fFullRange = std::clamp(reader.ReadFloat("PROCEDURAL", "GpuGrassFullRange", 22.0f), 0.0f, fRange - 1.0f);
+        bHideProps = reader.ReadInteger("PROCEDURAL", "GpuGrassHideProps", 1) != 0;
+        fDensity = std::clamp(reader.ReadFloat("PROCEDURAL", "GpuGrassDensity", 1.0f), 0.1f, 1.0f);
+        fGroundTint = std::clamp(reader.ReadFloat("PROCEDURAL", "GpuGrassGroundTint", 0.5f), 0.0f, 1.0f);
+        bLog = reader.ReadInteger("DEBUG", "GpuGrassLog", 0) != 0;
         const auto colour = [&](const char* key, float* rgb, const float* fallback)
         {
-            const std::string text = iniReader.ReadString("PROCEDURAL", key, "");
+            const std::string text = reader.ReadString("PROCEDURAL", key, "");
             float v[3];
             const bool read = std::sscanf(text.c_str(), "%f , %f , %f", &v[0], &v[1], &v[2]) == 3;
             for (int k = 0; k < 3; ++k)
@@ -1477,8 +1477,8 @@ public:
     {
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
-            GpuGrass::ReadIni(iniReader);
+            SettingsReader reader;
+            GpuGrass::ReadIni(reader);
             IniReload::Add(GpuGrass::ReadIni);
         };
         ProceduralGround::OnAdded = [](const void* key, const ProceduralGround::Triangle& triangle)

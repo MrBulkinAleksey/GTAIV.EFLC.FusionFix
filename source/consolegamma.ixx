@@ -211,7 +211,12 @@ private:
     static void Render(IDirect3DDevice9* device)
     {
         if (nConsoleGammaMode == 0 || !device)
+        {
+            // The copy of the scene exists only while the option is on
+            if (pSceneRT)
+                ReleaseSceneTexture();
             return;
+        }
 
         if (!LoadEffectFile(device) || !CreateSceneTexture(device))
             return;

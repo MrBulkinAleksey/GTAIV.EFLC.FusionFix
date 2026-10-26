@@ -7,6 +7,7 @@ export module ssrocclusion;
 
 import common;
 import comvars;
+import settings;
 import inireload;
 
 // SSR Occlusion: the sun's and the ambient passes multiply the reflection by the G-buffer's occlusion, right for the
@@ -18,9 +19,9 @@ class SSROcclusion
 {
     static inline float fStrength = 1.0f;
 
-    static void ReadIni(CIniReader& iniReader)
+    static void ReadIni(SettingsReader& reader)
     {
-        fStrength = std::clamp(iniReader.ReadFloat("LIGHTING", "SSROcclusionStrength", 1.0f), 0.0f, 1.0f);
+        fStrength = std::clamp(reader.ReadFloat("LIGHTING", "SSROcclusionStrength", 1.0f), 0.0f, 1.0f);
     }
 
     static void SetConstants()
@@ -37,8 +38,8 @@ public:
     {
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
-            ReadIni(iniReader);
+            SettingsReader reader;
+            ReadIni(reader);
             IniReload::Add(ReadIni);
         };
 

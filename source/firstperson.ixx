@@ -8,6 +8,7 @@ export module firstperson;
 
 import common;
 import comvars;
+import settings;
 import natives;
 import inireload;
 
@@ -693,13 +694,13 @@ public:
     {
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
-            const bool onFoot = iniReader.ReadInteger("MISC", "FirstPersonOnFoot", 1) != 0;
-            const bool inVehicle = iniReader.ReadInteger("MISC", "FirstPersonInVehicle", 1) != 0;
+            SettingsReader reader;
+            const bool onFoot = reader.ReadInteger("MISC", "FirstPersonOnFoot", 1) != 0;
+            const bool inVehicle = reader.ReadInteger("MISC", "FirstPersonInVehicle", 1) != 0;
             if (!onFoot && !inVehicle)
                 return;
             // At startup and on Ctrl+Shift+F10 (IniReload)
-            static auto readOffsets = [](CIniReader& ini)
+            static auto readOffsets = [](SettingsReader& ini)
             {
                 FirstPerson::forwardOffset = std::clamp(ini.ReadFloat("MISC", "FirstPersonForward", 0.1f), -0.5f, 0.5f);
                 FirstPerson::upOffset = std::clamp(ini.ReadFloat("MISC", "FirstPersonUp", 0.05f), -0.5f, 0.5f);
@@ -710,7 +711,7 @@ public:
                 FirstPerson::reachByMotion = ini.ReadInteger("MISC", "FirstPersonReachByMotion", 1) != 0;
                 FirstPerson::nearClipOnFoot = std::clamp(ini.ReadFloat("MISC", "FirstPersonNearClip", 0.05f), 0.01f, 0.3f);
             };
-            readOffsets(iniReader);
+            readOffsets(reader);
             IniReload::Add(readOffsets);
 
             // lea eax, [esp+30] / push eax / mov ecx, ebx / call 0x4319B0 / movss xmm0, [esi+54]

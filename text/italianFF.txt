@@ -394,9 +394,6 @@ Aerial Perspective
 [Zoomed Movement]
 Consenti movimento con lo zoom
 
-[Distant Lights]
-Luci distanti
-
 [CenteredVehCam]
 Telecamera veicolo centrata
 
@@ -414,18 +411,6 @@ Telecamera scavalcamenti e furti d'auto
 
 [FE_STEAMPAD]
 Steam Controller
-
-[CutscAudioSync]
-Sincronizzazione audio cinematiche
-
-[CutscAudioSync0]
-Sincronizzazione audio cinematiche - No
-
-[CutscAudioSync1]
-Sincronizzazione audio cinematiche - Alternativa
-
-[CutscAudioSync2]
-Sincronizzazione audio cinematiche - Sì
 
 [Turn Indicators]
 Indicatori di direzione
@@ -520,9 +505,6 @@ Alternativo
 [FF_WARN6]
 ~r~ATTENZIONE: CHSS ha effetto solo se la qualità delle ombre è impostata su Molto Alta.
 
-[FF_WARN7]
-~r~ATTENZIONE: Attiva la sincronizzazione audio cinematiche se riscontri desincronizzazione audio, disattivala per la fluidità delle animazioni. Può essere attivata/disattivata in una cinematica tramite ~PAD_UP~.
-
 [USJ_FRST_KMB]
 Durante la visualizzazione delle acrobazie usa ~INPUT_MOUSE_WHEEL_UP~ e ~INPUT_MOUSE_WHEEL_DOWN~ per controllare lo slow motion.
 
@@ -543,6 +525,18 @@ Usa ~PAD_LSTICK_ALL~ per muoverti in aria. ~n~Premi ~INPUT_MOUSE_LMB~ per aprire
 
 [ESS_PARA1_PC]
 Quando sei in aria usa ~PAD_LSTICK_ALL~ per muoverti. In caduta libera premi ~INPUT_MOUSE_LMB~ per aprire il paracadute. ~n~Tieni premuto ~INPUT_VEH_CIN_CAM~ per provare diverse visuali.
+
+[FF_HDRCAL_PEAK]
+Aumenta finché il logo nel riquadro è appena visibile. Se il televisore ha la funzione HGIG, attivala prima.
+
+[FF_HDRCAL_PAPER]
+Imposta una luminosità confortevole per menu e HUD. Il logo nel riquadro mostra questa luminosità.
+
+[FF_HDRCAL_HDR]
+Seleziona un'impostazione di luminosità qui sotto per vederne la schermata di calibrazione.
+
+[FF_HDRCAL_SDR]
+Le schermate di calibrazione delle impostazioni di luminosità appaiono qui quando l'uscita HDR è attiva.
 
 [DUMMY_l11]
 Dummy label.

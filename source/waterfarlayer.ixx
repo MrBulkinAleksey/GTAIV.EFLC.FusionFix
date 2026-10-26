@@ -12,6 +12,7 @@ export module waterfarlayer;
 
 import common;
 import comvars;
+import settings;
 import d3dx9_43;
 import inireload;
 import postfxresources;
@@ -85,11 +86,11 @@ namespace WaterFarLayer
     uint32_t logPasses = 0, logRefreshes = 0, logComposites = 0;
     uint64_t logNear = 0, logFarLeftOut = 0, logFarDrawn = 0;
 
-    void ReadIni(CIniReader& iniReader)
+    void ReadIni(SettingsReader& reader)
     {
-        bEnabled = iniReader.ReadInteger("PERFORMANCE", "WaterFarLayer", 1) != 0;
-        fDistance = std::clamp(iniReader.ReadFloat("PERFORMANCE", "WaterFarLayerDistance", 400.0f), 50.0f, 5000.0f);
-        bLog = iniReader.ReadInteger("DEBUG", "WaterFarLayerLog", 0) != 0;
+        bEnabled = reader.ReadInteger("PERFORMANCE", "WaterFarLayer", 1) != 0;
+        fDistance = std::clamp(reader.ReadFloat("PERFORMANCE", "WaterFarLayerDistance", 400.0f), 50.0f, 5000.0f);
+        bLog = reader.ReadInteger("DEBUG", "WaterFarLayerLog", 0) != 0;
         // A layer from before may not match what is set now
         layerValid = false;
     }
@@ -397,8 +398,8 @@ public:
     {
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
-            WaterFarLayer::ReadIni(iniReader);
+            SettingsReader reader;
+            WaterFarLayer::ReadIni(reader);
             IniReload::Add(WaterFarLayer::ReadIni);
         };
         FusionFix::onInitEvent() += []()

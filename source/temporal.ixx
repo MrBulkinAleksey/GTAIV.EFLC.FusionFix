@@ -191,7 +191,9 @@ export namespace TemporalAA
     // writes its own, so the depth test keeps it where its surface is what is seen
     float ObjectDepthBias();
     bool HistoryValid();
+    bool IsSceneResolved();
     void OnFogDrawn();
+    void OnPostFXDrawn();
 }
 
 class Temporal
@@ -428,12 +430,24 @@ public:
         return since < 10;
     }
 
-    static inline rage::grcViewport* CameraViewport = nullptr;
+    // CCamFinal sets up two camera viewports every frame: the game camera's and a second one (square, far clip 800)
+    // that the scene is not rendered with. Only the one the G-buffer phase copies is jittered: a jittered viewport
+    // that no resolve follows would show the jitter as it is.
+    static inline std::array<rage::grcViewport*, 4> CameraViewports{};
+    static inline rage::grcViewport* SceneViewport = nullptr;
+
+    // The near plane is left out: the game moves it as the camera closes in on a wall, and the copy can hold the one
+    // before, so those scenes went uncounted and every history (temporal AA's, the accumulations of SSR, SSGI and AO)
+    // was dropped while walking along a wall. P[0][0] and P[1][1] hold the field of view and the aspect ratio, the
+    // jitter only changes P[2][0] and P[2][1].
+    static bool SameCamera(const rage::grcViewport* a, const rage::grcViewport* b)
+    {
+        return a->mWidth == b->mWidth && a->mHeight == b->mHeight && a->mFov == b->mFov &&
+            a->mProjectionMatrix[0][0] == b->mProjectionMatrix[0][0] && a->mProjectionMatrix[1][1] == b->mProjectionMatrix[1][1];
+    }
 
     // The G-buffer phase of the game viewport, not of the phone camera or of front end scenes: its viewport
-    // is a copy of the camera viewport. The near plane is left out: the game moves it as the camera closes in
-    // on a wall, and the copy can hold the one before, so those scenes went uncounted and every history
-    // (temporal AA's, the accumulations of SSR, SSGI and AO) was dropped while walking along a wall.
+    // is a copy of the camera viewport, which becomes the one that is jittered
     static bool IsCameraScene()
     {
         if (!CRenderPhase::sm_pCurrent || !*CRenderPhase::sm_pCurrent)
@@ -443,19 +457,30 @@ public:
         if (!phaseViewport->mIsPerspective)
             return false;
 
-        if (!CameraViewport)
+        if (!CameraViewports[0])
             return true;
 
-        return phaseViewport->mWidth == CameraViewport->mWidth && phaseViewport->mHeight == CameraViewport->mHeight &&
-            phaseViewport->mFov == CameraViewport->mFov;
+        for (auto viewport : CameraViewports)
+        {
+            if (viewport && SameCamera(viewport, phaseViewport))
+            {
+                SceneViewport = viewport;
+                return true;
+            }
+        }
+        return false;
     }
 
     static inline injector::hook_back<void(__fastcall*)(void*, void*, rage::grcViewport*, float, float, float, float)> hbSetCameraPerspective;
     static void __fastcall SetCameraPerspective(void* _this, void* edx, rage::grcViewport* viewport, float fov, float aspect, float nearClip, float farClip)
     {
-        CameraViewport = viewport;
+        if (viewport && std::find(CameraViewports.begin(), CameraViewports.end(), viewport) == CameraViewports.end())
+        {
+            std::rotate(CameraViewports.rbegin(), CameraViewports.rbegin() + 1, CameraViewports.rend());
+            CameraViewports[0] = viewport;
+        }
 
-        if (!viewport || !IsJitterActive() || viewport->mWidth <= 0 || viewport->mHeight <= 0)
+        if (!viewport || viewport != SceneViewport || !IsJitterActive() || viewport->mWidth <= 0 || viewport->mHeight <= 0)
             return hbSetCameraPerspective.fun(_this, edx, viewport, fov, aspect, nearClip, farClip);
 
         // NVIDIA recommends at least 16 phases for DLSS, 32 or more preferred
@@ -471,7 +496,11 @@ public:
             auto scale = RenderScale::GetScale();
             phases = std::max(phases, static_cast<uint32_t>(std::ceil(8.0f / (scale * scale))));
         }
-        auto index = (JitterCounter++ % phases) + 1;
+        // One step of the sequence per game frame. A counter of the calls advanced twice per frame (both camera
+        // viewports): every frame got an odd index, and Halton(odd, 2) >= 0.5, so all samples were in the same half
+        // of the pixel horizontally.
+        auto frame = CTimer::m_frameCount ? *CTimer::m_frameCount : JitterCounter++;
+        auto index = (frame % phases) + 1;
         auto jitterX = Halton(index, 2) - 0.5f;
         auto jitterY = Halton(index, 3) - 0.5f;
 
@@ -582,6 +611,8 @@ public:
         camera.View = TemporalMath::Matrix::From(viewport->mViewMatrix);
         camera.Projection = TemporalMath::Matrix::From(viewport->mProjectionMatrix);
         camera.ProjectionNoJitter = camera.Projection;
+        SceneViewportWidth = viewport->mWidth;
+        SceneViewportHeight = viewport->mHeight;
         // The size the scene renders at
         camera.Width = static_cast<int32_t>(RenderScale::ToRenderWidth(static_cast<uint32_t>(viewport->mWidth)));
         camera.Height = static_cast<int32_t>(RenderScale::ToRenderHeight(static_cast<uint32_t>(viewport->mHeight)));
@@ -1976,7 +2007,32 @@ public:
         return true;
     }
 
+    // The size of the scene's viewport (the output size with a render scale), for RemoveJitterAfterResolve
+    static inline int32_t SceneViewportWidth = 0;
+    static inline int32_t SceneViewportHeight = 0;
+
 public:
+    // Rebuilds the composite matrices of a viewport and uploads them when it's the current one
+    static inline void(__fastcall* RegenerateMatrices)(rage::grcViewport*, void*) = nullptr;
+
+    // CRenderPhaseDrawScene keeps drawing after the post processing, into the resolved image and with the viewport
+    // of the scene: CoronasCB (time cycle, ped impostors), render list 10, Coronas::Render, 3D markers. Nothing
+    // resolves them, so the jitter would show as it is: they get the projection without it.
+    static void RemoveJitterAfterResolve()
+    {
+        if (!RegenerateMatrices || !TemporalAA::IsSceneResolved())
+            return;
+        auto viewport = rage::GetCurrentViewport();
+        if (!viewport || !viewport->mIsPerspective || viewport->mWidth != SceneViewportWidth || viewport->mHeight != SceneViewportHeight)
+            return;
+        // P[2][0] and P[2][1] are the projection offsets without jitter, see SetCameraPerspective
+        if (viewport->mProjectionMatrix[2][0] == viewport->field_2D8 && viewport->mProjectionMatrix[2][1] == viewport->field_2DC)
+            return;
+        viewport->mProjectionMatrix[2][0] = viewport->field_2D8;
+        viewport->mProjectionMatrix[2][1] = viewport->field_2DC;
+        RegenerateMatrices(viewport, nullptr);
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Resolve, called by PostFX on the HDR scene before any other post processing. Writes the result
     // into output (texture and its surface) and returns true, or leaves it untouched. The rain goes into whichever
@@ -2135,40 +2191,46 @@ public:
 
     // At startup and on Ctrl+Shift+F10 (IniReload): each of these is looked at every frame; the ones that decide which
     // targets are made are read at startup alone.
-    static void ReadSettings(CIniReader& iniReader)
+    static void ReadSettings(SettingsReader& reader)
     {
-        nJitterPhases = std::clamp(iniReader.ReadInteger("ANTIALIASING", "JitterPhases", 8), 2, 128);
-        fCurrentWeightMin = std::clamp(iniReader.ReadFloat("ANTIALIASING", "CurrentFrameWeightMin", 0.08f), 0.01f, 1.0f);
-        fCurrentWeightMax = std::clamp(iniReader.ReadFloat("ANTIALIASING", "CurrentFrameWeightMax", 0.2f), fCurrentWeightMin, 1.0f);
-        fCurrentWeightPerPixel = std::max(iniReader.ReadFloat("ANTIALIASING", "CurrentFrameWeightPerPixelOfMotion", 0.1f), 0.0f);
-        fVarianceClipGamma = std::clamp(iniReader.ReadFloat("ANTIALIASING", "VarianceClipGamma", 1.25f), 0.5f, 4.0f);
-        fLumaWeight = std::clamp(iniReader.ReadFloat("ANTIALIASING", "LumaWeight", 1.0f), 0.0f, 16.0f);
-        fObjectDepthBias = std::clamp(iniReader.ReadFloat("ANTIALIASING", "ObjectDepthBias", 0.00002f), 0.0f, 0.01f);
-        bObjectMotionVectors = iniReader.ReadInteger("ANTIALIASING", "ObjectMotionVectors", 1) != 0;
-        fCameraCutDistance = std::max(iniReader.ReadFloat("ANTIALIASING", "CameraCutDistance", 25.0f), 1.0f);
-        nDLSSPreset = std::clamp(iniReader.ReadInteger("ANTIALIASING", "DLSSPreset", 0), 0, 15);
-        fFSRSharpness = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FSRSharpness", 0.0f), 0.0f, 1.0f);
-        fReactiveScale = std::clamp(iniReader.ReadFloat("ANTIALIASING", "ReactiveMaskScale", 2.0f), 0.0f, 64.0f);
-        fReactiveMax = std::clamp(iniReader.ReadFloat("ANTIALIASING", "ReactiveMaskMaximum", 0.75f), 0.0f, 1.0f);
-        bRainLayer = iniReader.ReadInteger("ANTIALIASING", "RainAfterAntialiasing", 1) != 0;
+        nJitterPhases = std::clamp(reader.ReadInteger("ANTIALIASING", "JitterPhases", 8), 2, 128);
+        fCurrentWeightMin = std::clamp(reader.ReadFloat("ANTIALIASING", "CurrentFrameWeightMin", 0.08f), 0.01f, 1.0f);
+        fCurrentWeightMax = std::clamp(reader.ReadFloat("ANTIALIASING", "CurrentFrameWeightMax", 0.2f), fCurrentWeightMin, 1.0f);
+        fCurrentWeightPerPixel = std::max(reader.ReadFloat("ANTIALIASING", "CurrentFrameWeightPerPixelOfMotion", 0.1f), 0.0f);
+        fVarianceClipGamma = std::clamp(reader.ReadFloat("ANTIALIASING", "VarianceClipGamma", 1.25f), 0.5f, 4.0f);
+        fLumaWeight = std::clamp(reader.ReadFloat("ANTIALIASING", "LumaWeight", 1.0f), 0.0f, 16.0f);
+        fObjectDepthBias = std::clamp(reader.ReadFloat("ANTIALIASING", "ObjectDepthBias", 0.00002f), 0.0f, 0.01f);
+        bObjectMotionVectors = reader.ReadInteger("ANTIALIASING", "ObjectMotionVectors", 1) != 0;
+        fCameraCutDistance = std::max(reader.ReadFloat("ANTIALIASING", "CameraCutDistance", 25.0f), 1.0f);
+        nDLSSPreset = std::clamp(reader.ReadInteger("ANTIALIASING", "DLSSPreset", 0), 0, 15);
+        fFSRSharpness = std::clamp(reader.ReadFloat("ANTIALIASING", "FSRSharpness", 0.0f), 0.0f, 1.0f);
+        fReactiveScale = std::clamp(reader.ReadFloat("ANTIALIASING", "ReactiveMaskScale", 2.0f), 0.0f, 64.0f);
+        fReactiveMax = std::clamp(reader.ReadFloat("ANTIALIASING", "ReactiveMaskMaximum", 0.75f), 0.0f, 1.0f);
+        bRainLayer = reader.ReadInteger("ANTIALIASING", "RainAfterAntialiasing", 1) != 0;
     }
 
     Temporal()
     {
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
+            SettingsReader reader;
             // These size the targets (CreateResources): read at startup only
-            bSkinnedMotionVectors = iniReader.ReadInteger("ANTIALIASING", "SkinnedMotionVectors", 1) != 0;
-            bReactiveMask = iniReader.ReadInteger("ANTIALIASING", "ReactiveMask", 1) != 0;
-            bSteadyDepth = iniReader.ReadInteger("ANTIALIASING", "SteadyDepth", 1) != 0;
-            ReadSettings(iniReader);
+            bSkinnedMotionVectors = reader.ReadInteger("ANTIALIASING", "SkinnedMotionVectors", 1) != 0;
+            bReactiveMask = reader.ReadInteger("ANTIALIASING", "ReactiveMask", 1) != 0;
+            bSteadyDepth = reader.ReadInteger("ANTIALIASING", "SteadyDepth", 1) != 0;
+            ReadSettings(reader);
             IniReload::Add(ReadSettings);
 
             GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&Resolve, &hm);
 
+            // Rebuilds the composite matrices of a viewport (RemoveJitterAfterResolve)
+            auto pattern = find_pattern("55 8B EC 83 E4 F8 51 56 8B F1 8D 86 80 00 00 00 50 8D 86 80 01 00 00 50 8D 8E C0 00 00 00 E8",
+                "56 8B F1 8D 86 80 00 00 00 50 8D 86 80 01 00 00 50 8D 8E C0 00 00 00 E8");
+            if (!pattern.empty())
+                RegenerateMatrices = reinterpret_cast<decltype(RegenerateMatrices)>(pattern.get_first(0));
+
             // Main camera perspective, CCamFinal
-            auto pattern = hook::pattern("F3 0F 11 04 24 53 E8 ? ? ? ? 5F 5E 5B 8B E5");
+            pattern = hook::pattern("F3 0F 11 04 24 53 E8 ? ? ? ? 5F 5E 5B 8B E5");
             if (!pattern.empty())
                 hbSetCameraPerspective.fun = injector::MakeCALL(pattern.get_first(6), SetCameraPerspective, true).get();
             else
@@ -2213,9 +2275,6 @@ public:
             {
                 switch (value)
                 {
-                case FusionFixSettings.AntialiasingText.eSMAA:
-                    // hangs the game on D3D9on12
-                    return CSettings::GetRunningGraphicsAPI() != 2;
                 case FusionFixSettings.AntialiasingText.eTAA:
                     // resolved by Fusion Fix post processing
                     return GetD3DX9_43DLL() != nullptr;
@@ -2547,6 +2606,12 @@ export namespace TemporalAA
     IDirect3DTexture9* GetSteadyDepth()
     {
         return Temporal::GetSteadyDepth();
+    }
+
+    // Called by PostFX once the post processing of the scene is drawn
+    void OnPostFXDrawn()
+    {
+        Temporal::RemoveJitterAfterResolve();
     }
 
     // Called by PostFX right after the fog pass of the scene

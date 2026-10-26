@@ -36,6 +36,11 @@ workspace "GTAIV.EFLC.FusionFix"
    configurations { "Release", "Debug" }
    architecture "x86"
    location "build"
+   -- BuildTimeUtc (Versioninfo.rc): the build's own time in UTC, written before every build; the in-game update
+   -- check compares it with the release asset's time (FileVersion is only shown)
+   includedirs { "build/generated" }
+   resincludedirs { "build/generated" }
+   prebuildcommands { 'powershell -NoProfile -ExecutionPolicy Bypass -File "../tools/buildtime.ps1" -Out "../build/generated/BuildTime.h"' }
    cppdialect "C++latest"
    kind "SharedLib"
    language "C++"
@@ -95,18 +100,29 @@ workspace "GTAIV.EFLC.FusionFix"
 
    includedirs { "source" }
    includedirs { "source/includes" }
+   -- Shared headers, ASI Settings, overlay, automation and the upscaler bridge's client: FusionFixUtils, a submodule
+   -- (change them there)
+   includedirs { "external/FusionFixUtils/include", "external/FusionFixUtils" }
    includedirs { "source/ledsdk" }
    includedirs { "source/dxsdk" }
+   -- In-game settings overlay: the overlay of FusionFixUtils; ImGui is the imgui submodule of FusionFixUtils.
+   includedirs { "external/FusionFixUtils/imgui" }
+   files { "external/FusionFixUtils/overlay/*.hpp", "external/FusionFixUtils/imgui/*.h" }
+   files { "external/FusionFixUtils/imgui/imgui.cpp", "external/FusionFixUtils/imgui/imgui_draw.cpp", "external/FusionFixUtils/imgui/imgui_tables.cpp", "external/FusionFixUtils/imgui/imgui_widgets.cpp" }
+   files { "external/FusionFixUtils/imgui/backends/imgui_impl_win32.cpp", "external/FusionFixUtils/imgui/backends/imgui_impl_dx9.cpp" }
+   links { "comctl32", "dxguid" }
    libdirs { "source/ledsdk" }
    libdirs { "source/dxsdk" }
    files { "source/**.h", "source/*.hpp", "source/*.cpp", "source/*.hxx", "source/**.ixx" }
    files { "source/nightshadows/*.hpp", "source/nightshadows/*.inl" }
    files { "source/resources/Versioninfo.rc" }
    files { "source/resources/Shaders.rc" }
-   files { "source/resources/LODLights.rc" }
    files { "source/resources/snow/*.rc" }
    files { "source/resources/temporal/*.rc" }
    files { "source/resources/hdr/*.rc" }
+   -- ASI Settings: the description and translations of the settings, embedded by source/resources/Settings.rc
+   files { "source/resources/Settings.rc" }
+   files { "settings/*.json" }
    links { "LogitechLEDLib.lib" }
 
    includedirs { "external/injector/safetyhook/include" }
@@ -115,14 +131,11 @@ workspace "GTAIV.EFLC.FusionFix"
    includedirs { "external/injector/include" }
    includedirs { "external/inireader" }
    includedirs { "external/Vulkan-Headers/include" }
-   includedirs { "external/modupdater/dist" }
    includedirs { "source/gxt/src" }
-   libdirs { "external/modupdater/dist" }
    files { "external/hooking/Hooking.Patterns.h", "external/hooking/Hooking.Patterns.cpp" }
    files { "external/injector/safetyhook/include/**.hpp", "external/injector/safetyhook/src/**.cpp" }
    files { "external/injector/zydis/**.h", "external/injector/zydis/**.c" }
    files { "source/gxt/src/**.h", "source/gxt/src/**.cpp" }
-   files { "data/plugins/*.ini" }
 
    os.mkdir("shaders/external/gamma/asm")
    os.mkdir("source/resources/shaders/win32_30")
@@ -168,26 +181,30 @@ workspace "GTAIV.EFLC.FusionFix"
 
       -- HDR output
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_HDROutput /Fo \"../source/resources/hdr/HDROutput.pso\" \"../source/resources/hdr/HDR.hlsl\"",
+      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_HDRCalibration /Fo \"../source/resources/hdr/HDRCalibration.pso\" \"../source/resources/hdr/HDR.hlsl\"",
    }
 
    filter "configurations:Debug"
       defines { "DEBUG" }
       symbols "On"
-      links { "libmodupdater_debug_win32.lib" }
 
    filter "configurations:Release"
       defines { "NDEBUG" }
       optimize "On"
-      links { "libmodupdater_release_win32.lib" }
 
 project "GTAIV.EFLC.FusionFix"
    targetdir "bin"
+
+   -- A broken settings description fails the build, before compiling and in the built plugin
+   dependson { "AsiSettingsValidator" }
+   prebuildcommands { '"../bin/tools/asi-settings-validate.exe" "../settings/GTAIV.EFLC.FusionFix.json" "../settings/GTAIV.EFLC.FusionFix.en.json" "../settings/GTAIV.EFLC.FusionFix.fr.json" "../settings/GTAIV.EFLC.FusionFix.de.json" "../settings/GTAIV.EFLC.FusionFix.it.json" "../settings/GTAIV.EFLC.FusionFix.es.json" "../settings/GTAIV.EFLC.FusionFix.ru.json" "../settings/GTAIV.EFLC.FusionFix.ja.json"' }
+   postbuildcommands { '"../bin/tools/asi-settings-validate.exe" "$(TargetPath)"' }
 
    local gamedir = envdir("GTAIV_DIR")
    if gamedir then
       local plugins = gamedir .. "\\plugins"
       -- Only the built .asi is deployed: the contents of `data` are put in place by the
-      -- installer, and a build copying them over a game folder would overwrite the files
+      -- hub installer, and a build copying them over a game folder would overwrite the files
       -- of an installed mod with the ones of the working tree. A plugin that is already
       -- installed is replaced, a folder that does not have one is left alone.
       postbuildcommands {
@@ -197,18 +214,17 @@ project "GTAIV.EFLC.FusionFix"
       debugcommand (gamedir .. "\\GTAIV.exe")
    end
 
-project "GTAIV.EFLC.FusionFixInstaller"
-   kind "WindowedApp"
-   language "C++"
-   targetdir "bin/%{cfg.buildcfg}"
+-- Checks the ASI Settings description of the plugin (settings/*.json, external/FusionFixUtils/asi_settings)
+project "AsiSettingsValidator"
+   kind "ConsoleApp"
+   targetdir "bin/tools"
+   targetname "asi-settings-validate"
    targetextension ".exe"
-   staticruntime "On"
 
-   files { "installer/*.rc" }
-   files { "installer/main.cpp" }
    removefiles { "source/**" }
    removefiles { "external/**" }
-   files { "source/resources/Versioninfo.rc" }
+   removefiles { "settings/**" }
+   files { "external/FusionFixUtils/asi_settings/tools/validator.cpp" }
 
    filter "configurations:Debug"
       defines { "DEBUG" }
@@ -240,11 +256,16 @@ project "GTAIV.EFLC.FusionFix.Tests"
       defines { "NDEBUG" }
       optimize "On"
 
+
+-- d3d9.dll: a pass-through to the system's d3d9.dll, shipped only so that unpacking a release over an old one replaces
+-- the old graphics-API proxy (the plugin applies the graphics API itself, FusionFixUtils upscaler/graphics_api.h)
 project "d3d9"
    language "C++"
    targetdir "bin"
    targetextension ".dll"
    staticruntime "On"
+   removedefines { 'rsc_FileDescription="GTAIV.EFLC.FusionFix"' }
+   defines { 'rsc_FileDescription="Fusion Fix pass-through d3d9.dll"' }
 
    removefiles { "source/**" }
    removefiles { "external/**" }
@@ -275,6 +296,10 @@ workspace "GTAIV.EFLC.FusionFix.Helper"
    runtime "Release"
    multiprocessorcompile ("On")
    startproject "GTAIV.EFLC.FusionFix.Helper"
+   -- BuildTimeUtc of Versioninfo.rc, as in the plugin's workspace
+   includedirs { "build/generated" }
+   resincludedirs { "build/generated" }
+   prebuildcommands { 'powershell -NoProfile -ExecutionPolicy Bypass -File "../tools/buildtime.ps1" -Out "../build/generated/BuildTime.h"' }
 
    resdefines { "rsc_CompanyName=\"GTAIV.EFLC.FusionFix\"" }
    resdefines { "rsc_LegalCopyright=\"GPL-3.0 license\""}
@@ -328,3 +353,5 @@ project "GTAIV.EFLC.FusionFix.Helper"
       defines { "NDEBUG" }
       optimize "On"
       symbols "On"
+-- The dev-only automation adapters (zz_Automation.asi) live in FusionFixHelpers, next to this checkout; they use the
+-- frame-stage export of this plugin (asi_automation_frames.h), which is inert without them.

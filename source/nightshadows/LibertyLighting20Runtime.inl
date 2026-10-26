@@ -411,7 +411,7 @@ namespace Lighting20
             ++coronaLights;
         }
 
-        static void Install(CIniReader& ini) noexcept
+        static void Install(SettingsReader& ini) noexcept
         {
             pref = FusionFixSettings.GetRef("PREF_WORLD_LIGHT_SHADOWS");
             cachedLamps = ini.ReadInteger("NIGHTSHADOWS", "CachedLampShadows", 1) != 0;
@@ -1061,7 +1061,7 @@ namespace Lighting20
     // The car whose lamp (headlight of a pair or rear lamp) a slot's key is, so its own map leaves it out.
     static uintptr_t LampOwner(uint32_t key) noexcept { return LampKeys::Owner(key); }
 
-    static void Install(CIniReader& ini) noexcept
+    static void Install(SettingsReader& ini) noexcept
     {
         game = GameBase();
         installStatus.clear();

@@ -565,40 +565,40 @@ private:
     static inline float fUpscalerLodBias = -1.0f;
 
     // At startup and on Ctrl+Shift+F10 (IniReload): all of these go to the shaders every frame.
-    static void ReadIni(CIniReader& iniReader)
+    static void ReadIni(SettingsReader& reader)
     {
-        fDetailTiling = std::clamp(iniReader.ReadFloat("TEXTURES", "DetailTexturesTiling", 8.0f), 1.0f, 64.0f);
-        fDetailAlbedo = std::clamp(iniReader.ReadFloat("TEXTURES", "DetailTexturesAlbedo", 0.15f), 0.0f, 1.0f);
-        fDetailNormal = std::clamp(iniReader.ReadFloat("TEXTURES", "DetailTexturesNormal", 0.5f), 0.0f, 2.0f);
-        fSpecularAAStrength = std::clamp(iniReader.ReadFloat("TEXTURES", "SpecularAntiAliasingStrength", 1.0f), 0.0f, 4.0f);
-        fSpecularAAMax = std::clamp(iniReader.ReadFloat("TEXTURES", "SpecularAntiAliasingMax", 0.18f), 0.0f, 1.0f);
-        fUpscalerLodBias = std::clamp(iniReader.ReadFloat("ANTIALIASING", "UpscalerLodBias", -1.0f), -2.0f, 0.0f);
-        fGroundHeightBlend = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundHeightBlend", 1.0f), 0.0f, 1.0f);
-        fGroundHeightBlendDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundHeightBlendDepth", 0.2f), 0.01f, 1.0f);
-        fGroundAntiTiling = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTiling", 1.0f), 0.0f, 1.0f);
-        fGroundAntiTilingSize = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTilingSize", 4.0f), 0.5f, 100.0f);
-        fGroundAntiTilingSharpness = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTilingSharpness", 16.0f), 1.0f, 100.0f);
-        fGroundAntiTilingTolerance = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundAntiTilingTolerance", 0.1f), 0.01f, 1.0f);
+        fDetailTiling = std::clamp(reader.ReadFloat("TEXTURES", "DetailTexturesTiling", 8.0f), 1.0f, 64.0f);
+        fDetailAlbedo = std::clamp(reader.ReadFloat("TEXTURES", "DetailTexturesAlbedo", 0.15f), 0.0f, 1.0f);
+        fDetailNormal = std::clamp(reader.ReadFloat("TEXTURES", "DetailTexturesNormal", 0.5f), 0.0f, 2.0f);
+        fSpecularAAStrength = std::clamp(reader.ReadFloat("TEXTURES", "SpecularAntiAliasingStrength", 1.0f), 0.0f, 4.0f);
+        fSpecularAAMax = std::clamp(reader.ReadFloat("TEXTURES", "SpecularAntiAliasingMax", 0.18f), 0.0f, 1.0f);
+        fUpscalerLodBias = std::clamp(reader.ReadFloat("ANTIALIASING", "UpscalerLodBias", -1.0f), -2.0f, 0.0f);
+        fGroundHeightBlend = std::clamp(reader.ReadFloat("TEXTURES", "GroundHeightBlend", 1.0f), 0.0f, 1.0f);
+        fGroundHeightBlendDepth = std::clamp(reader.ReadFloat("TEXTURES", "GroundHeightBlendDepth", 0.2f), 0.01f, 1.0f);
+        fGroundAntiTiling = std::clamp(reader.ReadFloat("TEXTURES", "GroundAntiTiling", 1.0f), 0.0f, 1.0f);
+        fGroundAntiTilingSize = std::clamp(reader.ReadFloat("TEXTURES", "GroundAntiTilingSize", 4.0f), 0.5f, 100.0f);
+        fGroundAntiTilingSharpness = std::clamp(reader.ReadFloat("TEXTURES", "GroundAntiTilingSharpness", 16.0f), 1.0f, 100.0f);
+        fGroundAntiTilingTolerance = std::clamp(reader.ReadFloat("TEXTURES", "GroundAntiTilingTolerance", 0.1f), 0.01f, 1.0f);
         tileInfos.clear();
-        fGroundColorVariation = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundColorVariation", 0.25f), 0.0f, 1.0f);
-        fGroundColorVariationSize = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundColorVariationSize", 15.0f), 1.0f, 500.0f);
-        fGroundBumps = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumps", 0.08f), 0.0f, 0.5f);
-        fGroundBumpsCoarse = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumpsCoarse", 0.25f), 0.0f, 2.0f);
-        fGroundDetailBumps = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundDetailBumps", 0.005f), 0.0f, 0.1f);
-        fGroundBumpsFadeStart = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumpsFadeStart", 15.0f), 0.0f, 1000.0f);
-        fGroundBumpsFadeEnd = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundBumpsFadeEnd", 60.0f), fGroundBumpsFadeStart, 1000.0f);
-        fGroundCavity = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundCavity", 2.0f), 0.0f, 10.0f);
-        fGroundCavityAlbedo = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundCavityAlbedo", 0.3f), 0.0f, 1.0f);
-        fGroundParallaxDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxDepth", 0.05f), 0.0f, 0.5f);
-        fGroundParallaxContrast = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxContrast", 3.0f), 0.1f, 20.0f);
-        fGroundSelfShadow = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundSelfShadow", 0.5f), 0.0f, 1.0f);
-        fGroundSelfShadowSharpness = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundSelfShadowSharpness", 4.0f), 0.5f, 50.0f);
-        fGroundParallaxFadeStart = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxFadeStart", 10.0f), 0.0f, 1000.0f);
-        fGroundParallaxFadeEnd = std::clamp(iniReader.ReadFloat("TEXTURES", "GroundParallaxFadeEnd", 30.0f), fGroundParallaxFadeStart, 1000.0f);
+        fGroundColorVariation = std::clamp(reader.ReadFloat("TEXTURES", "GroundColorVariation", 0.25f), 0.0f, 1.0f);
+        fGroundColorVariationSize = std::clamp(reader.ReadFloat("TEXTURES", "GroundColorVariationSize", 15.0f), 1.0f, 500.0f);
+        fGroundBumps = std::clamp(reader.ReadFloat("TEXTURES", "GroundBumps", 0.08f), 0.0f, 0.5f);
+        fGroundBumpsCoarse = std::clamp(reader.ReadFloat("TEXTURES", "GroundBumpsCoarse", 0.25f), 0.0f, 2.0f);
+        fGroundDetailBumps = std::clamp(reader.ReadFloat("TEXTURES", "GroundDetailBumps", 0.005f), 0.0f, 0.1f);
+        fGroundBumpsFadeStart = std::clamp(reader.ReadFloat("TEXTURES", "GroundBumpsFadeStart", 15.0f), 0.0f, 1000.0f);
+        fGroundBumpsFadeEnd = std::clamp(reader.ReadFloat("TEXTURES", "GroundBumpsFadeEnd", 60.0f), fGroundBumpsFadeStart, 1000.0f);
+        fGroundCavity = std::clamp(reader.ReadFloat("TEXTURES", "GroundCavity", 2.0f), 0.0f, 10.0f);
+        fGroundCavityAlbedo = std::clamp(reader.ReadFloat("TEXTURES", "GroundCavityAlbedo", 0.3f), 0.0f, 1.0f);
+        fGroundParallaxDepth = std::clamp(reader.ReadFloat("TEXTURES", "GroundParallaxDepth", 0.05f), 0.0f, 0.5f);
+        fGroundParallaxContrast = std::clamp(reader.ReadFloat("TEXTURES", "GroundParallaxContrast", 3.0f), 0.1f, 20.0f);
+        fGroundSelfShadow = std::clamp(reader.ReadFloat("TEXTURES", "GroundSelfShadow", 0.5f), 0.0f, 1.0f);
+        fGroundSelfShadowSharpness = std::clamp(reader.ReadFloat("TEXTURES", "GroundSelfShadowSharpness", 4.0f), 0.5f, 50.0f);
+        fGroundParallaxFadeStart = std::clamp(reader.ReadFloat("TEXTURES", "GroundParallaxFadeStart", 10.0f), 0.0f, 1000.0f);
+        fGroundParallaxFadeEnd = std::clamp(reader.ReadFloat("TEXTURES", "GroundParallaxFadeEnd", 30.0f), fGroundParallaxFadeStart, 1000.0f);
         // The shader's loop stops at 32 steps.
-        fParallaxMinSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMinSteps", 8.0f), 2.0f, 32.0f);
-        fParallaxMaxSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMaxSteps", 32.0f), fParallaxMinSteps, 32.0f);
-        fParallaxDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionDepth", 1.0f), 0.0f, 4.0f);
+        fParallaxMinSteps = std::clamp(reader.ReadFloat("TEXTURES", "ParallaxOcclusionMinSteps", 8.0f), 2.0f, 32.0f);
+        fParallaxMaxSteps = std::clamp(reader.ReadFloat("TEXTURES", "ParallaxOcclusionMaxSteps", 32.0f), fParallaxMinSteps, 32.0f);
+        fParallaxDepth = std::clamp(reader.ReadFloat("TEXTURES", "ParallaxOcclusionDepth", 1.0f), 0.0f, 4.0f);
     }
 
     // Kind 0 for any other shader, 1 for the terrain, 2 for gta_parallax*, 3 for the generic world
@@ -667,10 +667,10 @@ private:
 
     // Ctrl+Shift+F10 (IniReload): the settings read again, and with GroundSurfacesDebug on what the G-buffer pass drew
     // with written to GTAIV.EFLC.FusionFix.Ground.log.
-    static void OnIniReload(CIniReader& iniReader)
+    static void OnIniReload(SettingsReader& reader)
     {
         {
-            ReadIni(iniReader);
+            ReadIni(reader);
             const double frames = groundFrames ? double(groundFrames) : 1.0;
             FusionLog::Write("Ground", "Draws", "Ground Surfaces %s, detail texture %s, debug %d, set-pixel-shader hook %s, prop hooks %s; per frame over %u frames: "
                     "terrain shaders %.1f, parallax shaders %.1f, world shaders with ground %.1f, other shaders %.1f, prop draws without ground %.1f; %zu shaders seen\n",
@@ -913,8 +913,8 @@ public:
     {
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
-            ReadIni(iniReader);
+            SettingsReader reader;
+            ReadIni(reader);
             IniReload::Add(OnIniReload);
             detailLevels = MakeDetailLevels();
         };

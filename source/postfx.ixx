@@ -19,6 +19,7 @@ module;
 #include <vector>
 #include <unordered_map>
 #include "FusionLog.hpp"
+#include <automation/asi_automation_frames.h>
 
 export module postfx;
 
@@ -1251,9 +1252,13 @@ private:
         PostFxResources.FullScreenTex->GetSurfaceLevel(0, &PostFxResources.FullScreenSurface);
 
         PostFxResources.FullScreenTex_temp1->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.FullScreenSurface_temp1);
-        PostFxResources.FullScreenTex_temp2->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.FullScreenSurface_temp2);
-        PostFxResources.edgesTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.edgesSurf);
-        PostFxResources.blendTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.blendSurf);
+        // FXAA and SMAA targets exist once that anti-aliasing was chosen
+        if (PostFxResources.FullScreenTex_temp2 && PostFxResources.FullScreenTex_temp2->mD3DTexture)
+            PostFxResources.FullScreenTex_temp2->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.FullScreenSurface_temp2);
+        if (PostFxResources.edgesTex && PostFxResources.edgesTex->mD3DTexture)
+            PostFxResources.edgesTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.edgesSurf);
+        if (PostFxResources.blendTex && PostFxResources.blendTex->mD3DTexture)
+            PostFxResources.blendTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.blendSurf);
 
         PostFxResources.FullScreenDownsampleTex->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.FullScreenDownsampleSurf);
         PostFxResources.FullScreenDownsampleTex2->mD3DTexture->GetSurfaceLevel(0, &PostFxResources.FullScreenDownsampleSurf2);
@@ -1318,7 +1323,6 @@ private:
 
         HRESULT hr = S_FALSE;
 
-        DWORD OldSRGB = 0;
         DWORD OldSampler = 0;
 
         // save render state between post processing steps, 
@@ -1577,17 +1581,21 @@ private:
                            PostFxResources.SMAA_areaTex && PostFxResources.SMAA_searchTex && PostFxResources.edgesTex && PostFxResources.blendTex
                            )
                         {
-                            DWORD oldSample = 0;
-
-                            for (int i = 0; i <= 4; ++i)
-                            {
-                                pDevice->GetSamplerState(i, D3DSAMP_MINFILTER, &oldSample);
-                                pDevice->GetSamplerState(i, D3DSAMP_MAGFILTER, &oldSample);
-                                pDevice->GetSamplerState(i, D3DSAMP_MIPFILTER, &oldSample);
-                                pDevice->GetSamplerState(i, D3DSAMP_ADDRESSU, &oldSample);
-                                pDevice->GetSamplerState(i, D3DSAMP_ADDRESSV, &oldSample);
-                                pDevice->GetSamplerState(i, D3DSAMP_ADDRESSW, &oldSample);
-                            }
+                            // The sampler states of the game's five samplers, each one restored to its own value afterwards
+                            // (one shared value left them all alike before; D3D9on12 rejects such sampler addressing)
+                            static constexpr D3DSAMPLERSTATETYPE smaaSamplerStates[] = {
+                                D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_MIPFILTER,
+                                D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW
+                            };
+                            DWORD oldSamplers[5][std::size(smaaSamplerStates)]{};
+                            bool gotSamplers[5][std::size(smaaSamplerStates)]{};
+                            for (DWORD sampler = 0; sampler < 5; ++sampler)
+                                for (size_t state = 0; state < std::size(smaaSamplerStates); ++state)
+                                    gotSamplers[sampler][state] = SUCCEEDED(pDevice->GetSamplerState(sampler, smaaSamplerStates[state], &oldSamplers[sampler][state]));
+                            DWORD oldSrgbTexture = 0;
+                            DWORD oldSrgbWrite = 0;
+                            auto gotSrgbTexture = SUCCEEDED(pDevice->GetSamplerState(0, D3DSAMP_SRGBTEXTURE, &oldSrgbTexture));
+                            auto gotSrgbWrite = SUCCEEDED(pDevice->GetRenderState(D3DRS_SRGBWRITEENABLE, &oldSrgbWrite));
 
                             // colorTex / colorGammaTex
                             pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
@@ -1657,25 +1665,20 @@ private:
                             SetTextureBoth(pDevice, 0, PostFxResources.FullScreenTex_temp2->mD3DTexture);
                             SetTextureBoth(pDevice, 4, PostFxResources.blendTex->mD3DTexture);
 
-                            pDevice->GetSamplerState(0, D3DSAMP_SRGBTEXTURE, &oldSample);
-                            pDevice->GetRenderState(D3DRS_SRGBWRITEENABLE, &OldSRGB); // save srgb state
                             pDevice->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, 1);
                             pDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, 1);
 
                             pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
-                            pDevice->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, oldSample);
-                            pDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, OldSRGB); // restore srgb state
+                            if (gotSrgbTexture)
+                                pDevice->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, oldSrgbTexture);
+                            if (gotSrgbWrite)
+                                pDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, oldSrgbWrite);
 
-                            for (int i = 0; i <= 4; ++i)
-                            {
-                                pDevice->SetSamplerState(i, D3DSAMP_MINFILTER, oldSample);
-                                pDevice->SetSamplerState(i, D3DSAMP_MAGFILTER, oldSample);
-                                pDevice->SetSamplerState(i, D3DSAMP_MIPFILTER, oldSample);
-                                pDevice->SetSamplerState(i, D3DSAMP_ADDRESSU, oldSample);
-                                pDevice->SetSamplerState(i, D3DSAMP_ADDRESSV, oldSample);
-                                pDevice->SetSamplerState(i, D3DSAMP_ADDRESSW, oldSample);
-                            }
+                            for (DWORD sampler = 0; sampler < 5; ++sampler)
+                                for (size_t state = 0; state < std::size(smaaSamplerStates); ++state)
+                                    if (gotSamplers[sampler][state])
+                                        pDevice->SetSamplerState(sampler, smaaSamplerStates[state], oldSamplers[sampler][state]);
 
                             SetTextureBoth(pDevice, 0, PostFxResources.prePostFx[0]);
                             SetTextureBoth(pDevice, 1, PostFxResources.prePostFx[1]);
@@ -1796,12 +1799,12 @@ private:
 
     // Ctrl+Shift+F10 (IniReload): the live settings (ReadLiveIni) read again, and the cloud values the shadows use
     // added to GTAIV.EFLC.FusionFix.PostFx.log next to the plugin.
-    static void OnIniReload(CIniReader& iniReader)
+    static void OnIniReload(SettingsReader& reader)
     {
         {
             auto& R = PostFxResources;
             const bool profiling = PostFxProfiler::bEnabled;
-            R.ReadLiveIni(iniReader);
+            R.ReadLiveIni(reader);
             // A mark between the profiler's blocks, the next of which holds only frames with what was read.
             if (profiling && PostFxProfiler::bEnabled)
             {
@@ -2069,6 +2072,10 @@ private:
             {
                 Init();
                 NewPostFX();
+                // What the scene phase draws after the post processing is not resolved, it must not be jittered
+                TemporalAA::OnPostFXDrawn();
+                // The finished 3D image (post processing and anti-aliasing, before the HUD) for the dev-only automation plugin
+                asi_automation_frames::Fire(ASI_AUTOMATION_STAGE_BEFORE_UI, rage::grcDevice::GetD3DDevice());
             }
         }
         else if (bInsteadDrawPrimitiveDownsample)
@@ -3229,7 +3236,7 @@ public:
                 }
 
                 pattern = find_pattern("55 8B EC 83 E4 ? 8B 0D ? ? ? ? 8B 15 ? ? ? ? 8B 41", "55 8B EC 83 E4 ? 8B 0D ? ? ? ? 8B 41 ? 8B 15");
-                RenderPedAndVehicleFakeShadowsInlineHook = safetyhook::create_inline(pattern.get_first(0), RenderPedAndVehicleFakeShadows); 
+                RenderPedAndVehicleFakeShadowsInlineHook = safetyhook::create_inline(pattern.get_first(0), RenderPedAndVehicleFakeShadows);
             }
         };
     }

@@ -7,6 +7,7 @@ export module framehistory;
 
 import common;
 import comvars;
+import settings;
 import temporal;
 import inireload;
 
@@ -66,9 +67,9 @@ namespace FrameHistoryDetail
     {
         static const bool registered = []
         {
-            auto read = [](CIniReader& iniReader) { cutDistance = std::max(iniReader.ReadFloat("ANTIALIASING", "CameraCutDistance", 25.0f), 1.0f); };
-            CIniReader iniReader("");
-            read(iniReader);
+            auto read = [](SettingsReader& reader) { cutDistance = std::max(reader.ReadFloat("ANTIALIASING", "CameraCutDistance", 25.0f), 1.0f); };
+            SettingsReader reader;
+            read(reader);
             IniReload::Add(read);
             return true;
         }();

@@ -42,18 +42,18 @@ class VehiclePaint
         return ref ? ref->get() : 1;
     }
 
-    static void ReadIni(CIniReader& iniReader)
+    static void ReadIni(SettingsReader& reader)
     {
-        fClearcoat = std::clamp(iniReader.ReadFloat("TEXTURES", "VehiclePaintClearcoat", 1.0f), 0.0f, 2.0f);
-        fClearcoatSmoothness = std::clamp(iniReader.ReadFloat("TEXTURES", "VehiclePaintClearcoatSmoothness", 0.75f), 0.0f, 1.0f);
-        fBakedHighlightCut = std::clamp(iniReader.ReadFloat("TEXTURES", "VehiclePaintBakedHighlightCut", 0.2f), 0.0f, 1.0f);
-        fColorRichness = std::clamp(iniReader.ReadFloat("TEXTURES", "VehiclePaintColorRichness", 1.25f), 0.5f, 2.0f);
-        fPearl = std::clamp(iniReader.ReadFloat("TEXTURES", "VehiclePaintPearl", 0.4f), 0.0f, 1.0f);
-        fRainAmount = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsAmount", 1.4f), 0.0f, 4.0f);
-        fRainDensity = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsDensity", 40.0f), 5.0f, 200.0f);
-        fRainBump = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsBump", 0.002f), 0.0f, 0.02f);
-        fRainRunning = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsRunning", 1.0f), 0.0f, 1.0f);
-        fRainSpeed = std::clamp(iniReader.ReadFloat("WEATHER", "CarRaindropsSpeed", 0.15f), 0.0f, 3.0f);
+        fClearcoat = std::clamp(reader.ReadFloat("TEXTURES", "VehiclePaintClearcoat", 1.0f), 0.0f, 2.0f);
+        fClearcoatSmoothness = std::clamp(reader.ReadFloat("TEXTURES", "VehiclePaintClearcoatSmoothness", 0.75f), 0.0f, 1.0f);
+        fBakedHighlightCut = std::clamp(reader.ReadFloat("TEXTURES", "VehiclePaintBakedHighlightCut", 0.2f), 0.0f, 1.0f);
+        fColorRichness = std::clamp(reader.ReadFloat("TEXTURES", "VehiclePaintColorRichness", 1.25f), 0.5f, 2.0f);
+        fPearl = std::clamp(reader.ReadFloat("TEXTURES", "VehiclePaintPearl", 0.4f), 0.0f, 1.0f);
+        fRainAmount = std::clamp(reader.ReadFloat("WEATHER", "CarRaindropsAmount", 1.4f), 0.0f, 4.0f);
+        fRainDensity = std::clamp(reader.ReadFloat("WEATHER", "CarRaindropsDensity", 40.0f), 5.0f, 200.0f);
+        fRainBump = std::clamp(reader.ReadFloat("WEATHER", "CarRaindropsBump", 0.002f), 0.0f, 0.02f);
+        fRainRunning = std::clamp(reader.ReadFloat("WEATHER", "CarRaindropsRunning", 1.0f), 0.0f, 1.0f);
+        fRainSpeed = std::clamp(reader.ReadFloat("WEATHER", "CarRaindropsSpeed", 0.15f), 0.0f, 3.0f);
     }
 
     // First command of the G-buffer pass: the paint's constants for this frame.
@@ -92,8 +92,8 @@ public:
     {
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
-            ReadIni(iniReader);
+            SettingsReader reader;
+            ReadIni(reader);
             IniReload::Add(ReadIni);
         };
 

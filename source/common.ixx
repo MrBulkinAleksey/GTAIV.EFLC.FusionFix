@@ -4,7 +4,7 @@ module;
 #include <Zydis.h>
 #include <atomic>
 #include <memory>
-#include "includes/gameref.hpp"
+#include "gameref.hpp"
 
 export module common;
 
@@ -97,6 +97,13 @@ public:
     {
         static Event<> ShutdownEvent;
         return ShutdownEvent;
+    }
+    // The game calls ExitProcess (its normal exit), before any module is unloaded: other threads still run and
+    // starting a process is safe here, unlike in onShutdownEvent (DLL_PROCESS_DETACH, under the loader lock)
+    static Event<>& onExitEvent()
+    {
+        static Event<> ExitEvent;
+        return ExitEvent;
     }
     static Event<>& onGameInitEvent()
     {

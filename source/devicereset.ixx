@@ -14,6 +14,7 @@ export module devicereset;
 
 import common;
 import comvars;
+import settings;
 import vtablepatch;
 
 // What keeps a device reset from going through. D3D9 (and DXVK) refuse Reset with D3DERR_INVALIDCALL while any
@@ -343,7 +344,7 @@ namespace DeviceReset
         }
         PatchVTable(vtable, 16, RealReset, &Reset);
         hooked = vtable;
-        static const bool booking = [] { CIniReader iniReader(""); return iniReader.ReadInteger("DEBUG", "DeviceResetLog", 0) != 0; }();
+        static const bool booking = [] { SettingsReader reader; return reader.ReadInteger("DEBUG", "DeviceResetLog", 0) != 0; }();
         bBooking = booking;
         if (!bBooking)
             return;

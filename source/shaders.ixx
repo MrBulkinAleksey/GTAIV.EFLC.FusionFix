@@ -183,35 +183,35 @@ public:
 
         FusionFix::onInitEvent() += []()
         {
-            CIniReader iniReader("");
-            fOverrideTreeAlpha = std::clamp(iniReader.ReadFloat("MISC", "OverrideTreeAlpha", 0.0f), 0.0f, 255.0f);
-            fSHADOWFILTERSHARPShadowSoftness = iniReader.ReadFloat("SHADOWFILTERSHARP", "ShadowSoftness", 1.5f);
-            fSHADOWFILTERSHARPShadowBias = iniReader.ReadFloat("SHADOWFILTERSHARP", "ShadowBias", 5.0f);
-            fSHADOWFILTERSOFTShadowSoftness = iniReader.ReadFloat("SHADOWFILTERSOFT", "ShadowSoftness", 3.0f);
-            fSHADOWFILTERSOFTShadowBias = iniReader.ReadFloat("SHADOWFILTERSOFT", "ShadowBias", 8.0f);
+            SettingsReader reader;
+            fOverrideTreeAlpha = std::clamp(reader.ReadFloat("MISC", "OverrideTreeAlpha", 0.0f), 0.0f, 255.0f);
+            fSHADOWFILTERSHARPShadowSoftness = reader.ReadFloat("SHADOWFILTERSHARP", "ShadowSoftness", 1.5f);
+            fSHADOWFILTERSHARPShadowBias = reader.ReadFloat("SHADOWFILTERSHARP", "ShadowBias", 5.0f);
+            fSHADOWFILTERSOFTShadowSoftness = reader.ReadFloat("SHADOWFILTERSOFT", "ShadowSoftness", 3.0f);
+            fSHADOWFILTERSOFTShadowBias = reader.ReadFloat("SHADOWFILTERSOFT", "ShadowBias", 8.0f);
 
-            fSHADOWFILTERCHSSShadowSoftness = iniReader.ReadFloat("SHADOWFILTERCHSS", "ShadowSoftness", 1.5f);
-            fSHADOWFILTERCHSSShadowBias = iniReader.ReadFloat("SHADOWFILTERCHSS", "ShadowBias", 5.0f);
-            fSHADOWFILTERCHSSMaxSoftness = iniReader.ReadFloat("SHADOWFILTERCHSS", "MaxSoftness", 10.0f);
+            fSHADOWFILTERCHSSShadowSoftness = reader.ReadFloat("SHADOWFILTERCHSS", "ShadowSoftness", 1.5f);
+            fSHADOWFILTERCHSSShadowBias = reader.ReadFloat("SHADOWFILTERCHSS", "ShadowBias", 5.0f);
+            fSHADOWFILTERCHSSMaxSoftness = reader.ReadFloat("SHADOWFILTERCHSS", "MaxSoftness", 10.0f);
 
-            fSSDensity = std::clamp(iniReader.ReadFloat("SUNSHAFTS", "SunShaftsDensity", 0.9f), 0.0f, 1.0f);
-            fSSDecay = std::clamp(iniReader.ReadFloat("SUNSHAFTS", "SunShaftsDecay", 0.95f), 0.0f, 1.0f);
+            fSSDensity = std::clamp(reader.ReadFloat("SUNSHAFTS", "SunShaftsDensity", 0.9f), 0.0f, 1.0f);
+            fSSDecay = std::clamp(reader.ReadFloat("SUNSHAFTS", "SunShaftsDecay", 0.95f), 0.0f, 1.0f);
 
-            fCascadeBlendSize = std::clamp(iniReader.ReadFloat("SHADOWS", "CascadeBlendSize", 0.1f), 0.0f, 1.0f);
-            nForceShadowFilter = std::clamp(iniReader.ReadInteger("SHADOWS", "ForceShadowFilter", 0), 0, 2);
-            bool bConsoleCarReflectionsAndDirt = iniReader.ReadInteger("MISC", "ConsoleCarReflectionsAndDirt", 1) != 0;
-            bSmoothShorelines = iniReader.ReadInteger("MISC", "SmoothShorelines", 1) != 0;
-            bSmoothLightVolumes = iniReader.ReadInteger("MISC", "SmoothLightVolumes", 1) != 0;
-            bSkyHDR = iniReader.ReadInteger("LIGHTING", "SkyHDR", 1) != 0;
-            fSunFlare = std::clamp(iniReader.ReadFloat("SUNSHAFTS", "SunFlareIntensity", 1.0f), 0.0f, 4.0f);
-            IniReload::Add([](CIniReader& ini)
+            fCascadeBlendSize = std::clamp(reader.ReadFloat("SHADOWS", "CascadeBlendSize", 0.1f), 0.0f, 1.0f);
+            nForceShadowFilter = std::clamp(reader.ReadInteger("SHADOWS", "ForceShadowFilter", 0), 0, 2);
+            bool bConsoleCarReflectionsAndDirt = reader.ReadInteger("MISC", "ConsoleCarReflectionsAndDirt", 1) != 0;
+            bSmoothShorelines = reader.ReadInteger("MISC", "SmoothShorelines", 1) != 0;
+            bSmoothLightVolumes = reader.ReadInteger("MISC", "SmoothLightVolumes", 1) != 0;
+            bSkyHDR = reader.ReadInteger("LIGHTING", "SkyHDR", 1) != 0;
+            fSunFlare = std::clamp(reader.ReadFloat("SUNSHAFTS", "SunFlareIntensity", 1.0f), 0.0f, 4.0f);
+            IniReload::Add([](SettingsReader& ini)
             {
                 bSkyHDR = ini.ReadInteger("LIGHTING", "SkyHDR", 1) != 0;
                 fSunFlare = std::clamp(ini.ReadFloat("SUNSHAFTS", "SunFlareIntensity", 1.0f), 0.0f, 4.0f);
             });
 
-            bNoBloomColorShift = iniReader.ReadInteger("MISC", "NoBloomColorShift", 1) != 0;
-            fMaxPQValue = std::max(iniReader.ReadFloat("MISC", "MaxPQValue", 100.0f), 0.0000001f);
+            bNoBloomColorShift = reader.ReadInteger("MISC", "NoBloomColorShift", 1) != 0;
+            fMaxPQValue = std::max(reader.ReadFloat("MISC", "MaxPQValue", 100.0f), 0.0000001f);
 
             // Redirect path to one unified folder
             auto pattern = hook::pattern("8B 04 8D ? ? ? ? A3 ? ? ? ? 8B 44 24 04");
@@ -417,7 +417,7 @@ public:
                         static float arr2[4];
 
                         arr2[0] = (Natives::IsInteriorScene() || bNoWindSway) ? 0.0f : *CTreeImposters::ms_windAng;
-                        arr2[1] = SeasonalManager::GetCurrent() == SeasonalType::Snow ? 0.005f : std::clamp(*CTimer::fTimeScale2 * 0.015f, 0.0015f, 0.015f);
+                        arr2[1] = SeasonalManager::GetCurrent() == SeasonalType::Snow ? 0.005f : std::clamp(*CTimer::m_fTimeScale * 0.015f, 0.0015f, 0.015f);
                         arr2[2] = 0.0f;
                         arr2[3] = 0.0f;
 

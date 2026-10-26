@@ -576,20 +576,20 @@ namespace Procedural
 
     // At startup and on Ctrl+Shift+F10 (IniReload): what the generator looks at as it runs. The pools, the density
     // and the ground triangles are sized at startup.
-    void ReadLiveSettings(CIniReader& iniReader)
+    void ReadLiveSettings(SettingsReader& reader)
     {
-        bInReflections = iniReader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
-        bGatherPriority = iniReader.ReadInteger("PROCEDURAL", "ProceduralGatherPriority", 1) != 0;
-        fConeBack = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeBack", 70.0f), 0.0f, 1000.0f);
+        bInReflections = reader.ReadInteger("PROCEDURAL", "ProceduralInReflections", 0) != 0;
+        bGatherPriority = reader.ReadInteger("PROCEDURAL", "ProceduralGatherPriority", 1) != 0;
+        fConeBack = std::clamp(reader.ReadFloat("PROCEDURAL", "ProceduralConeBack", 70.0f), 0.0f, 1000.0f);
         // For the props made from now on
-        bFarThinning = iniReader.ReadInteger("PROCEDURAL", "ProceduralFarThinning", 1) != 0;
-        bSmallFarCull = iniReader.ReadInteger("PROCEDURAL", "ProceduralSmallFarCull", 1) != 0;
-        bHeavyPropCull = iniReader.ReadInteger("PERFORMANCE", "HeavyPropCull", 1) != 0;
-        bFarFadeCull = iniReader.ReadInteger("PERFORMANCE", "FarFadeCull", 1) != 0;
-        fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
-        fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
-        bConeRelease = iniReader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
-        nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
+        bFarThinning = reader.ReadInteger("PROCEDURAL", "ProceduralFarThinning", 1) != 0;
+        bSmallFarCull = reader.ReadInteger("PROCEDURAL", "ProceduralSmallFarCull", 1) != 0;
+        bHeavyPropCull = reader.ReadInteger("PERFORMANCE", "HeavyPropCull", 1) != 0;
+        bFarFadeCull = reader.ReadInteger("PERFORMANCE", "FarFadeCull", 1) != 0;
+        fConeFullCos = std::cos(std::clamp(reader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
+        fConeTurnLead = std::clamp(reader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
+        bConeRelease = reader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
+        nSpawnsPerUpdate = std::clamp(reader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
     }
 
     void ApplyDefinitions()
@@ -1254,17 +1254,17 @@ public:
 
         FusionFix::onInitEventAsync() += []()
         {
-            CIniReader iniReader("");
+            SettingsReader reader;
 
             // [PROCEDURAL]
-            auto logLevel = iniReader.ReadInteger("DEBUG", "ProceduralLog", 0);
+            auto logLevel = reader.ReadInteger("DEBUG", "ProceduralLog", 0);
             bLog = logLevel >= 1;
             bTrace = logLevel >= 2;
-            nPool = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralPool", 16384), int32_t(VanillaRecords), 65535);
-            nMatrixLimit = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralMatrixLimit", 4096), int32_t(VanillaRecords), nPool);
-            fDensity = std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralDensity", 1.0f), 0.25f, 2.0f);
+            nPool = std::clamp(reader.ReadInteger("PROCEDURAL", "ProceduralPool", 16384), int32_t(VanillaRecords), 65535);
+            nMatrixLimit = std::clamp(reader.ReadInteger("PROCEDURAL", "ProceduralMatrixLimit", 4096), int32_t(VanillaRecords), nPool);
+            fDensity = std::clamp(reader.ReadFloat("PROCEDURAL", "ProceduralDensity", 1.0f), 0.25f, 2.0f);
             fDistance = DistanceFromPref(FusionFixSettings.Get("PREF_PROCEDURAL_DISTANCE"));
-            nGroundTriangles = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralGroundTriangles", 8192), 512, 32768);
+            nGroundTriangles = std::clamp(reader.ReadInteger("PROCEDURAL", "ProceduralGroundTriangles", 8192), 512, 32768);
 
             // The manager's capacity of ground triangles (mov [ecx+0x18], 0x200 in its constructor). Its three arrays
             // (0x60 bytes a triangle, a 0x10 header) are made in its init (CE 0xc87150), here from our memory and not
@@ -1302,7 +1302,7 @@ public:
             // outgrow 7000 (a trace: full half the time, 36000 taken in two minutes, props holding 4000), so trees and
             // cars away from the player flickered. Its nodes are linked by pointers only; the array is ours
             // (operator new at CE 0xa3218c, delete at CE 0xa341c8) so the game's heap doesn't pay for it
-            nMatrixPool = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralMatrixPool", 28000), 7000, 65536);
+            nMatrixPool = std::clamp(reader.ReadInteger("PROCEDURAL", "ProceduralMatrixPool", 28000), 7000, 65536);
             if (auto size = hook::pattern("68 58 1B 00 00 B9 ? ? ? ? C7 05"); !size.empty())
             {
                 auto alloc = hook::pattern("51 E8 ? ? ? ? 89 83 E0 01 00 00");
@@ -1329,7 +1329,7 @@ public:
             // models for a frame or more. More of them, from our memory. The game frees the array in the session's
             // shutdown (CE 0xaf4b80 from 0xb1e970, on exit too); left to the game's free, our block stopped the game
             // there or broke its heap, so that free is ours as well
-            nDrawableRefs = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralDrawableRefs", 40000), 13000, 200000);
+            nDrawableRefs = std::clamp(reader.ReadInteger("PROCEDURAL", "ProceduralDrawableRefs", 40000), 13000, 200000);
             if (auto size = hook::pattern("68 ? ? ? ? E8 ? FF FF FF C3"); !size.empty())
             {
                 auto init = injector::GetBranchDestination(size.get_first(5)).as_int();
@@ -1361,7 +1361,7 @@ public:
             // 8192 (cmp ecx, 0x10000 at CE 0xae927b and 0xae941b), and whatever the scans meet after that is not drawn
             // that frame: looking at a whole district at x3 that was cars, trees and the player, a different set each
             // frame. Ours holds ProceduralRenderCache entries, and the scans stop at three quarters of it
-            nRenderCache = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralRenderCache", 32768), 9692, 1 << 20);
+            nRenderCache = std::clamp(reader.ReadInteger("PROCEDURAL", "ProceduralRenderCache", 32768), 9692, 1 << 20);
             if (auto scans = hook::pattern("E8 ? ? ? ? 8B 0D ? ? ? ? 2B C8 83 E1 F8 81 F9 00 00 01 00"); scans.size() == 2)
             {
                 auto start = (uint8_t*)injector::GetBranchDestination(scans.get_first(0)).as_int();
@@ -1397,7 +1397,7 @@ public:
                 pBuildingPool = *pool.get_first<uint8_t**>(2);
                 pBuildingReserve = pool.get_first<uint32_t>(12);
             }
-            ReadLiveSettings(iniReader);
+            ReadLiveSettings(reader);
             IniReload::Add(ReadLiveSettings);
 
             // With the trace on, the game out of drawable references: mov ecx, 0x1173750; call CE 0xa8a990 in CE 0xaf4710

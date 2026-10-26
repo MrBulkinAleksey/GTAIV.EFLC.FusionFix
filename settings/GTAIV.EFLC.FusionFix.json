@@ -1,0 +1,3170 @@
+{
+  "format": "asi-settings",
+  "version": "1.0",
+  "plugin": {
+    "id": "GTAIV.EFLC.FusionFix",
+    "name": "@plugin.name",
+    "priority": 100,
+    "games": [ { "name": "Grand Theft Auto IV", "exe": [ "GTAIV.exe", "EFLC.exe" ], "launcher": [ "PlayGTAIV.exe", "LaunchGTAIV.exe", "LaunchEFLC.exe" ] } ]
+  },
+  "pages": [
+    { "id": "game", "title": "@page.game", "section": "gameplay" },
+    { "id": "display", "title": "@page.display", "section": "display" },
+    { "id": "hdr", "title": "@page.hdr", "section": "display" },
+    { "id": "graphics", "title": "@page.graphics", "section": "graphics" },
+    { "id": "lighting", "title": "@FF_LIGHTING", "section": "graphics" },
+    { "id": "textures", "title": "@FF_TEXTURES", "section": "graphics" },
+    { "id": "controls", "title": "@page.controls", "section": "controls" },
+    { "id": "gamepad", "title": "@page.gamepad", "section": "gamepad" },
+    { "id": "audio", "title": "@page.audio", "section": "audio" },
+    { "id": "advanced", "title": "@page.advanced", "section": "advanced" },
+    { "id": "debug", "title": "@FF_DEBUG", "section": "advanced" },
+    { "id": "compatibility", "title": "@page.compatibility", "section": "compatibility" }
+  ],
+  "settings": [
+    {
+      "id": "MAIN.SkipIntro", "type": "bool", "default": 1,
+      "label": "@Skip Intro", "description": "@MAIN.SkipIntro.description",
+      "page": "game", "group": "@group.startup", "control": [ "switch", "cycler" ], "apply": "restart",
+      "presets": { "vanilla": 0, "recommended": 1, "enhanced": 1 }
+    },
+    {
+      "id": "MAIN.SkipMenu", "type": "bool", "default": 1,
+      "label": "@Skip Menu", "description": "@MAIN.SkipMenu.description",
+      "page": "game", "group": "@group.startup", "control": [ "switch", "cycler" ], "apply": "restart",
+      "presets": { "vanilla": 0, "recommended": 1, "enhanced": 1 }
+    },
+    {
+      "id": "MISC.CutsceneBorders", "type": "choice", "default": 3,
+      "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "@borders.letterbox" }, { "value": 2, "label": "@borders.pillarbox" }, { "value": 3, "label": "@borders.both" } ],
+      "label": "@CutsceneBorders", "description": "@MISC.CutsceneBorders.description",
+      "page": "game", "group": "@group.interface", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "MISC.TransparentMapMenu", "type": "bool", "default": 0,
+      "label": "@TranspMapMenu", "description": "@MISC.TransparentMapMenu.description",
+      "page": "game", "group": "@group.interface", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "FRAMELIMIT.DisplayFpsCounter", "type": "bool", "default": 0,
+      "label": "@FPS Counter", "description": "@FRAMELIMIT.DisplayFpsCounter.description",
+      "page": "game", "group": "@group.interface", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MAIN.WindowMode", "type": "choice", "default": 0,
+      "choices": [ { "value": 0, "label": "@window.fullscreen" }, { "value": 1, "label": "@window.windowed" }, { "value": 2, "label": "@window.borderless" } ],
+      "label": "@WindowMode", "description": "@MAIN.WindowMode.description",
+      "page": "game", "group": "@group.window", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "MAIN.BlockOnLostFocus", "type": "bool", "default": 0,
+      "label": "@Focus Loss", "description": "@MAIN.BlockOnLostFocus.description",
+      "page": "game", "group": "@group.window", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.LightSyncRGB", "type": "bool", "default": 0,
+      "label": "@LightSyncRGB", "description": "@MISC.LightSyncRGB.description",
+      "page": "game", "group": "@group.extras", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.TimedEvents", "type": "bool", "default": 1,
+      "label": "@Timed Events", "description": "@MISC.TimedEvents.description",
+      "page": "game", "group": "@group.extras", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "UPDATE.CheckForUpdates", "type": "bool", "default": 0,
+      "label": "@Check Updates", "description": "@UPDATE.CheckForUpdates.description",
+      "page": "game", "group": "@group.updates", "control": [ "switch", "cycler" ], "visibility": "file"
+    },
+    {
+      "id": "LANGUAGEOVERRIDE.Language", "type": "choice", "default": -1,
+      "choices": [ { "value": -1, "label": "@lang.auto" }, { "value": 0, "label": "English" }, { "value": 1, "label": "Français" }, { "value": 2, "label": "Deutsch" }, { "value": 3, "label": "Italiano" }, { "value": 4, "label": "Español" }, { "value": 5, "label": "Русский" }, { "value": 6, "label": "日本語" } ],
+      "label": "@LANGUAGEOVERRIDE.Language", "description": "@LANGUAGEOVERRIDE.Language.description",
+      "page": "compatibility", "group": "@group.language", "control": [ "cycler", "dropdown" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.FieldOfView", "type": "int", "default": 0, "min": 0, "max": 9, "step": 1,
+      "label": "@MO_FOV", "description": "@MISC.FieldOfView.description",
+      "page": "display", "control": [ "slider" ]
+    },
+    {
+      "id": "MAIN.Definition", "type": "bool", "default": 1,
+      "label": "@MO_DOF", "description": "@MAIN.Definition.description",
+      "page": "display", "group": "@group.image", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.ConsoleGamma", "type": "choice", "default": 1,
+      "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "Xbox 360" }, { "value": 2, "label": "PlayStation 3" } ],
+      "label": "@Console Gamma", "description": "@MISC.ConsoleGamma.description",
+      "page": "display", "group": "@group.image", "control": [ "cycler", "dropdown" ],
+      "presets": { "vanilla": 0, "recommended": 1, "enhanced": 1 }
+    },
+    {
+      "id": "MISC.ConsoleAutoExposure", "type": "bool", "default": 1,
+      "label": "@Auto Exposure", "description": "@MISC.ConsoleAutoExposure.description",
+      "page": "display", "group": "@group.image", "control": [ "switch", "cycler" ],
+      "presets": { "vanilla": 0, "recommended": 1, "enhanced": 1 }
+    },
+    {
+      "id": "MAIN.MotionBlur", "type": "choice", "default": 2,
+      "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "@MO_LOW" }, { "value": 2, "label": "@MO_MED" }, { "value": 3, "label": "@MO_HIGH" }, { "value": 4, "label": "@MO_VHIGH" } ],
+      "label": "@Motion Blur", "description": "@MAIN.MotionBlur.description",
+      "page": "display", "group": "@group.image", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "MISC.DepthOfField", "type": "choice", "default": 1,
+      "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "Cutscenes Only" }, { "value": 2, "label": "@MO_LOW" }, { "value": 3, "label": "@MO_MED" }, { "value": 4, "label": "@MO_HIGH" }, { "value": 5, "label": "@MO_VHIGH" } ],
+      "label": "@Depth of Field", "description": "@MISC.DepthOfField.description",
+      "page": "display", "group": "@group.image", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "MISC.TreeLighting", "type": "choice", "default": 1,
+      "choices": [ { "value": 0, "label": "PC" }, { "value": 1, "label": "PC+" }, { "value": 2, "label": "Console" } ],
+      "label": "@TreeFX", "description": "@MISC.TreeLighting.description",
+      "page": "display", "group": "@group.image", "control": [ "cycler", "dropdown" ],
+      "presets": { "vanilla": 0, "recommended": 1, "enhanced": 1 }
+    },
+    {
+      "id": "MISC.TreeAlpha", "type": "choice", "default": 0,
+      "choices": [ { "value": 0, "label": "PC" }, { "value": 1, "label": "PC+" }, { "value": 2, "label": "Console" } ],
+      "label": "@Tree Alpha", "description": "@MISC.TreeAlpha.description",
+      "page": "display", "group": "@group.image", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "MAIN.Bloom", "type": "bool", "default": 1,
+      "label": "@Bloom", "description": "@MAIN.Bloom.description",
+      "page": "display", "group": "@group.lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.ScreenFilter", "type": "choice", "default": 0,
+      "choices": [ { "value": 0, "label": "@MO_DEF" }, { "value": 1, "label": "@MO_OFF" }, { "value": 2, "label": "IV" }, { "value": 3, "label": "TLAD" }, { "value": 4, "label": "TBOGT" } ],
+      "label": "@Screen Filter", "description": "@MISC.ScreenFilter.description",
+      "page": "display", "group": "@group.lighting", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "HDR.HDR", "type": "bool", "default": 0,
+      "label": "@ff.hdr", "description": "@HDR.HDR.description",
+      "page": "hdr", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "HDR.PeakBrightnessNits", "type": "int", "default": 1000, "min": 50, "max": 4000, "step": 50, "unit": "nits",
+      "label": "@ff.peak", "description": "@HDR.PeakBrightnessNits.description",
+      "page": "hdr", "control": [ "slider" ], "visibleIf": { "setting": "HDR.HDR", "equals": 1 }
+    },
+    {
+      "id": "HDR.GameBrightnessNits", "type": "int", "default": 200, "min": 50, "max": 500, "step": 50, "unit": "nits",
+      "label": "@ff.paperwhite", "description": "@HDR.GameBrightnessNits.description",
+      "page": "hdr", "control": [ "slider" ], "visibleIf": { "setting": "HDR.HDR", "equals": 1 }
+    },
+    {
+      "id": "FRAMELIMIT.FpsLimitPreset", "type": "choice", "default": 0,
+      "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "Custom" }, { "value": 2, "label": "30" }, { "value": 3, "label": "40" }, { "value": 4, "label": "50" }, { "value": 5, "label": "60" }, { "value": 6, "label": "75" }, { "value": 7, "label": "100" }, { "value": 8, "label": "120" }, { "value": 9, "label": "144" }, { "value": 10, "label": "165" }, { "value": 11, "label": "200" }, { "value": 12, "label": "240" } ],
+      "label": "@FPS Limiter", "description": "@FRAMELIMIT.FpsLimitPreset.description",
+      "page": "graphics", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "MISC.Antialiasing", "type": "choice", "default": 2,
+      "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "FXAA" }, { "value": 2, "label": "SMAA" }, { "value": 3, "label": "TAA" }, { "value": 4, "label": "DLAA" }, { "value": 5, "label": "FSR" } ],
+      "label": "@Antialiasing", "description": "@MISC.Antialiasing.description",
+      "page": "graphics", "control": [ "cycler", "dropdown" ],
+      "presets": { "vanilla": 0, "recommended": 2, "enhanced": 3 }
+    },
+    {
+      "id": "FOG.VolumetricFog", "type": "bool", "default": 0,
+      "label": "@Volumetric Fog", "description": "@FOG.VolumetricFog.description",
+      "page": "graphics", "group": "@group.effects", "control": [ "switch", "cycler" ],
+      "presets": { "vanilla": 0, "recommended": 0, "enhanced": 1 }
+    },
+    {
+      "id": "MISC.SunShafts", "type": "bool", "default": 0,
+      "label": "@Sun Shafts", "description": "@MISC.SunShafts.description",
+      "page": "graphics", "group": "@group.effects", "control": [ "switch", "cycler" ],
+      "presets": { "vanilla": 0, "recommended": 0, "enhanced": 1 }
+    },
+    {
+      "id": "MISC.UnclampLighting", "type": "bool", "default": 0,
+      "label": "@UnclampLighting", "description": "@MISC.UnclampLighting.description",
+      "page": "graphics", "group": "@group.effects", "control": [ "switch", "cycler" ],
+      "presets": { "vanilla": 0, "recommended": 0, "enhanced": 1 }
+    },
+    {
+      "id": "MISC.ToneMapping", "type": "bool", "default": 0,
+      "label": "@Tone Mapping", "description": "@MISC.ToneMapping.description",
+      "page": "graphics", "group": "@group.effects", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.AmbientOcclusion", "type": "choice", "default": 0, "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "@SAO" }, { "value": 2, "label": "@GTAO" } ],
+      "label": "@AO", "description": "@MISC.AmbientOcclusion.description",
+      "page": "graphics", "group": "@group.effects", "control": [ "cycler", "dropdown" ],
+      "presets": { "vanilla": 0, "recommended": 0, "enhanced": 1 }
+    },
+    {
+      "id": "SHADOWS.ShadowFilter", "type": "choice", "default": 0,
+      "choices": [ { "value": 0, "label": "Sharp" }, { "value": 1, "label": "Soft" }, { "value": 2, "label": "CHSS" } ],
+      "label": "@Shadow Filter", "description": "@SHADOWS.ShadowFilter.description",
+      "page": "graphics", "group": "@group.effects", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "SHADOWS.ExtraNightShadows", "type": "choice", "default": 0,
+      "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "@Lampposts" }, { "value": 2, "label": "@LampostsHeadl" }, { "value": 3, "label": "@LampHeadlVNS" } ],
+      "label": "@ExtraNightShad", "description": "@SHADOWS.ExtraNightShadows.description",
+      "page": "graphics", "group": "@group.effects", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "MAIN.GraphicsAPI", "type": "choice", "default": 0,
+      "choices": [ { "value": 0, "label": "DirectX 9" }, { "value": 1, "label": "Vulkan" }, { "value": 2, "label": "DirectX 12" } ],
+      "label": "@Graphics API", "description": "@MAIN.GraphicsAPI.description",
+      "page": "graphics", "group": "@group.effects", "control": [ "cycler", "dropdown" ], "apply": "restart"
+    },
+    {
+      "id": "MISC.AlwaysRun", "type": "bool", "default": 0,
+      "label": "@Always Run", "description": "@MISC.AlwaysRun.description",
+      "page": "controls", "group": "@group.movement", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.ZoomedMovement", "type": "bool", "default": 1,
+      "label": "@Zoomed Movement", "description": "@MISC.ZoomedMovement.description",
+      "page": "controls", "group": "@group.movement", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.ExtendedSniperControls", "type": "bool", "default": 0,
+      "label": "@Extended Sniper", "description": "@MISC.ExtendedSniperControls.description",
+      "page": "controls", "group": "@group.movement", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MAIN.CameraShake", "type": "bool", "default": 1,
+      "label": "@Camera Shake", "description": "@MAIN.CameraShake.description",
+      "page": "controls", "group": "@group.camera", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.CenteredVehCam", "type": "bool", "default": 0,
+      "label": "@CenteredVehCam", "description": "@MISC.CenteredVehCam.description",
+      "page": "controls", "group": "@group.camera", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.CenteredFootCam", "type": "bool", "default": 0,
+      "label": "@CenteredFootCam", "description": "@MISC.CenteredFootCam.description",
+      "page": "controls", "group": "@group.camera", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.StuntJumpCamera", "type": "bool", "default": 1,
+      "label": "@Stunt Jump Cam", "description": "@MISC.StuntJumpCamera.description",
+      "page": "controls", "group": "@group.camera", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.ActionCamera", "type": "bool", "default": 1,
+      "label": "@Action Cam", "description": "@MISC.ActionCamera.description",
+      "page": "controls", "group": "@group.camera", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.TurnIndicators", "type": "bool", "default": 0,
+      "label": "@Turn Indicators", "description": "@MISC.TurnIndicators.description",
+      "page": "controls", "group": "@group.gameplay", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.AlwaysShowBulletTraces", "type": "bool", "default": 0,
+      "label": "@Bullet Traces", "description": "@MISC.AlwaysShowBulletTraces.description",
+      "page": "controls", "group": "@group.gameplay", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.DisableWardrobeTransition", "type": "bool", "default": 0,
+      "label": "@Wardrobe Fading", "description": "@MISC.DisableWardrobeTransition.description",
+      "page": "controls", "group": "@group.gameplay", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.InstantStopTaxi", "type": "bool", "default": 0,
+      "label": "@Stop Taxi", "description": "@MISC.InstantStopTaxi.description",
+      "page": "controls", "group": "@group.gameplay", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.AutoClimbLadders", "type": "bool", "default": 0,
+      "label": "@Ladders Climb", "description": "@MISC.AutoClimbLadders.description",
+      "page": "controls", "group": "@group.gameplay", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.MouseAimSensitivity", "type": "int", "default": 10, "min": 0, "max": 20, "step": 1,
+      "label": "@MouseAimSens", "description": "@MISC.MouseAimSensitivity.description",
+      "page": "controls", "group": "@group.keyboard", "control": [ "slider" ]
+    },
+    {
+      "id": "MISC.DelayBeforeCenteringCameraKB", "type": "int", "default": 4, "min": 0, "max": 9, "step": 1,
+      "label": "@CenterDelayFoot", "description": "@MISC.DelayBeforeCenteringCameraKB.description",
+      "page": "controls", "group": "@group.keyboard", "control": [ "slider" ]
+    },
+    {
+      "id": "MISC.DelayBeforeCenteringCameraKBInCar", "type": "int", "default": 0, "min": 0, "max": 9, "step": 1,
+      "label": "@CenterDelayVeh", "description": "@MISC.DelayBeforeCenteringCameraKBInCar.description",
+      "page": "controls", "group": "@group.keyboard", "control": [ "slider" ]
+    },
+    {
+      "id": "MISC.CameraTurnSpeedKBInCar", "type": "int", "default": 3, "min": 0, "max": 7, "step": 1,
+      "label": "@CamTurnSpeedVeh", "description": "@MISC.CameraTurnSpeedKBInCar.description",
+      "page": "controls", "group": "@group.keyboard", "control": [ "slider" ]
+    },
+    {
+      "id": "MISC.RawInput", "type": "bool", "default": 1,
+      "label": "@Raw Input", "description": "@MISC.RawInput.description",
+      "page": "controls", "group": "@group.keyboard", "control": [ "switch", "cycler" ],
+      "presets": { "vanilla": 0, "recommended": 1, "enhanced": 1 }
+    },
+    {
+      "id": "MAIN.ConfineCursor", "type": "bool", "default": 1,
+      "label": "@Confine Cursor", "description": "@MAIN.ConfineCursor.description",
+      "page": "controls", "group": "@group.keyboard", "control": [ "switch", "cycler" ],
+      "presets": { "vanilla": 1, "recommended": 1, "enhanced": 1 }
+    },
+    {
+      "id": "MISC.PadLookSensitivity", "type": "int", "default": 10, "min": 0, "max": 20, "step": 1,
+      "label": "@PadLookSens", "description": "@MISC.PadLookSensitivity.description",
+      "page": "gamepad", "control": [ "slider" ]
+    },
+    {
+      "id": "MISC.PadAimSensitivity", "type": "int", "default": 10, "min": 0, "max": 20, "step": 1,
+      "label": "@MO_SENS", "description": "@MISC.PadAimSensitivity.description",
+      "page": "gamepad", "control": [ "slider" ]
+    },
+    {
+      "id": "MISC.DelayBeforeCenteringCameraPad", "type": "int", "default": 0, "min": 0, "max": 9, "step": 1,
+      "label": "@CenterDelayFootPad", "description": "@MISC.DelayBeforeCenteringCameraPad.description",
+      "page": "gamepad", "group": "@group.camera", "control": [ "slider" ]
+    },
+    {
+      "id": "MISC.DelayBeforeCenteringCameraPadInCar", "type": "int", "default": 0, "min": 0, "max": 9, "step": 1,
+      "label": "@CenterDelayVehPad", "description": "@MISC.DelayBeforeCenteringCameraPadInCar.description",
+      "page": "gamepad", "group": "@group.camera", "control": [ "slider" ]
+    },
+    {
+      "id": "MISC.CameraTurnSpeedPadInCar", "type": "int", "default": 0, "min": 0, "max": 7, "step": 1,
+      "label": "@CamTurnSpeedVehPad", "description": "@MISC.CameraTurnSpeedPadInCar.description",
+      "page": "gamepad", "group": "@group.camera", "control": [ "slider" ]
+    },
+    {
+      "id": "MISC.Buttons", "type": "choice", "default": 1,
+      "choices": [ { "value": 0, "label": "Xbox 360" }, { "value": 1, "label": "Xbox One" }, { "value": 2, "label": "PlayStation 3" }, { "value": 3, "label": "PlayStation 4" }, { "value": 4, "label": "PlayStation 5" }, { "value": 5, "label": "Nintendo Switch" }, { "value": 6, "label": "Steam Deck" }, { "value": 7, "label": "@FE_STEAMPAD" } ],
+      "label": "@Gamepad Icons", "description": "@MISC.Buttons.description",
+      "page": "gamepad", "group": "@group.camera", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "MISC.AltDialogue", "type": "bool", "default": 0,
+      "label": "@Alt. Dialogues", "description": "@MISC.AltDialogue.description",
+      "page": "audio", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MAIN.OverlayHotkey", "type": "choice", "default": 121,
+      "choices": [ { "value": 112, "label": "Ctrl+F1" }, { "value": 113, "label": "Ctrl+F2" }, { "value": 114, "label": "Ctrl+F3" }, { "value": 115, "label": "Ctrl+F4" }, { "value": 116, "label": "Ctrl+F5" }, { "value": 117, "label": "Ctrl+F6" }, { "value": 118, "label": "Ctrl+F7" }, { "value": 119, "label": "Ctrl+F8" }, { "value": 120, "label": "Ctrl+F9" }, { "value": 121, "label": "Ctrl+F10" }, { "value": 122, "label": "Ctrl+F11" }, { "value": 123, "label": "Ctrl+F12" }, { "value": 45, "label": "Ctrl+Insert" }, { "value": 36, "label": "Ctrl+Home" }, { "value": 33, "label": "Ctrl+Page Up" }, { "value": 34, "label": "Ctrl+Page Down" }, { "value": 35, "label": "Ctrl+End" }, { "value": 46, "label": "Ctrl+Delete" }, { "value": 19, "label": "Ctrl+Pause" }, { "value": 145, "label": "Ctrl+Scroll Lock" }, { "value": 192, "label": "Ctrl+` (grave)" } ],
+      "label": "Overlay hotkey", "description": "Opens the in-game settings overlay (Ctrl held with the key). Back + Start on a controller also opens it.",
+      "page": "advanced", "group": "@group.main", "control": [ "dropdown" ], "visibility": "editor"
+    },
+    {
+      "id": "MAIN.RecoilFix", "type": "bool", "default": 1,
+      "label": "@MAIN.RecoilFix", "description": "@MAIN.RecoilFix.description",
+      "page": "advanced", "group": "@group.main", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MAIN.AimingZoomFix", "type": "choice", "default": 1,
+      "choices": [ { "value": -1, "label": "TBoGT like IV and TLaD" }, { "value": 0, "label": "Off" }, { "value": 1, "label": "TBoGT like Xbox" }, { "value": 2, "label": "Xbox in all episodes" } ],
+      "label": "@MAIN.AimingZoomFix", "description": "@MAIN.AimingZoomFix.description",
+      "page": "advanced", "group": "@group.main", "control": [ "cycler", "dropdown" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "CAMERASENSITIVITY.MouseLookSensitivityRange", "type": "string", "default": "0.1, 2.0",
+      "label": "@CAMERASENSITIVITY.MouseLookSensitivityRange", "description": "@CAMERASENSITIVITY.MouseLookSensitivityRange.description",
+      "page": "advanced", "group": "@group.camera sensitivity", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "CAMERASENSITIVITY.GamepadLookSensitivityRange", "type": "string", "default": "0.1, 2.0",
+      "label": "@CAMERASENSITIVITY.GamepadLookSensitivityRange", "description": "@CAMERASENSITIVITY.GamepadLookSensitivityRange.description",
+      "page": "advanced", "group": "@group.camera sensitivity", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "CAMERASENSITIVITY.MouseAimSensitivityRange", "type": "string", "default": "0.1, 2.0",
+      "label": "@CAMERASENSITIVITY.MouseAimSensitivityRange", "description": "@CAMERASENSITIVITY.MouseAimSensitivityRange.description",
+      "page": "advanced", "group": "@group.camera sensitivity", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "CAMERASENSITIVITY.GamepadAimSensitivityRange", "type": "string", "default": "0.1, 2.0",
+      "label": "@CAMERASENSITIVITY.GamepadAimSensitivityRange", "description": "@CAMERASENSITIVITY.GamepadAimSensitivityRange.description",
+      "page": "advanced", "group": "@group.camera sensitivity", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SHADOWS.ExtraDynamicShadows", "type": "choice", "default": 2,
+      "choices": [ { "value": 0, "label": "Off" }, { "value": 1, "label": "Some vegetation" }, { "value": 2, "label": "Fences, grates, roads, walls and vegetation" } ],
+      "label": "@SHADOWS.ExtraDynamicShadows", "description": "@SHADOWS.ExtraDynamicShadows.description",
+      "page": "advanced", "group": "@group.shadows", "control": [ "cycler", "dropdown" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SHADOWS.CascadeBlendSize", "type": "float", "default": 0.1, "min": 0, "max": 1, "step": 0.05,
+      "label": "@SHADOWS.CascadeBlendSize", "description": "@SHADOWS.CascadeBlendSize.description",
+      "page": "advanced", "group": "@group.shadows", "control": [ "slider" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SHADOWS.HighResolutionShadows", "type": "bool", "default": 0,
+      "label": "@SHADOWS.HighResolutionShadows", "description": "@SHADOWS.HighResolutionShadows.description",
+      "page": "advanced", "group": "@group.shadows", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SHADOWS.ForceShadowFilter", "type": "choice", "default": 0,
+      "choices": [ { "value": 0, "label": "Tied to Definition" }, { "value": 1, "label": "Always low" }, { "value": 2, "label": "Always high" } ],
+      "label": "@SHADOWS.ForceShadowFilter", "description": "@SHADOWS.ForceShadowFilter.description",
+      "page": "advanced", "group": "@group.shadows", "control": [ "cycler", "dropdown" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SHADOWS.DynamicShadowsForTrees", "type": "bool", "default": 1,
+      "label": "@SHADOWS.DynamicShadowsForTrees",
+      "page": "advanced", "group": "@group.shadows", "control": [ "switch", "cycler" ], "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "FRAMELIMIT.FrameLimitType", "type": "choice", "default": 2,
+      "choices": [ { "value": 1, "label": "Realtime (thread lock)" }, { "value": 2, "label": "Accurate (sleep and yield)" } ],
+      "label": "@FRAMELIMIT.FrameLimitType", "description": "@FRAMELIMIT.FrameLimitType.description",
+      "page": "advanced", "group": "@group.frame limit", "control": [ "cycler", "dropdown" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "FRAMELIMIT.FpsLimit", "type": "int", "default": -2, "min": -60, "max": 1000, "step": 1,
+      "label": "@FRAMELIMIT.FpsLimit", "description": "@FRAMELIMIT.FpsLimit.description",
+      "page": "advanced", "group": "@group.frame limit", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "FRAMELIMIT.CutsceneFpsLimit", "type": "int", "default": 0, "min": 0, "max": 1000, "step": 1,
+      "label": "@FRAMELIMIT.CutsceneFpsLimit", "description": "@FRAMELIMIT.CutsceneFpsLimit.description",
+      "page": "advanced", "group": "@group.frame limit", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "FRAMELIMIT.UnlockFramerateDuringLoadscreens", "type": "bool", "default": 1,
+      "label": "@FRAMELIMIT.UnlockFramerateDuringLoadscreens", "description": "@FRAMELIMIT.UnlockFramerateDuringLoadscreens.description",
+      "page": "advanced", "group": "@group.frame limit", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "FRAMELIMIT.MinigamesFpsLimit", "type": "int", "default": 30, "min": 0, "max": 1000, "step": 1,
+      "label": "@FRAMELIMIT.MinigamesFpsLimit", "description": "@FRAMELIMIT.MinigamesFpsLimit.description",
+      "page": "advanced", "group": "@group.frame limit", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "FRAMELIMIT.MinigamesList", "type": "string", "default": "pool_game, air_hockey, arm_wrestling, tenpinbowl, drinking",
+      "label": "@FRAMELIMIT.MinigamesList", "description": "@FRAMELIMIT.MinigamesList.description",
+      "page": "advanced", "group": "@group.frame limit", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.DefaultCameraAngleInTLaD", "type": "bool", "default": 1,
+      "label": "@MISC.DefaultCameraAngleInTLaD", "description": "@MISC.DefaultCameraAngleInTLaD.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.PedDeathAnimFixFromTBoGT", "type": "bool", "default": 1,
+      "label": "@MISC.PedDeathAnimFixFromTBoGT", "description": "@MISC.PedDeathAnimFixFromTBoGT.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.DisableCameraCenteringInCover", "type": "bool", "default": 1,
+      "label": "@MISC.DisableCameraCenteringInCover", "description": "@MISC.DisableCameraCenteringInCover.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.ExtraInfo", "type": "bool", "default": 1,
+      "label": "@MISC.ExtraInfo", "description": "@MISC.ExtraInfo.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.OverrideTreeAlpha", "type": "float", "default": 0.0, "step": 0.125, "min": 0, "max": 255,
+      "label": "@MISC.OverrideTreeAlpha", "description": "@MISC.OverrideTreeAlpha.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "slider" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.ConsoleCarReflectionsAndDirt", "type": "bool", "default": 1,
+      "label": "@MISC.ConsoleCarReflectionsAndDirt", "description": "@MISC.ConsoleCarReflectionsAndDirt.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.BrakeLightsWhenStopped", "type": "bool", "default": 0,
+      "label": "@MISC.BrakeLightsWhenStopped", "description": "@MISC.BrakeLightsWhenStopped.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.FixHelicopterSearchlights", "type": "choice", "default": 1,
+      "choices": [ { "value": 0, "label": "Off (may flicker)" }, { "value": 1, "label": "One at a time (up to 10 s)" }, { "value": 2, "label": "All independently" } ],
+      "label": "@MISC.FixHelicopterSearchlights", "description": "@MISC.FixHelicopterSearchlights.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "cycler", "dropdown" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.AlwaysDisplayHealthOnReticle", "type": "bool", "default": 1,
+      "label": "@MISC.AlwaysDisplayHealthOnReticle", "description": "@MISC.AlwaysDisplayHealthOnReticle.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.SmoothShorelines", "type": "bool", "default": 1,
+      "label": "@MISC.SmoothShorelines", "description": "@MISC.SmoothShorelines.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.SmoothLightVolumes", "type": "bool", "default": 1,
+      "label": "@MISC.SmoothLightVolumes", "description": "@MISC.SmoothLightVolumes.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.NoBloomColorShift", "type": "bool", "default": 1,
+      "label": "@MISC.NoBloomColorShift", "description": "@MISC.NoBloomColorShift.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.MenuEnteringDelay", "type": "int", "default": 0, "step": 10, "min": 0, "max": 400, "unit": "ms",
+      "label": "@MISC.MenuEnteringDelay", "description": "@MISC.MenuEnteringDelay.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "slider" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.MenuExitingDelay", "type": "int", "default": 0, "step": 10, "min": 0, "max": 800, "unit": "ms",
+      "label": "@MISC.MenuExitingDelay", "description": "@MISC.MenuExitingDelay.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "slider" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.MenuAccessDelayOnStartup", "type": "int", "default": 0, "step": 50, "min": 0, "max": 3000, "unit": "ms",
+      "label": "@MISC.MenuAccessDelayOnStartup", "description": "@MISC.MenuAccessDelayOnStartup.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "slider" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.RadarZoomDelay", "type": "int", "default": 3000, "step": 100, "min": 0, "max": 60000, "unit": "ms",
+      "label": "@MISC.RadarZoomDelay", "description": "@MISC.RadarZoomDelay.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "slider" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.DeathMusic", "type": "bool", "default": 0,
+      "label": "@MISC.DeathMusic", "description": "@MISC.DeathMusic.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.AutoClimbLaddersRange", "type": "float", "default": 1.5, "step": 0.1, "min": 0, "max": 4,
+      "label": "@MISC.AutoClimbLaddersRange", "description": "@MISC.AutoClimbLaddersRange.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "slider" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.PlayerJumpRagdollControl", "type": "bool", "default": 0,
+      "label": "@MISC.PlayerJumpRagdollControl", "description": "@MISC.PlayerJumpRagdollControl.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.PlayerClimbRagdollControl", "type": "bool", "default": 0,
+      "label": "@MISC.PlayerClimbRagdollControl", "description": "@MISC.PlayerClimbRagdollControl.description",
+      "page": "advanced", "group": "@group.misc", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "MISC.SkipLoadingSpinner", "type": "bool", "default": 1,
+      "label": "@MISC.SkipLoadingSpinner",
+      "page": "advanced", "group": "@group.misc", "control": [ "switch", "cycler" ], "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "MISC.MaxPQValue", "type": "float", "default": 100.0, "min": 1, "max": 10000, "step": 1,
+      "label": "@MISC.MaxPQValue",
+      "page": "advanced", "group": "@group.misc", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "FOG.VolFogFarClip", "type": "float", "default": 4500.0, "min": 100, "max": 10000, "step": 100,
+      "label": "@FOG.VolFogFarClip", "description": "@FOG.VolFogFarClip.description",
+      "page": "advanced", "group": "@group.fog", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "FOG.ExtendedTimecycEditing", "type": "bool", "default": 0,
+      "label": "@FOG.ExtendedTimecycEditing", "description": "@FOG.ExtendedTimecycEditing.description",
+      "page": "advanced", "group": "@group.fog", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "BudgetedIV.VehicleBudget", "type": "int", "default": 0, "min": 0, "max": 2000000000, "step": 1000000,
+      "label": "@BudgetedIV.VehicleBudget", "description": "@BudgetedIV.VehicleBudget.description",
+      "page": "advanced", "group": "@group.budgeted iv", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "BudgetedIV.PedBudget", "type": "int", "default": 0, "min": 0, "max": 2000000000, "step": 1000000,
+      "label": "@BudgetedIV.PedBudget", "description": "@BudgetedIV.PedBudget.description",
+      "page": "advanced", "group": "@group.budgeted iv", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "BudgetedIV.ExtendedLimits", "type": "bool", "default": 1,
+      "label": "@BudgetedIV.ExtendedLimits", "description": "@BudgetedIV.ExtendedLimits.description",
+      "page": "advanced", "group": "@group.budgeted iv", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "BudgetedIV.LiveriesLimit", "type": "int", "default": 127, "step": 1, "min": 0, "max": 127,
+      "label": "@BudgetedIV.LiveriesLimit",
+      "page": "advanced", "group": "@group.budgeted iv", "control": [ "slider" ], "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "EPISODICCONTENT.EpisodicVehicles", "type": "bool", "default": 0,
+      "label": "@EPISODICCONTENT.EpisodicVehicles", "description": "@EPISODICCONTENT.EpisodicVehicles.description",
+      "page": "advanced", "group": "@group.episodic content", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "EPISODICCONTENT.EpisodicWeapons", "type": "bool", "default": 0,
+      "label": "@EPISODICCONTENT.EpisodicWeapons", "description": "@EPISODICCONTENT.EpisodicWeapons.description",
+      "page": "advanced", "group": "@group.episodic content", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "EPISODICCONTENT.ExplosiveAnnihilator", "type": "bool", "default": 0,
+      "label": "@EPISODICCONTENT.ExplosiveAnnihilator", "description": "@EPISODICCONTENT.ExplosiveAnnihilator.description",
+      "page": "advanced", "group": "@group.episodic content", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "EPISODICCONTENT.OtherEpisodicChecks", "type": "bool", "default": 0,
+      "label": "@EPISODICCONTENT.OtherEpisodicChecks", "description": "@EPISODICCONTENT.OtherEpisodicChecks.description",
+      "page": "advanced", "group": "@group.episodic content", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "EPISODICCONTENT.TBoGTHelicopterHeightLimit", "type": "bool", "default": 0,
+      "label": "@EPISODICCONTENT.TBoGTHelicopterHeightLimit", "description": "@EPISODICCONTENT.TBoGTHelicopterHeightLimit.description",
+      "page": "advanced", "group": "@group.episodic content", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "EPISODICCONTENT.TBoGTPoliceWeapons", "type": "bool", "default": 0,
+      "label": "@EPISODICCONTENT.TBoGTPoliceWeapons", "description": "@EPISODICCONTENT.TBoGTPoliceWeapons.description",
+      "page": "advanced", "group": "@group.episodic content", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "EPISODICCONTENT.RemoveSCOSignatureCheck", "type": "bool", "default": 0,
+      "label": "@EPISODICCONTENT.RemoveSCOSignatureCheck", "description": "@EPISODICCONTENT.RemoveSCOSignatureCheck.description",
+      "page": "advanced", "group": "@group.episodic content", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "EPISODICCONTENT.EpisodicDeathMusic", "type": "bool", "default": 0,
+      "label": "@EPISODICCONTENT.EpisodicDeathMusic", "description": "@EPISODICCONTENT.EpisodicDeathMusic.description",
+      "page": "advanced", "group": "@group.episodic content", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SUNSHAFTS.SunShaftsDensity", "type": "float", "default": 0.9, "min": 0, "max": 1, "step": 0.05,
+      "label": "@SUNSHAFTS.SunShaftsDensity", "description": "@SUNSHAFTS.SunShaftsDensity.description",
+      "page": "advanced", "group": "@group.sun shafts", "control": [ "slider" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SUNSHAFTS.SunShaftsDecay", "type": "float", "default": 0.95, "min": 0, "max": 1, "step": 0.05,
+      "label": "@SUNSHAFTS.SunShaftsDecay", "description": "@SUNSHAFTS.SunShaftsDecay.description",
+      "page": "advanced", "group": "@group.sun shafts", "control": [ "slider" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "POSTFX.EnablePreAlphaDepth", "type": "bool", "default": 1,
+      "label": "@POSTFX.EnablePreAlphaDepth", "description": "@POSTFX.EnablePreAlphaDepth.description",
+      "page": "advanced", "group": "@group.post processing", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionBlurPasses", "type": "int", "default": 1, "min": 0, "max": 8, "step": 1,
+      "label": "@POSTFX.AmbientOcclusionBlurPasses",
+      "page": "advanced", "group": "@group.post processing", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionSamples", "type": "int", "default": 9, "min": 1, "max": 32, "step": 1,
+      "label": "@POSTFX.AmbientOcclusionSamples",
+      "page": "advanced", "group": "@group.post processing", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionLogMaxOffset", "type": "int", "default": 3, "min": 0, "max": 8, "step": 1,
+      "label": "@POSTFX.AmbientOcclusionLogMaxOffset",
+      "page": "advanced", "group": "@group.post processing", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionMaxMipLevel", "type": "int", "default": 5, "min": 0, "max": 10, "step": 1,
+      "label": "@POSTFX.AmbientOcclusionMaxMipLevel",
+      "page": "advanced", "group": "@group.post processing", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionFarClip", "type": "float", "default": 150.0, "min": 10, "max": 1000, "step": 10,
+      "label": "@POSTFX.AmbientOcclusionFarClip",
+      "page": "advanced", "group": "@group.post processing", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionRadius", "type": "float", "default": 1.125, "min": 0.125, "max": 5, "step": 0.125,
+      "label": "@POSTFX.AmbientOcclusionRadius",
+      "page": "advanced", "group": "@group.post processing", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionBias", "type": "float", "default": 0.03, "min": 0, "max": 0.2, "step": 0.005,
+      "label": "@POSTFX.AmbientOcclusionBias",
+      "page": "advanced", "group": "@group.post processing", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionIntensity", "type": "float", "default": 0.4, "min": 0, "max": 2, "step": 0.05,
+      "label": "@POSTFX.AmbientOcclusionIntensity",
+      "page": "advanced", "group": "@group.post processing", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionBlurRadius", "type": "float", "default": 2.0, "min": 0, "max": 8, "step": 0.25,
+      "label": "@POSTFX.AmbientOcclusionBlurRadius",
+      "page": "advanced", "group": "@group.post processing", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SRF.EnablePostfx", "type": "int", "default": 1, "min": 0, "max": 1, "step": 1,
+      "label": "@SRF.EnablePostfx",
+      "page": "advanced", "group": "@group.post processing", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "SRF.StippleFilter", "type": "bool", "default": 1,
+      "label": "@SRF.StippleFilter",
+      "page": "advanced", "group": "@group.post processing", "control": [ "switch", "cycler" ], "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "HDR.RollOffStart", "type": "float", "default": 0.8, "min": 0, "max": 1, "step": 0.05,
+      "label": "@HDR.RollOffStart", "description": "@HDR.RollOffStart.description",
+      "page": "advanced", "group": "@group.hdr", "control": [ "slider" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SHADOWFILTERSHARP.ShadowSoftness", "type": "float", "default": 1.5, "min": 0, "max": 10, "step": 0.25,
+      "label": "@SHADOWFILTERSHARP.ShadowSoftness", "description": "@SHADOWFILTERSHARP.ShadowSoftness.description",
+      "page": "advanced", "group": "@group.shadow filters", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SHADOWFILTERSHARP.ShadowBias", "type": "float", "default": 5.0, "min": 0, "max": 20, "step": 0.5,
+      "label": "@SHADOWFILTERSHARP.ShadowBias", "description": "@SHADOWFILTERSHARP.ShadowBias.description",
+      "page": "advanced", "group": "@group.shadow filters", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SHADOWFILTERSOFT.ShadowSoftness", "type": "float", "default": 3.0, "min": 0, "max": 10, "step": 0.25,
+      "label": "@SHADOWFILTERSOFT.ShadowSoftness", "description": "@SHADOWFILTERSOFT.ShadowSoftness.description",
+      "page": "advanced", "group": "@group.shadow filters", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SHADOWFILTERSOFT.ShadowBias", "type": "float", "default": 8.0, "min": 0, "max": 20, "step": 0.5,
+      "label": "@SHADOWFILTERSOFT.ShadowBias", "description": "@SHADOWFILTERSOFT.ShadowBias.description",
+      "page": "advanced", "group": "@group.shadow filters", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SHADOWFILTERCHSS.ShadowSoftness", "type": "float", "default": 1.5, "min": 0, "max": 10, "step": 0.25,
+      "label": "@SHADOWFILTERCHSS.ShadowSoftness", "description": "@SHADOWFILTERCHSS.ShadowSoftness.description",
+      "page": "advanced", "group": "@group.shadow filters", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SHADOWFILTERCHSS.ShadowBias", "type": "float", "default": 5.0, "min": 0, "max": 20, "step": 0.5,
+      "label": "@SHADOWFILTERCHSS.ShadowBias", "description": "@SHADOWFILTERCHSS.ShadowBias.description",
+      "page": "advanced", "group": "@group.shadow filters", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "SHADOWFILTERCHSS.MaxSoftness", "type": "float", "default": 20.0, "min": 1, "max": 64, "step": 1,
+      "label": "@SHADOWFILTERCHSS.MaxSoftness", "description": "@SHADOWFILTERCHSS.MaxSoftness.description",
+      "page": "advanced", "group": "@group.shadow filters", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "TURNINDICATORS.ManualTurnIndicators", "type": "bool", "default": 0,
+      "label": "@TURNINDICATORS.ManualTurnIndicators", "description": "@TURNINDICATORS.ManualTurnIndicators.description",
+      "page": "advanced", "group": "@group.turn indicators", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "TURNINDICATORS.LeftIndicatorKey", "type": "key", "default": "0xDB",
+      "label": "@TURNINDICATORS.LeftIndicatorKey", "description": "@TURNINDICATORS.LeftIndicatorKey.description",
+      "page": "advanced", "group": "@group.turn indicators", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "TURNINDICATORS.RightIndicatorKey", "type": "key", "default": "0xDD",
+      "label": "@TURNINDICATORS.RightIndicatorKey", "description": "@TURNINDICATORS.RightIndicatorKey.description",
+      "page": "advanced", "group": "@group.turn indicators", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "EXPERIMENTAL.DisplayMemoryStats", "type": "bool", "default": 0,
+      "label": "@EXPERIMENTAL.DisplayMemoryStats", "description": "@EXPERIMENTAL.DisplayMemoryStats.description",
+      "page": "advanced", "group": "@group.experimental", "control": [ "switch", "cycler" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "EXPERIMENTAL.ReflectionMSAAQuality", "type": "choice", "default": 0,
+      "choices": [ { "value": 0, "label": "Off" }, { "value": 2, "label": "2x" }, { "value": 4, "label": "4x" }, { "value": 8, "label": "8x" } ],
+      "label": "@EXPERIMENTAL.ReflectionMSAAQuality", "description": "@EXPERIMENTAL.ReflectionMSAAQuality.description",
+      "page": "advanced", "group": "@group.experimental", "control": [ "cycler", "dropdown" ], "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "EXPERIMENTAL.EnableHighDetailReflections", "type": "bool", "default": 0,
+      "label": "@EXPERIMENTAL.EnableHighDetailReflections",
+      "page": "advanced", "group": "@group.experimental", "control": [ "switch", "cycler" ], "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "EXPERIMENTAL.RemoveBBoxCulling", "type": "bool", "default": 0,
+      "label": "@EXPERIMENTAL.RemoveBBoxCulling",
+      "page": "advanced", "group": "@group.experimental", "control": [ "switch", "cycler" ], "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "EXPERIMENTAL.ExtraStreamingMemory", "type": "bool", "default": 0,
+      "label": "@EXPERIMENTAL.ExtraStreamingMemory",
+      "page": "advanced", "group": "@group.experimental", "control": [ "switch", "cycler" ], "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "CHEATS.SnowCheat", "type": "bool", "default": 0,
+      "label": "@CHEATS.SnowCheat",
+      "page": "advanced", "group": "@group.cheats", "control": [ "switch", "cycler" ], "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "CHEATS.HalloweenCheat", "type": "bool", "default": 0,
+      "label": "@CHEATS.HalloweenCheat",
+      "page": "advanced", "group": "@group.cheats", "control": [ "switch", "cycler" ], "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "FILELOADER.LoadIMG", "type": "bool", "default": 0,
+      "label": "@FILELOADER.LoadIMG",
+      "page": "advanced", "group": "@group.file loader", "control": [ "switch", "cycler" ], "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "FILELOADER.LoadRPF", "type": "bool", "default": 0,
+      "label": "@FILELOADER.LoadRPF",
+      "page": "advanced", "group": "@group.file loader", "control": [ "switch", "cycler" ], "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "USERPROFILE.CustomUserProfilePath", "type": "path", "default": "",
+      "label": "@USERPROFILE.CustomUserProfilePath", "description": "@USERPROFILE.CustomUserProfilePath.description",
+      "page": "compatibility", "group": "@group.user profile", "visibility": "editor", "apply": "restart"
+    },
+    {
+      "id": "REFLECTIONS.SSR", "type": "choice", "default": 0, "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "@SSRHalf" }, { "value": 2, "label": "@SSRFull" } ],
+      "label": "@SSR",
+      "page": "lighting", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "DEBUG.SSRDebug", "type": "choice", "default": 0, "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "@SSRDbgColour" }, { "value": 2, "label": "@SSRDbgHits" }, { "value": 3, "label": "@SSRDbgNormals" }, { "value": 4, "label": "@SSRDbgHorizon" }, { "value": 5, "label": "@SSRDbgSpecular" }, { "value": 6, "label": "@SSRDbgGlass" }, { "value": 7, "label": "@SSRDbgContact" }, { "value": 8, "label": "@SSRDbgGI" }, { "value": 9, "label": "@SSRDbgSkin" }, { "value": 10, "label": "@SSRDbgGIHistory" } ],
+      "label": "@SSR Debug", "description": "@DEBUG.SSRDebug.description",
+      "page": "debug", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "DEBUG.GroundSurfacesDebug", "type": "bool", "default": 0,
+      "label": "@GroundDebug", "description": "@DEBUG.GroundSurfacesDebug.description",
+      "page": "debug", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "DEBUG.WetGroundDebug", "type": "choice", "default": 0, "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "@WetDbgMaterial" }, { "value": 2, "label": "@WetDbgWetness" } ],
+      "label": "@WetGroundDebug", "description": "@DEBUG.WetGroundDebug.description",
+      "page": "debug", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "DEBUG.CloudShadowsDebug", "type": "choice", "default": 0, "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "@CloudShDbgAll" }, { "value": 2, "label": "@CloudShDbgNoise" } ],
+      "label": "@CloudShDebug", "description": "@DEBUG.CloudShadowsDebug.description",
+      "page": "debug", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "DEBUG.VolumetricCloudsDebug", "type": "choice", "default": 0, "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "@CloudDbgSky" }, { "value": 2, "label": "@CloudDbgBase" }, { "value": 3, "label": "@CloudDbgSilver" }, { "value": 4, "label": "@CloudDbgSunset" }, { "value": 5, "label": "@CloudDbgGlow" }, { "value": 6, "label": "@CloudDbgPower" }, { "value": 7, "label": "@CloudDbgTops" }, { "value": 8, "label": "@CloudDbgRim" }, { "value": 9, "label": "@CloudDbgHaze" }, { "value": 10, "label": "@CloudDbgSun" }, { "value": 11, "label": "@CloudDbgMarch" }, { "value": 12, "label": "@CloudDbgExtinct" }, { "value": 13, "label": "@CloudDbgAbsorb" }, { "value": 14, "label": "@CloudDbgOverhd" } ],
+      "label": "@CloudsDebug", "description": "@DEBUG.VolumetricCloudsDebug.description",
+      "page": "debug", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "DEBUG.SSRMarchFullDepth", "type": "bool", "default": 0,
+      "label": "@SSRFullDepth", "description": "@DEBUG.SSRMarchFullDepth.description",
+      "page": "debug", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "DEBUG.AerialPerspectiveDebug", "type": "bool", "default": 0,
+      "label": "@AerialDebug", "description": "@DEBUG.AerialPerspectiveDebug.description",
+      "page": "debug", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "DEBUG.FrameGenerationDebugView", "type": "choice", "default": 0, "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "@FGDbgMarker" }, { "value": 2, "label": "@FGDbgGenerated" }, { "value": 3, "label": "@FGDbgBoth" } ],
+      "label": "@FGDebug", "description": "@DEBUG.FrameGenerationDebugView.description",
+      "page": "debug", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "LIGHTING.VolumetricLight", "type": "bool", "default": 1,
+      "label": "@VolumetricLight",
+      "page": "lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "LIGHTING.ContactShadows", "type": "bool", "default": 1,
+      "label": "@Contact Shadows",
+      "page": "lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "LIGHTING.IndirectLight", "type": "bool", "default": 1,
+      "label": "@SSGI",
+      "page": "lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "LIGHTING.SkinScattering", "type": "bool", "default": 1,
+      "label": "@SkinSSS",
+      "page": "lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "NIGHTSHADOWS.HeadlightReach", "type": "int", "default": 10, "min": 0, "max": 100, "step": 1,
+      "label": "@FF_HREACH",
+      "page": "lighting", "control": [ "slider" ]
+    },
+    {
+      "id": "NIGHTSHADOWS.LampReach", "type": "int", "default": 10, "min": 0, "max": 100, "step": 1,
+      "label": "@FF_LREACH",
+      "page": "lighting", "control": [ "slider" ]
+    },
+    {
+      "id": "TEXTURES.Sharpening", "type": "choice", "default": 0, "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "@MO_LOW" }, { "value": 2, "label": "@MO_MED" }, { "value": 3, "label": "@MO_HIGH" } ],
+      "label": "@Sharpening",
+      "page": "textures", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "TEXTURES.TextureLodBias", "type": "choice", "default": 0, "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "@LodBias1" }, { "value": 2, "label": "@LodBias2" }, { "value": 3, "label": "@LodBias3" }, { "value": 4, "label": "@LodBias4" } ],
+      "label": "@TexLodBias",
+      "page": "textures", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "TEXTURES.AnisotropicAllMaps", "type": "bool", "default": 0,
+      "label": "@AnisoAllMaps",
+      "page": "textures", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "TEXTURES.DetailTextures", "type": "bool", "default": 0,
+      "label": "@DetailTex",
+      "page": "textures", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "TEXTURES.BicubicFiltering", "type": "bool", "default": 0,
+      "label": "@BicubicTex",
+      "page": "textures", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "TEXTURES.SpecularAntiAliasing", "type": "bool", "default": 0,
+      "label": "@SpecularAA",
+      "page": "textures", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "ANTIALIASING.UpscalerQuality", "type": "choice", "default": 0, "choices": [ { "value": 0, "label": "@UpscNative" }, { "value": 1, "label": "@UpscQuality" }, { "value": 2, "label": "@UpscBalanced" }, { "value": 3, "label": "@UpscPerf" }, { "value": 4, "label": "@UpscUltraPerf" } ],
+      "label": "@UpscalerQuality",
+      "page": "graphics", "control": [ "cycler", "dropdown" ], "visibleIf": { "setting": "MISC.Antialiasing", "in": [ 4, 5 ] }
+    },
+    {
+      "id": "ANTIALIASING.FrameGeneration", "type": "bool", "default": 0,
+      "label": "@FrameGeneration",
+      "page": "graphics", "control": [ "switch", "cycler" ], "visibleIf": { "setting": "MISC.Antialiasing", "in": [ 4, 5 ] }
+    },
+    {
+      "id": "WEATHER.VolumetricClouds", "type": "bool", "default": 1,
+      "label": "@VolumeClouds",
+      "page": "lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "LIGHTING.GGX", "type": "bool", "default": 1,
+      "label": "@GGXLighting",
+      "page": "lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "WEATHER.WetWeather", "type": "bool", "default": 1,
+      "label": "@WetWeather",
+      "page": "lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "TEXTURES.GroundSurfaces", "type": "bool", "default": 1,
+      "label": "@GroundSurf",
+      "page": "textures", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "PROCEDURAL.ProceduralDistance", "type": "int", "default": 0, "min": 0, "max": 8, "step": 1,
+      "label": "@FF_PROCDIST",
+      "page": "advanced", "group": "@group.procedural", "control": [ "slider" ]
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadows", "type": "bool", "default": 1,
+      "label": "@VehBoxShadows",
+      "page": "lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "NIGHTSHADOWS.DualHeadlights", "type": "bool", "default": 0,
+      "label": "@NIGHTSHADOWS.DualHeadlights",
+      "page": "advanced", "group": "@group.night shadows", "control": [ "switch", "cycler" ], "visibility": "editor"
+    },
+    {
+      "id": "NIGHTSHADOWS.TailLightShadows", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.TailLightShadows",
+      "page": "advanced", "group": "@group.night shadows", "control": [ "switch", "cycler" ], "visibility": "editor"
+    },
+    {
+      "id": "NIGHTSHADOWS.WorldLightShadows", "type": "bool", "default": 1,
+      "label": "@WorldLightShad",
+      "page": "lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "NIGHTSHADOWS.BuildingShadows", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.BuildingShadows",
+      "page": "advanced", "group": "@group.night shadows", "control": [ "switch", "cycler" ], "visibility": "editor"
+    },
+    {
+      "id": "WEATHER.PbrSky", "type": "bool", "default": 1,
+      "label": "@PbrSky",
+      "page": "lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "WEATHER.AerialPerspective", "type": "choice", "default": 2, "choices": [ { "value": 0, "label": "@MO_OFF" }, { "value": 1, "label": "@MO_LOW" }, { "value": 2, "label": "@MO_MED" }, { "value": 3, "label": "@MO_HIGH" } ],
+      "label": "@AerialPersp",
+      "page": "lighting", "control": [ "cycler", "dropdown" ]
+    },
+    {
+      "id": "TEXTURES.VehiclePaint", "type": "bool", "default": 1,
+      "label": "@VehiclePaint",
+      "page": "textures", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "WEATHER.CarRaindrops", "type": "bool", "default": 1,
+      "label": "@CarRaindrops",
+      "page": "lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "SUNSHAFTS.SunFlare", "type": "bool", "default": 0,
+      "label": "@SunFlare",
+      "page": "lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "PROCEDURAL.GpuGrass", "type": "bool", "default": 1,
+      "label": "@ImprovedGrass",
+      "page": "lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "DEBUG.GpuGrassDebug", "type": "bool", "default": 0,
+      "label": "@GpuGrassDebug",
+      "page": "debug", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "DEBUG.GrassWindDebug", "type": "bool", "default": 0,
+      "label": "@GrassWindDebug", "description": "@DEBUG.GrassWindDebug.description",
+      "page": "debug", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.CarMirrors", "type": "bool", "default": 1,
+      "label": "@CarMirrors",
+      "page": "lighting", "control": [ "switch", "cycler" ]
+    },
+    {
+      "id": "MISC.CarMirrorsReverse", "type": "bool", "default": 0,
+      "label": "@MISC.CarMirrorsReverse",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsRounded", "type": "bool", "default": 1,
+      "label": "@MISC.CarMirrorsRounded",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsByDrawnCar", "type": "bool", "default": 1,
+      "label": "@MISC.CarMirrorsByDrawnCar",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsZoomOut", "type": "float", "default": 1.5, "min": 1.0, "max": 2.5,
+      "label": "@MISC.CarMirrorsZoomOut",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsWater", "type": "bool", "default": 1,
+      "label": "@MISC.CarMirrorsWater",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsFarModels", "type": "bool", "default": 1,
+      "label": "@MISC.CarMirrorsFarModels",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsWaterReflection", "type": "bool", "default": 1,
+      "label": "@MISC.CarMirrorsWaterReflection",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsReflectionShaders", "type": "bool", "default": 1,
+      "label": "@MISC.CarMirrorsReflectionShaders",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsExtraBuckets", "type": "bool", "default": 1,
+      "label": "@MISC.CarMirrorsExtraBuckets",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsLampCoronas", "type": "bool", "default": 1,
+      "label": "@MISC.CarMirrorsLampCoronas",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsEntityStates", "type": "bool", "default": 1,
+      "label": "@MISC.CarMirrorsEntityStates",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsLog", "type": "bool", "default": 0,
+      "label": "@MISC.CarMirrorsLog",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsSideAimX", "type": "float", "default": 0.0, "min": -30.0, "max": 30.0,
+      "label": "@MISC.CarMirrorsSideAimX",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsSideAimY", "type": "float", "default": -1.5, "min": -30.0, "max": 30.0,
+      "label": "@MISC.CarMirrorsSideAimY",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsInteriorAimX", "type": "float", "default": 0.0, "min": -30.0, "max": 30.0,
+      "label": "@MISC.CarMirrorsInteriorAimX",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.CarMirrorsInteriorAimY", "type": "float", "default": -3.0, "min": -30.0, "max": 30.0,
+      "label": "@MISC.CarMirrorsInteriorAimY",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.MyFeature", "type": "bool", "default": 1,
+      "label": "@MISC.MyFeature",
+      "page": "advanced", "group": "@group.misc", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PROJECT2DFX.CoronaRenderer", "type": "int", "default": 1, "min": 0, "max": 2,
+      "label": "@PROJECT2DFX.CoronaRenderer", "description": "@PROJECT2DFX.CoronaRenderer.description",
+      "page": "advanced", "group": "@group.project2 dfx", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "DEBUG.DebugServerPort", "type": "int", "default": 0,
+      "label": "@DEBUG.DebugServerPort", "description": "@DEBUG.DebugServerPort.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "DEBUG.DebugServerAllowWrite", "type": "bool", "default": 0,
+      "label": "@DEBUG.DebugServerAllowWrite", "description": "@DEBUG.DebugServerAllowWrite.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "DEBUG.DeviceResetLog", "type": "bool", "default": 0,
+      "label": "@DEBUG.DeviceResetLog", "description": "@DEBUG.DeviceResetLog.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "DEBUG.EntityDrawLog", "type": "bool", "default": 0,
+      "label": "@DEBUG.EntityDrawLog", "description": "@DEBUG.EntityDrawLog.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.LampShadowFaceCulling", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.LampShadowFaceCulling", "description": "@PERFORMANCE.LampShadowFaceCulling.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.LampShadowRangeCulling", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.LampShadowRangeCulling", "description": "@PERFORMANCE.LampShadowRangeCulling.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.LampShadowSmallCull", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.LampShadowSmallCull", "description": "@PERFORMANCE.LampShadowSmallCull.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.LampShadowConeCulling", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.LampShadowConeCulling", "description": "@PERFORMANCE.LampShadowConeCulling.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.LampShadowViewCulling", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.LampShadowViewCulling", "description": "@PERFORMANCE.LampShadowViewCulling.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.SkipLeftOutDraws", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.SkipLeftOutDraws", "description": "@PERFORMANCE.SkipLeftOutDraws.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.FarPropInstancing", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.FarPropInstancing", "description": "@PERFORMANCE.FarPropInstancing.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.FarPropInstancingLog", "type": "bool", "default": 0,
+      "label": "@DEBUG.FarPropInstancingLog", "description": "@DEBUG.FarPropInstancingLog.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "MISC.FirstPersonOnFoot", "type": "bool", "default": 1,
+      "label": "@MISC.FirstPersonOnFoot", "description": "@MISC.FirstPersonOnFoot.description",
+      "page": "advanced", "group": "@group.misc", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "MISC.FirstPersonInVehicle", "type": "bool", "default": 1,
+      "label": "@MISC.FirstPersonInVehicle", "description": "@MISC.FirstPersonInVehicle.description",
+      "page": "advanced", "group": "@group.misc", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "MISC.FirstPersonForward", "type": "float", "default": 0.1, "min": -0.5, "max": 0.5,
+      "label": "@MISC.FirstPersonForward",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.FirstPersonUp", "type": "float", "default": 0.05, "min": -0.5, "max": 0.5,
+      "label": "@MISC.FirstPersonUp",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.FirstPersonEyeReach", "type": "float", "default": 0.1, "min": 0.0, "max": 0.5,
+      "label": "@MISC.FirstPersonEyeReach",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.FirstPersonEyeReachRunning", "type": "float", "default": 0.35, "min": 0.0, "max": 0.6,
+      "label": "@MISC.FirstPersonEyeReachRunning",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.FirstPersonReachSlowSpeed", "type": "float", "default": 0.2, "min": 0.0, "max": 10.0,
+      "label": "@MISC.FirstPersonReachSlowSpeed",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.FirstPersonReachFastSpeed", "type": "float", "default": 1.5, "min": 0.0, "max": 10.0,
+      "label": "@MISC.FirstPersonReachFastSpeed",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.FirstPersonReachByMotion", "type": "bool", "default": 1,
+      "label": "@MISC.FirstPersonReachByMotion",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "MISC.FirstPersonNearClip", "type": "float", "default": 0.05, "min": 0.01, "max": 0.3,
+      "label": "@MISC.FirstPersonNearClip",
+      "page": "advanced", "group": "@group.misc", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.UnpinMainThread", "type": "int", "default": 1,
+      "label": "@PERFORMANCE.UnpinMainThread", "description": "@PERFORMANCE.UnpinMainThread.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "DEBUG.FrameCaptureKeyOptions", "type": "string", "default": "kinds=peds draw_pictures=24 constants=8 raw=gbuffer_0 raw_ps=8",
+      "label": "@DEBUG.FrameCaptureKeyOptions",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.FrameCapture", "type": "int", "default": 0,
+      "label": "@DEBUG.FrameCapture",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.FrameCaptureOptions", "type": "string", "default": "",
+      "label": "@DEBUG.FrameCaptureOptions",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.FrameGenerationDelay", "type": "float", "default": 0.5, "min": 0.0, "max": 1.0,
+      "label": "@ANTIALIASING.FrameGenerationDelay",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.UpscalerTimingLog", "type": "bool", "default": 0,
+      "label": "@DEBUG.UpscalerTimingLog", "description": "@DEBUG.UpscalerTimingLog.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.FrameGenerationDebug", "type": "int", "default": 0,
+      "label": "@DEBUG.FrameGenerationDebug", "description": "@DEBUG.FrameGenerationDebug.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.FrameGenerationPacing", "type": "int", "default": 2, "min": 0, "max": 2,
+      "label": "@ANTIALIASING.FrameGenerationPacing", "description": "@ANTIALIASING.FrameGenerationPacing.description",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.FrameGenerationDeferred", "type": "bool", "default": 1,
+      "label": "@ANTIALIASING.FrameGenerationDeferred", "description": "@ANTIALIASING.FrameGenerationDeferred.description",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.FrameGenerationAsyncCompute", "type": "bool", "default": 1,
+      "label": "@ANTIALIASING.FrameGenerationAsyncCompute", "description": "@ANTIALIASING.FrameGenerationAsyncCompute.description",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.FrameGenerationShowGeneratedAt", "type": "float", "default": 0.2, "min": 0.0, "max": 0.9,
+      "label": "@ANTIALIASING.FrameGenerationShowGeneratedAt",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.HelperPresent", "type": "int", "default": 1, "min": 0, "max": 2,
+      "label": "@ANTIALIASING.HelperPresent", "description": "@ANTIALIASING.HelperPresent.description",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.CameraCutDistance", "type": "float", "default": 25.0,
+      "label": "@ANTIALIASING.CameraCutDistance",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "FRAMELIMIT.MaxFrameLatency", "type": "int", "default": 0,
+      "label": "@FRAMELIMIT.MaxFrameLatency",
+      "page": "advanced", "group": "@group.frame limit", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PROCEDURAL.GpuGrassRange", "type": "float", "default": 100.0, "min": 5.0, "max": 150.0,
+      "label": "@PROCEDURAL.GpuGrassRange",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GpuGrassFullRange", "type": "float", "default": 22.0,
+      "label": "@PROCEDURAL.GpuGrassFullRange",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GpuGrassHideProps", "type": "bool", "default": 1,
+      "label": "@PROCEDURAL.GpuGrassHideProps", "description": "@PROCEDURAL.GpuGrassHideProps.description",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GpuGrassDensity", "type": "float", "default": 1.0, "min": 0.1, "max": 1.0,
+      "label": "@PROCEDURAL.GpuGrassDensity",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GpuGrassGroundTint", "type": "float", "default": 0.5, "min": 0.0, "max": 1.0,
+      "label": "@PROCEDURAL.GpuGrassGroundTint",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.GpuGrassLog", "type": "bool", "default": 0,
+      "label": "@DEBUG.GpuGrassLog", "description": "@DEBUG.GpuGrassLog.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GrassWind", "type": "bool", "default": 1,
+      "label": "@PROCEDURAL.GrassWind", "description": "@PROCEDURAL.GrassWind.description",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GrassBending", "type": "bool", "default": 1,
+      "label": "@PROCEDURAL.GrassBending", "description": "@PROCEDURAL.GrassBending.description",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GrassTrample", "type": "bool", "default": 1,
+      "label": "@PROCEDURAL.GrassTrample", "description": "@PROCEDURAL.GrassTrample.description",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.BushShake", "type": "bool", "default": 1,
+      "label": "@PROCEDURAL.BushShake", "description": "@PROCEDURAL.BushShake.description",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GrassWindStrength", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0,
+      "label": "@PROCEDURAL.GrassWindStrength",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GrassTrampleSeconds", "type": "float", "default": 12.0, "min": 1.0, "max": 300.0,
+      "label": "@PROCEDURAL.GrassTrampleSeconds",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.GrassWindLog", "type": "bool", "default": 0,
+      "label": "@DEBUG.GrassWindLog", "description": "@DEBUG.GrassWindLog.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GrassWindModels", "type": "string", "default": "",
+      "label": "@PROCEDURAL.GrassWindModels",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.BushTextures", "type": "string", "default": "bush, hedge, shrub, leaf, leaves, foliage, ivy, plant, fern, flower, vine, creeper, conifer, grass, weed",
+      "label": "@PROCEDURAL.BushTextures",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.HiZOcclusion", "type": "int", "default": 1, "min": 0, "max": 2,
+      "label": "@PERFORMANCE.HiZOcclusion", "description": "@PERFORMANCE.HiZOcclusion.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.HiZOcclusionMaxMove", "type": "float", "default": 4.0, "min": 0.0, "max": 50.0,
+      "label": "@PERFORMANCE.HiZOcclusionMaxMove",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.HiZOcclusionFrames", "type": "int", "default": 2, "min": 1, "max": 60,
+      "label": "@PERFORMANCE.HiZOcclusionFrames",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.HiZOcclusionMinRadius", "type": "float", "default": 0.0, "min": 0.0, "max": 100.0,
+      "label": "@PERFORMANCE.HiZOcclusionMinRadius",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.LampShadowsOcclusion", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.LampShadowsOcclusion", "description": "@PERFORMANCE.LampShadowsOcclusion.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.HiZOccluderCategories", "type": "int", "default": 1,
+      "label": "@PERFORMANCE.HiZOccluderCategories",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.HiZOcclusionBoxes", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.HiZOcclusionBoxes", "description": "@PERFORMANCE.HiZOcclusionBoxes.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRMaxDistance", "type": "float", "default": 24.0,
+      "label": "@REFLECTIONS.SSRMaxDistance",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRThickness", "type": "float", "default": 0.3,
+      "label": "@REFLECTIONS.SSRThickness",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRWaterLevelOffset", "type": "float", "default": 0.0,
+      "label": "@REFLECTIONS.SSRWaterLevelOffset",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.VolumetricLightHeadlightAddFlags", "type": "int", "default": 0,
+      "label": "@LIGHTING.VolumetricLightHeadlightAddFlags",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsSizeFade", "type": "int", "default": 300, "min": 0, "max": 5000,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsSizeFade",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsFadeIn", "type": "int", "default": 300, "min": 0, "max": 5000,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsFadeIn",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsFadeOut", "type": "int", "default": 300, "min": 0, "max": 5000,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsFadeOut",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsSlotFade", "type": "int", "default": 600, "min": 0, "max": 5000,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsSlotFade",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsLength", "type": "float", "default": 1.0, "min": 0.3, "max": 1.2,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsLength",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsWidth", "type": "float", "default": 0.95, "min": 0.3, "max": 1.2,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsWidth",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsHeight", "type": "float", "default": 0.95, "min": 0.3, "max": 1.2,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsHeight",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.PostFxProfiler", "type": "bool", "default": 0,
+      "label": "@DEBUG.PostFxProfiler", "description": "@DEBUG.PostFxProfiler.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.WetGroundMaterials", "type": "int", "default": 1,
+      "label": "@WEATHER.WetGroundMaterials",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.VolumetricLightHeadlightFlag", "type": "int", "default": 256,
+      "label": "@LIGHTING.VolumetricLightHeadlightFlag",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "SRF.ScreenSpaceShadowsBlur", "type": "int", "default": 0,
+      "label": "@SRF.ScreenSpaceShadowsBlur",
+      "page": "advanced", "group": "@group.srf", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "SRF.NewShadowAtlas", "type": "bool", "default": 0,
+      "label": "@SRF.NewShadowAtlas",
+      "page": "advanced", "group": "@group.srf", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralInReflections", "type": "bool", "default": 0,
+      "label": "@PROCEDURAL.ProceduralInReflections", "description": "@PROCEDURAL.ProceduralInReflections.description",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralGatherPriority", "type": "bool", "default": 1,
+      "label": "@PROCEDURAL.ProceduralGatherPriority", "description": "@PROCEDURAL.ProceduralGatherPriority.description",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralConeBack", "type": "float", "default": 70.0, "min": 0.0, "max": 1000.0,
+      "label": "@PROCEDURAL.ProceduralConeBack",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralFarThinning", "type": "bool", "default": 1,
+      "label": "@PROCEDURAL.ProceduralFarThinning", "description": "@PROCEDURAL.ProceduralFarThinning.description",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralSmallFarCull", "type": "bool", "default": 1,
+      "label": "@PROCEDURAL.ProceduralSmallFarCull", "description": "@PROCEDURAL.ProceduralSmallFarCull.description",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.HeavyPropCull", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.HeavyPropCull", "description": "@PERFORMANCE.HeavyPropCull.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.FarFadeCull", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.FarFadeCull", "description": "@PERFORMANCE.FarFadeCull.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralConeFullAngle", "type": "float", "default": 75.0, "min": 30.0, "max": 120.0,
+      "label": "@PROCEDURAL.ProceduralConeFullAngle",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralConeTurnLead", "type": "int", "default": 300, "min": 0, "max": 1000,
+      "label": "@PROCEDURAL.ProceduralConeTurnLead",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralConeRelease", "type": "bool", "default": 1,
+      "label": "@PROCEDURAL.ProceduralConeRelease", "description": "@PROCEDURAL.ProceduralConeRelease.description",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralSpawnsPerUpdate", "type": "int", "default": 128, "min": 0, "max": 65535,
+      "label": "@PROCEDURAL.ProceduralSpawnsPerUpdate",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.ProceduralLog", "type": "int", "default": 0,
+      "label": "@DEBUG.ProceduralLog", "description": "@DEBUG.ProceduralLog.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralPool", "type": "int", "default": 16384,
+      "label": "@PROCEDURAL.ProceduralPool",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralMatrixLimit", "type": "int", "default": 4096,
+      "label": "@PROCEDURAL.ProceduralMatrixLimit",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralDensity", "type": "float", "default": 1.0, "min": 0.25, "max": 2.0,
+      "label": "@PROCEDURAL.ProceduralDensity",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralGroundTriangles", "type": "int", "default": 8192, "min": 512, "max": 32768,
+      "label": "@PROCEDURAL.ProceduralGroundTriangles",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralMatrixPool", "type": "int", "default": 28000, "min": 7000, "max": 65536,
+      "label": "@PROCEDURAL.ProceduralMatrixPool",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralDrawableRefs", "type": "int", "default": 40000, "min": 13000, "max": 200000,
+      "label": "@PROCEDURAL.ProceduralDrawableRefs",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralRenderCache", "type": "int", "default": 32768,
+      "label": "@PROCEDURAL.ProceduralRenderCache",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "DEBUG.Profiler", "type": "int", "default": 0, "min": 0, "max": 4000,
+      "label": "@DEBUG.Profiler", "description": "@DEBUG.Profiler.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "DEBUG.ProfilerThreads", "type": "int", "default": 4, "min": 1, "max": 32,
+      "label": "@DEBUG.ProfilerThreads", "description": "@DEBUG.ProfilerThreads.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "DEBUG.ProfilerInterval", "type": "int", "default": 30, "min": 5, "max": 600,
+      "label": "@DEBUG.ProfilerInterval", "description": "@DEBUG.ProfilerInterval.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "DEBUG.ProfilerSpikeMs", "type": "int", "default": 50, "min": 0, "max": 2000,
+      "label": "@DEBUG.ProfilerSpikeMs", "description": "@DEBUG.ProfilerSpikeMs.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PERFORMANCE.SunShadowsAtNight", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.SunShadowsAtNight", "description": "@PERFORMANCE.SunShadowsAtNight.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.ReflectionsHalfRate", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.ReflectionsHalfRate", "description": "@PERFORMANCE.ReflectionsHalfRate.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.WaterReflectionWhenSeen", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.WaterReflectionWhenSeen", "description": "@PERFORMANCE.WaterReflectionWhenSeen.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.FarCascadesHalfRate", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.FarCascadesHalfRate", "description": "@PERFORMANCE.FarCascadesHalfRate.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.MidCascadeHalfRate", "type": "bool", "default": 0,
+      "label": "@PERFORMANCE.MidCascadeHalfRate", "description": "@PERFORMANCE.MidCascadeHalfRate.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.RenderSkipTrace", "type": "bool", "default": 0,
+      "label": "@DEBUG.RenderSkipTrace", "description": "@DEBUG.RenderSkipTrace.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PERFORMANCE.SunShadowsMinElevation", "type": "float", "default": 8.0,
+      "label": "@PERFORMANCE.SunShadowsMinElevation",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.CascadeMatrixTrace", "type": "bool", "default": 0,
+      "label": "@DEBUG.CascadeMatrixTrace", "description": "@DEBUG.CascadeMatrixTrace.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "LIGHTING.SkyHDR", "type": "bool", "default": 1,
+      "label": "@LIGHTING.SkyHDR", "description": "@LIGHTING.SkyHDR.description",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "SUNSHAFTS.SunFlareIntensity", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0,
+      "label": "@SUNSHAFTS.SunFlareIntensity",
+      "page": "advanced", "group": "@group.sun shafts", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.SkyTrace", "type": "bool", "default": 0,
+      "label": "@DEBUG.SkyTrace", "description": "@DEBUG.SkyTrace.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "DEBUG.SkyMoonPass", "type": "bool", "default": 1,
+      "label": "@DEBUG.SkyMoonPass",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "LIGHTING.SSROcclusionStrength", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
+      "label": "@LIGHTING.SSROcclusionStrength",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.JitterPhases", "type": "int", "default": 8, "min": 2, "max": 128,
+      "label": "@ANTIALIASING.JitterPhases",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.CurrentFrameWeightMin", "type": "float", "default": 0.08, "min": 0.01, "max": 1.0,
+      "label": "@ANTIALIASING.CurrentFrameWeightMin",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.CurrentFrameWeightMax", "type": "float", "default": 0.2,
+      "label": "@ANTIALIASING.CurrentFrameWeightMax",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.CurrentFrameWeightPerPixelOfMotion", "type": "float", "default": 0.1,
+      "label": "@ANTIALIASING.CurrentFrameWeightPerPixelOfMotion",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.VarianceClipGamma", "type": "float", "default": 1.25, "min": 0.5, "max": 4.0,
+      "label": "@ANTIALIASING.VarianceClipGamma",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.LumaWeight", "type": "float", "default": 1.0, "min": 0.0, "max": 16.0,
+      "label": "@ANTIALIASING.LumaWeight",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.ObjectDepthBias", "type": "float", "default": 2e-05, "min": 0.0, "max": 0.01,
+      "label": "@ANTIALIASING.ObjectDepthBias",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.ObjectMotionVectors", "type": "bool", "default": 1,
+      "label": "@ANTIALIASING.ObjectMotionVectors", "description": "@ANTIALIASING.ObjectMotionVectors.description",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.DLSSPreset", "type": "int", "default": 0, "min": 0, "max": 15,
+      "label": "@ANTIALIASING.DLSSPreset", "description": "@ANTIALIASING.DLSSPreset.description",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.FSRSharpness", "type": "float", "default": 0.0, "min": 0.0, "max": 1.0,
+      "label": "@ANTIALIASING.FSRSharpness",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.ReactiveMaskScale", "type": "float", "default": 2.0, "min": 0.0, "max": 64.0,
+      "label": "@ANTIALIASING.ReactiveMaskScale",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.ReactiveMaskMaximum", "type": "float", "default": 0.75, "min": 0.0, "max": 1.0,
+      "label": "@ANTIALIASING.ReactiveMaskMaximum",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.RainAfterAntialiasing", "type": "bool", "default": 1,
+      "label": "@ANTIALIASING.RainAfterAntialiasing", "description": "@ANTIALIASING.RainAfterAntialiasing.description",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.SkinnedMotionVectors", "type": "bool", "default": 1,
+      "label": "@ANTIALIASING.SkinnedMotionVectors", "description": "@ANTIALIASING.SkinnedMotionVectors.description",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "ANTIALIASING.ReactiveMask", "type": "bool", "default": 1,
+      "label": "@ANTIALIASING.ReactiveMask", "description": "@ANTIALIASING.ReactiveMask.description",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "ANTIALIASING.SteadyDepth", "type": "bool", "default": 1,
+      "label": "@ANTIALIASING.SteadyDepth", "description": "@ANTIALIASING.SteadyDepth.description",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "TEXTURES.DetailTexturesTiling", "type": "float", "default": 8.0, "min": 1.0, "max": 64.0,
+      "label": "@TEXTURES.DetailTexturesTiling",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.DetailTexturesAlbedo", "type": "float", "default": 0.15, "min": 0.0, "max": 1.0,
+      "label": "@TEXTURES.DetailTexturesAlbedo",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.DetailTexturesNormal", "type": "float", "default": 0.5, "min": 0.0, "max": 2.0,
+      "label": "@TEXTURES.DetailTexturesNormal",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.SpecularAntiAliasingStrength", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0,
+      "label": "@TEXTURES.SpecularAntiAliasingStrength",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.SpecularAntiAliasingMax", "type": "float", "default": 0.18, "min": 0.0, "max": 1.0,
+      "label": "@TEXTURES.SpecularAntiAliasingMax",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "ANTIALIASING.UpscalerLodBias", "type": "float", "default": -1.0, "min": -2.0, "max": 0.0,
+      "label": "@ANTIALIASING.UpscalerLodBias",
+      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundHeightBlend", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
+      "label": "@TEXTURES.GroundHeightBlend",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundHeightBlendDepth", "type": "float", "default": 0.2, "min": 0.01, "max": 1.0,
+      "label": "@TEXTURES.GroundHeightBlendDepth",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundAntiTiling", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
+      "label": "@TEXTURES.GroundAntiTiling",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundAntiTilingSize", "type": "float", "default": 4.0, "min": 0.5, "max": 100.0,
+      "label": "@TEXTURES.GroundAntiTilingSize",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundAntiTilingSharpness", "type": "float", "default": 16.0, "min": 1.0, "max": 100.0,
+      "label": "@TEXTURES.GroundAntiTilingSharpness",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundAntiTilingTolerance", "type": "float", "default": 0.1, "min": 0.01, "max": 1.0,
+      "label": "@TEXTURES.GroundAntiTilingTolerance",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundColorVariation", "type": "float", "default": 0.25, "min": 0.0, "max": 1.0,
+      "label": "@TEXTURES.GroundColorVariation",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundColorVariationSize", "type": "float", "default": 15.0, "min": 1.0, "max": 500.0,
+      "label": "@TEXTURES.GroundColorVariationSize",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundBumps", "type": "float", "default": 0.08, "min": 0.0, "max": 0.5,
+      "label": "@TEXTURES.GroundBumps",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundBumpsCoarse", "type": "float", "default": 0.25, "min": 0.0, "max": 2.0,
+      "label": "@TEXTURES.GroundBumpsCoarse",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundDetailBumps", "type": "float", "default": 0.005, "min": 0.0, "max": 0.1,
+      "label": "@TEXTURES.GroundDetailBumps",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundBumpsFadeStart", "type": "float", "default": 15.0, "min": 0.0, "max": 1000.0,
+      "label": "@TEXTURES.GroundBumpsFadeStart",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundBumpsFadeEnd", "type": "float", "default": 60.0,
+      "label": "@TEXTURES.GroundBumpsFadeEnd",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundCavity", "type": "float", "default": 2.0, "min": 0.0, "max": 10.0,
+      "label": "@TEXTURES.GroundCavity",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundCavityAlbedo", "type": "float", "default": 0.3, "min": 0.0, "max": 1.0,
+      "label": "@TEXTURES.GroundCavityAlbedo",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundParallaxDepth", "type": "float", "default": 0.05, "min": 0.0, "max": 0.5,
+      "label": "@TEXTURES.GroundParallaxDepth",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundParallaxContrast", "type": "float", "default": 3.0, "min": 0.1, "max": 20.0,
+      "label": "@TEXTURES.GroundParallaxContrast",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundSelfShadow", "type": "float", "default": 0.5, "min": 0.0, "max": 1.0,
+      "label": "@TEXTURES.GroundSelfShadow",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundSelfShadowSharpness", "type": "float", "default": 4.0, "min": 0.5, "max": 50.0,
+      "label": "@TEXTURES.GroundSelfShadowSharpness",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundParallaxFadeStart", "type": "float", "default": 10.0, "min": 0.0, "max": 1000.0,
+      "label": "@TEXTURES.GroundParallaxFadeStart",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.GroundParallaxFadeEnd", "type": "float", "default": 30.0,
+      "label": "@TEXTURES.GroundParallaxFadeEnd",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.ParallaxOcclusionMinSteps", "type": "float", "default": 8.0, "min": 2.0, "max": 32.0,
+      "label": "@TEXTURES.ParallaxOcclusionMinSteps",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.ParallaxOcclusionMaxSteps", "type": "float", "default": 32.0,
+      "label": "@TEXTURES.ParallaxOcclusionMaxSteps",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.ParallaxOcclusionDepth", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0,
+      "label": "@TEXTURES.ParallaxOcclusionDepth",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.VehiclePaintClearcoat", "type": "float", "default": 1.0, "min": 0.0, "max": 2.0,
+      "label": "@TEXTURES.VehiclePaintClearcoat",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.VehiclePaintClearcoatSmoothness", "type": "float", "default": 0.75, "min": 0.0, "max": 1.0,
+      "label": "@TEXTURES.VehiclePaintClearcoatSmoothness",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.VehiclePaintBakedHighlightCut", "type": "float", "default": 0.2, "min": 0.0, "max": 1.0,
+      "label": "@TEXTURES.VehiclePaintBakedHighlightCut",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.VehiclePaintColorRichness", "type": "float", "default": 1.25, "min": 0.5, "max": 2.0,
+      "label": "@TEXTURES.VehiclePaintColorRichness",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "TEXTURES.VehiclePaintPearl", "type": "float", "default": 0.4, "min": 0.0, "max": 1.0,
+      "label": "@TEXTURES.VehiclePaintPearl",
+      "page": "advanced", "group": "@group.textures", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.CarRaindropsAmount", "type": "float", "default": 1.4, "min": 0.0, "max": 4.0,
+      "label": "@WEATHER.CarRaindropsAmount",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.CarRaindropsDensity", "type": "float", "default": 40.0, "min": 5.0, "max": 200.0,
+      "label": "@WEATHER.CarRaindropsDensity",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.CarRaindropsBump", "type": "float", "default": 0.002, "min": 0.0, "max": 0.02,
+      "label": "@WEATHER.CarRaindropsBump",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.CarRaindropsRunning", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
+      "label": "@WEATHER.CarRaindropsRunning",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.CarRaindropsSpeed", "type": "float", "default": 0.15, "min": 0.0, "max": 3.0,
+      "label": "@WEATHER.CarRaindropsSpeed",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.WaterFarLayer", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.WaterFarLayer", "description": "@PERFORMANCE.WaterFarLayer.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.WaterFarLayerDistance", "type": "float", "default": 400.0, "min": 50.0, "max": 5000.0,
+      "label": "@PERFORMANCE.WaterFarLayerDistance",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.WaterFarLayerLog", "type": "bool", "default": 0,
+      "label": "@DEBUG.WaterFarLayerLog",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.WaterReflectionCapture", "type": "bool", "default": 0,
+      "label": "@DEBUG.WaterReflectionCapture",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.CachedLampShadows", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.CachedLampShadows", "description": "@NIGHTSHADOWS.CachedLampShadows.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.ModelLightShadows", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.ModelLightShadows", "description": "@NIGHTSHADOWS.ModelLightShadows.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.CoronaLightShadows", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.CoronaLightShadows", "description": "@NIGHTSHADOWS.CoronaLightShadows.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.CoronaLightApproximation", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.CoronaLightApproximation", "description": "@NIGHTSHADOWS.CoronaLightApproximation.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.CoronaLightRadiusPerSize", "type": "float", "default": 12.0, "min": 0.1, "max": 1024.0,
+      "label": "@NIGHTSHADOWS.CoronaLightRadiusPerSize",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.CoronaLightFallbackIntensity", "type": "float", "default": 1.0, "min": 0.01, "max": 64.0,
+      "label": "@NIGHTSHADOWS.CoronaLightFallbackIntensity",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.CoronaLightIntensityScale", "type": "float", "default": 1.0, "min": 0.01, "max": 64.0,
+      "label": "@NIGHTSHADOWS.CoronaLightIntensityScale",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.CoronaLightMinRadius", "type": "float", "default": 0.1, "min": 0.01, "max": 4096.0,
+      "label": "@NIGHTSHADOWS.CoronaLightMinRadius",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.CoronaLightMaxRadius", "type": "float", "default": 128.0,
+      "label": "@NIGHTSHADOWS.CoronaLightMaxRadius",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.CoronaLightMaxIntensity", "type": "float", "default": 64.0, "min": 0.01, "max": 1024.0,
+      "label": "@NIGHTSHADOWS.CoronaLightMaxIntensity",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.CoronaLightDistance", "type": "float", "default": 100.0, "min": 0.0, "max": 1000.0,
+      "label": "@NIGHTSHADOWS.CoronaLightDistance",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.CoronaLightMaxCount", "type": "int", "default": 48, "min": 0, "max": 256,
+      "label": "@NIGHTSHADOWS.CoronaLightMaxCount",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.ExtraLightMergeDistance", "type": "float", "default": 1.5, "min": 0.0, "max": 10.0,
+      "label": "@NIGHTSHADOWS.ExtraLightMergeDistance",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.ModelLightShadowsNeedCasters", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.ModelLightShadowsNeedCasters", "description": "@NIGHTSHADOWS.ModelLightShadowsNeedCasters.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.SharedMaps", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.SharedMaps", "description": "@NIGHTSHADOWS.SharedMaps.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.PairedLampDistance", "type": "float", "default": 2.5, "min": 0.0, "max": 6.0,
+      "label": "@NIGHTSHADOWS.PairedLampDistance",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampShadowsInDaylight", "type": "bool", "default": 0,
+      "label": "@NIGHTSHADOWS.LampShadowsInDaylight", "description": "@NIGHTSHADOWS.LampShadowsInDaylight.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.CloseHeadlightRelevance", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.CloseHeadlightRelevance", "description": "@NIGHTSHADOWS.CloseHeadlightRelevance.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.TrafficSelfShadowFix", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.TrafficSelfShadowFix", "description": "@NIGHTSHADOWS.TrafficSelfShadowFix.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.NearbyVehicleReceivers", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.NearbyVehicleReceivers", "description": "@NIGHTSHADOWS.NearbyVehicleReceivers.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampViewPriority", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.LampViewPriority", "description": "@NIGHTSHADOWS.LampViewPriority.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VisibleReceiverRanking", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.VisibleReceiverRanking", "description": "@NIGHTSHADOWS.VisibleReceiverRanking.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampCacheViewPriority", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.LampCacheViewPriority", "description": "@NIGHTSHADOWS.LampCacheViewPriority.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.CasterAwarePriority", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.CasterAwarePriority", "description": "@NIGHTSHADOWS.CasterAwarePriority.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.CasterAwarePriorityHold", "type": "int", "default": 750, "min": 0, "max": 2000,
+      "label": "@NIGHTSHADOWS.CasterAwarePriorityHold",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.CasterAwarePriorityLead", "type": "float", "default": 1.0, "min": 0.0, "max": 3.0,
+      "label": "@NIGHTSHADOWS.CasterAwarePriorityLead",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.BoxedCarCasterDistance", "type": "float", "default": 25.0, "min": 0.0, "max": 150.0,
+      "label": "@NIGHTSHADOWS.BoxedCarCasterDistance",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PedCasterDistance", "type": "float", "default": 35.0, "min": 0.0, "max": 150.0,
+      "label": "@NIGHTSHADOWS.PedCasterDistance",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.CasterMinLightHeight", "type": "float", "default": 2.5, "min": 0.0, "max": 10.0,
+      "label": "@NIGHTSHADOWS.CasterMinLightHeight",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.InteriorLightsYieldOutside", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.InteriorLightsYieldOutside",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.InteriorLightsFirst", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.InteriorLightsFirst", "description": "@NIGHTSHADOWS.InteriorLightsFirst.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampSpacing", "type": "float", "default": 0.0, "min": 0.0, "max": 40.0,
+      "label": "@NIGHTSHADOWS.LampSpacing",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampSpacingSeconds", "type": "float", "default": 0.5, "min": 0.0, "max": 5.0,
+      "label": "@NIGHTSHADOWS.LampSpacingSeconds",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampSpacingAlongRoad", "type": "bool", "default": 0,
+      "label": "@NIGHTSHADOWS.LampSpacingAlongRoad",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.BehindLampReach", "type": "float", "default": 12.0, "min": 0.0, "max": 100.0,
+      "label": "@NIGHTSHADOWS.BehindLampReach",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.UncachedLampAdvantage", "type": "float", "default": 1.5, "min": 0.0, "max": 10.0,
+      "label": "@NIGHTSHADOWS.UncachedLampAdvantage",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.CachedLampViewSlots", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.CachedLampViewSlots",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.UncachedLampViewShare", "type": "float", "default": 0.5, "min": 0.1, "max": 1.0,
+      "label": "@NIGHTSHADOWS.UncachedLampViewShare",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.BehindLampByFixture", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.BehindLampByFixture",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.AddedLightsYield", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.AddedLightsYield",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.AddedLightsLast", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.AddedLightsLast", "description": "@NIGHTSHADOWS.AddedLightsLast.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.StreetLampsFirst", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.StreetLampsFirst",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.TailLightShadowDistance", "type": "float", "default": 25.0, "min": 0.0, "max": 500.0,
+      "label": "@NIGHTSHADOWS.TailLightShadowDistance",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.SlotMinHold", "type": "int", "default": 1000, "min": 0, "max": 5000,
+      "label": "@NIGHTSHADOWS.SlotMinHold",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.ClaimDistanceRatio", "type": "float", "default": 1.5, "min": 0.0, "max": 10.0,
+      "label": "@NIGHTSHADOWS.ClaimDistanceRatio",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.NightShadowsCrashDiagnostics", "type": "bool", "default": 0,
+      "label": "@DEBUG.NightShadowsCrashDiagnostics", "description": "@DEBUG.NightShadowsCrashDiagnostics.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.HighResolution", "type": "bool", "default": 0,
+      "label": "@NIGHTSHADOWS.HighResolution",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "DEBUG.NightShadowsDiagnostics", "type": "bool", "default": 0,
+      "label": "@DEBUG.NightShadowsDiagnostics", "description": "@DEBUG.NightShadowsDiagnostics.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "HEADLIGHTS.ConsistentBrightness", "type": "bool", "default": 1,
+      "label": "@HEADLIGHTS.ConsistentBrightness", "description": "@HEADLIGHTS.ConsistentBrightness.description",
+      "page": "advanced", "group": "@group.headlights", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "HEADLIGHTS.Intensity", "type": "float", "default": 0.85,
+      "label": "@HEADLIGHTS.Intensity",
+      "page": "advanced", "group": "@group.headlights", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "HEADLIGHTS.LightModes", "type": "bool", "default": 1,
+      "label": "@HEADLIGHTS.LightModes", "description": "@HEADLIGHTS.LightModes.description",
+      "page": "advanced", "group": "@group.headlights", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "HEADLIGHTS.OffscreenLights", "type": "int", "default": 1,
+      "label": "@HEADLIGHTS.OffscreenLights", "description": "@HEADLIGHTS.OffscreenLights.description",
+      "page": "advanced", "group": "@group.headlights", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "HEADLIGHTS.OffscreenLightsDistance", "type": "float", "default": 100.0, "min": 0.0, "max": 500.0,
+      "label": "@HEADLIGHTS.OffscreenLightsDistance",
+      "page": "advanced", "group": "@group.headlights", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.OwnHeadlightCasterFix", "type": "int", "default": 1,
+      "label": "@NIGHTSHADOWS.OwnHeadlightCasterFix", "description": "@NIGHTSHADOWS.OwnHeadlightCasterFix.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.CameraAwarePriority", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.CameraAwarePriority", "description": "@NIGHTSHADOWS.CameraAwarePriority.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "DEBUG.NightShadowsSlotLog", "type": "bool", "default": 0,
+      "label": "@DEBUG.NightShadowsSlotLog", "description": "@DEBUG.NightShadowsSlotLog.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampsBehindWalls", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.LampsBehindWalls", "description": "@NIGHTSHADOWS.LampsBehindWalls.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampsBehindWallsFlags", "type": "int", "default": 6,
+      "label": "@NIGHTSHADOWS.LampsBehindWallsFlags",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.SlotAllocation", "type": "int", "default": 2,
+      "label": "@NIGHTSHADOWS.SlotAllocation", "description": "@NIGHTSHADOWS.SlotAllocation.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "HEADLIGHTS.ShadowBehindLamps", "type": "float", "default": 0.8, "min": 0.0, "max": 2.0,
+      "label": "@HEADLIGHTS.ShadowBehindLamps",
+      "page": "advanced", "group": "@group.headlights", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.TrafficSignalShadows", "type": "int", "default": 2, "min": 0, "max": 7,
+      "label": "@NIGHTSHADOWS.TrafficSignalShadows", "description": "@NIGHTSHADOWS.TrafficSignalShadows.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.EmergencyLightShadows", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.EmergencyLightShadows", "description": "@NIGHTSHADOWS.EmergencyLightShadows.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.TrafficSignalIntensity", "type": "float", "default": 1.05,
+      "label": "@NIGHTSHADOWS.TrafficSignalIntensity",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampShadowSizeReach", "type": "float", "default": 1.3,
+      "label": "@NIGHTSHADOWS.LampShadowSizeReach",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampShadowRetention", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.LampShadowRetention", "description": "@NIGHTSHADOWS.LampShadowRetention.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampShadowFade", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.LampShadowFade", "description": "@NIGHTSHADOWS.LampShadowFade.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.IndoorShadowBubble", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.IndoorShadowBubble", "description": "@NIGHTSHADOWS.IndoorShadowBubble.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.StableMapSlots", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.StableMapSlots", "description": "@NIGHTSHADOWS.StableMapSlots.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.PostShadowsFromCarLights", "type": "bool", "default": 0,
+      "label": "@NIGHTSHADOWS.PostShadowsFromCarLights", "description": "@NIGHTSHADOWS.PostShadowsFromCarLights.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.ContactShadowsIntensity", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
+      "label": "@LIGHTING.ContactShadowsIntensity",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.IndirectLightOcclusion", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
+      "label": "@LIGHTING.IndirectLightOcclusion",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.LocalContactShadowsIntensity", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
+      "label": "@LIGHTING.LocalContactShadowsIntensity",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.LocalContactShadowsWithoutShadowMap", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
+      "label": "@LIGHTING.LocalContactShadowsWithoutShadowMap",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsLightSize", "type": "float", "default": 0.5, "min": 0.0, "max": 4.0,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsLightSize",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsRounding", "type": "float", "default": 0.2, "min": 0.0, "max": 0.99,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsRounding",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsContact", "type": "float", "default": 0.0, "min": 0.0, "max": 1.0,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsContact",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsEndRounding", "type": "float", "default": 0.3, "min": 0.0, "max": 2.0,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsEndRounding",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsFromCarLights", "type": "bool", "default": 0,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsFromCarLights", "description": "@NIGHTSHADOWS.VehicleBoxShadowsFromCarLights.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsWithSlots", "type": "bool", "default": 0,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsWithSlots", "description": "@NIGHTSHADOWS.VehicleBoxShadowsWithSlots.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsUntilLeaving", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsUntilLeaving", "description": "@NIGHTSHADOWS.VehicleBoxShadowsUntilLeaving.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsBlend", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsBlend", "description": "@NIGHTSHADOWS.VehicleBoxShadowsBlend.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsLive", "type": "bool", "default": 0,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsLive", "description": "@NIGHTSHADOWS.VehicleBoxShadowsLive.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsLeadFrames", "type": "float", "default": -1.0, "min": -3.0, "max": 5.0,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsLeadFrames",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.VehicleBoxShadowsLog", "type": "bool", "default": 0,
+      "label": "@DEBUG.VehicleBoxShadowsLog", "description": "@DEBUG.VehicleBoxShadowsLog.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PedCapsuleShadows", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.PedCapsuleShadows",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PedCapsuleRadius", "type": "float", "default": 0.25, "min": 0.05, "max": 1.0,
+      "label": "@NIGHTSHADOWS.PedCapsuleRadius",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PedCapsuleHeight", "type": "float", "default": 1.75, "min": 0.5, "max": 3.0,
+      "label": "@NIGHTSHADOWS.PedCapsuleHeight",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PedCapsuleFootBelow", "type": "float", "default": 1.0, "min": -1.0, "max": 2.0,
+      "label": "@NIGHTSHADOWS.PedCapsuleFootBelow",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PedCapsuleAddedLights", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.PedCapsuleAddedLights",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PedCapsuleLightSize", "type": "float", "default": 0.26, "min": 0.0, "max": 4.0,
+      "label": "@NIGHTSHADOWS.PedCapsuleLightSize",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PedCapsuleSoftening", "type": "float", "default": 0.0, "min": 0.0, "max": 1.0,
+      "label": "@NIGHTSHADOWS.PedCapsuleSoftening",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PedCapsuleBaseSoftness", "type": "float", "default": 0.088, "min": 0.01, "max": 1.0,
+      "label": "@NIGHTSHADOWS.PedCapsuleBaseSoftness",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PedCapsuleDistanceSoftness", "type": "float", "default": 0.03, "min": 0.0, "max": 0.5,
+      "label": "@NIGHTSHADOWS.PedCapsuleDistanceSoftness",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PedBoneShadows", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.PedBoneShadows",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PedBoneRadiusScale", "type": "float", "default": 0.8, "min": 0.3, "max": 2.0,
+      "label": "@NIGHTSHADOWS.PedBoneRadiusScale",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PedBoneShoulderWidth", "type": "float", "default": 0.8, "min": 0.3, "max": 1.2,
+      "label": "@NIGHTSHADOWS.PedBoneShoulderWidth",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PedBoneShadowsFollowDraw", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.PedBoneShadowsFollowDraw",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.ShapeGroups", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.ShapeGroups",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.FusedLightingPasses", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.FusedLightingPasses",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.DepthBoundsLights", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.DepthBoundsLights",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.LightEarlyOut", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.LightEarlyOut",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.LightVolumeDepth", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.LightVolumeDepth",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PropShapeShadows", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.PropShapeShadows", "description": "@NIGHTSHADOWS.PropShapeShadows.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PropShapeDistance", "type": "float", "default": 80.0, "min": 10.0, "max": 200.0,
+      "label": "@NIGHTSHADOWS.PropShapeDistance",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PropShapePostRadius", "type": "float", "default": 0.12, "min": 0.03, "max": 0.5,
+      "label": "@NIGHTSHADOWS.PropShapePostRadius",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PropShapeArmRadius", "type": "float", "default": 0.08, "min": 0.02, "max": 0.5,
+      "label": "@NIGHTSHADOWS.PropShapeArmRadius",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PropShapesPerLight", "type": "int", "default": 12, "min": 1, "max": 32,
+      "label": "@NIGHTSHADOWS.PropShapesPerLight",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PropShapeScale", "type": "float", "default": 0.85, "min": 0.3, "max": 1.2,
+      "label": "@NIGHTSHADOWS.PropShapeScale",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.PropShapeViewCulling", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.PropShapeViewCulling",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsPerLamp", "type": "int", "default": 3, "min": 1, "max": 5,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsPerLamp",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsPerCar", "type": "int", "default": 2, "min": 0, "max": 8,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsPerCar",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsMinLight", "type": "float", "default": 0.04, "min": 0.0, "max": 1.0,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsMinLight",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsMaxDistance", "type": "float", "default": 60.0, "min": 0.0, "max": 1000.0,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsMaxDistance",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsFollowLight", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsFollowLight",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsLowLightNarrow", "type": "float", "default": 1.0, "min": 0.2, "max": 1.0,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsLowLightNarrow",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsLowLightHeight", "type": "float", "default": 0.6, "min": 0.2, "max": 1.0,
+      "label": "@NIGHTSHADOWS.VehicleBoxShadowsLowLightHeight",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.SkinLighting", "type": "float", "default": 1.0, "min": 0.0, "max": 2.0,
+      "label": "@LIGHTING.SkinLighting",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.SpecularSheen", "type": "float", "default": 0.1, "min": 0.0, "max": 50.0,
+      "label": "@LIGHTING.SpecularSheen",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXLights", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0,
+      "label": "@LIGHTING.GGXLights",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXFresnel", "type": "float", "default": 0.5, "min": 0.0, "max": 1.0,
+      "label": "@LIGHTING.GGXFresnel",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXLampSize", "type": "float", "default": 0.05, "min": 0.0, "max": 2.0,
+      "label": "@LIGHTING.GGXLampSize",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXStretch", "type": "float", "default": 0.5, "min": 0.0, "max": 4.0,
+      "label": "@LIGHTING.GGXStretch",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXHeadlightSpacing", "type": "float", "default": 0.65, "min": 0.0, "max": 2.0,
+      "label": "@LIGHTING.GGXHeadlightSpacing",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXFillLights", "type": "float", "default": 0.5, "min": 0.0, "max": 2.0,
+      "label": "@LIGHTING.GGXFillLights",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXSun", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0,
+      "label": "@LIGHTING.GGXSun",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXEnvironment", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
+      "label": "@LIGHTING.GGXEnvironment",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXMax", "type": "float", "default": 2.0, "min": 0.1, "max": 16.0,
+      "label": "@LIGHTING.GGXMax",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRIntensity", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
+      "label": "@REFLECTIONS.SSRIntensity",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRWetGround", "type": "float", "default": 1.5, "min": 0.0, "max": 8.0,
+      "label": "@REFLECTIONS.SSRWetGround",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRStepPixels", "type": "float", "default": 2.0, "min": 1.0, "max": 8.0,
+      "label": "@REFLECTIONS.SSRStepPixels",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRSmoothing", "type": "float", "default": 2.0, "min": 0.0, "max": 8.0,
+      "label": "@REFLECTIONS.SSRSmoothing",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRPastThinObjects", "type": "bool", "default": 1,
+      "label": "@REFLECTIONS.SSRPastThinObjects", "description": "@REFLECTIONS.SSRPastThinObjects.description",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRStepJitter", "type": "bool", "default": 1,
+      "label": "@REFLECTIONS.SSRStepJitter", "description": "@REFLECTIONS.SSRStepJitter.description",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRTemporalJitter", "type": "bool", "default": 1,
+      "label": "@REFLECTIONS.SSRTemporalJitter", "description": "@REFLECTIONS.SSRTemporalJitter.description",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRTemporal", "type": "float", "default": 0.85, "min": 0.0, "max": 0.97,
+      "label": "@REFLECTIONS.SSRTemporal",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRFallback", "type": "float", "default": 0.8, "min": 0.0, "max": 1.0,
+      "label": "@REFLECTIONS.SSRFallback",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRNeighbourFill", "type": "float", "default": 0.8, "min": 0.0, "max": 1.0,
+      "label": "@REFLECTIONS.SSRNeighbourFill",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRNeighbourFillMinDistance", "type": "float", "default": 3.0, "min": 0.0, "max": 50.0,
+      "label": "@REFLECTIONS.SSRNeighbourFillMinDistance",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXSoft", "type": "float", "default": 0.0, "min": 0.0, "max": 1.0,
+      "label": "@LIGHTING.GGXSoft",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXStretchView", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
+      "label": "@LIGHTING.GGXStretchView",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXGlints", "type": "float", "default": 1.0, "min": 0.0, "max": 8.0,
+      "label": "@LIGHTING.GGXGlints",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXGlintsSize", "type": "float", "default": 0.1, "min": 0.01, "max": 1.0,
+      "label": "@LIGHTING.GGXGlintsSize",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXGlintsGloss", "type": "float", "default": 0.5, "min": 0.0, "max": 1.0,
+      "label": "@LIGHTING.GGXGlintsGloss",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.GGXGlintsMax", "type": "float", "default": 64.0, "min": 1.0, "max": 1000.0,
+      "label": "@LIGHTING.GGXGlintsMax",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.WetGround", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
+      "label": "@WEATHER.WetGround",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.WetGroundPuddles", "type": "float", "default": 0.35, "min": 0.0, "max": 1.0,
+      "label": "@WEATHER.WetGroundPuddles",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.WetGroundPuddleSize", "type": "float", "default": 24.0, "min": 2.0, "max": 500.0,
+      "label": "@WEATHER.WetGroundPuddleSize",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.WetGroundRipples", "type": "float", "default": 1.0, "min": 0.0, "max": 3.0,
+      "label": "@WEATHER.WetGroundRipples",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.WetGroundDarkening", "type": "float", "default": 1.0, "min": 0.0, "max": 2.0,
+      "label": "@WEATHER.WetGroundDarkening",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.WetGroundWetting", "type": "float", "default": 30.0, "min": 0.0, "max": 3600.0,
+      "label": "@WEATHER.WetGroundWetting",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.WetGroundDrying", "type": "float", "default": 240.0, "min": 0.0, "max": 3600.0,
+      "label": "@WEATHER.WetGroundDrying",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.CloudShadows", "type": "float", "default": 0.6, "min": 0.0, "max": 1.0,
+      "label": "@WEATHER.CloudShadows",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.CloudShadowsHeight", "type": "float", "default": 1200.0, "min": 100.0, "max": 10000.0,
+      "label": "@WEATHER.CloudShadowsHeight",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.CloudShadowsScale", "type": "float", "default": 16000.0, "min": 100.0, "max": 50000.0,
+      "label": "@WEATHER.CloudShadowsScale",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.CloudShadowsWind", "type": "float", "default": 6.0, "min": 0.0, "max": 100.0,
+      "label": "@WEATHER.CloudShadowsWind",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.CloudShadowsSoftness", "type": "float", "default": 3.0, "min": 0.0, "max": 8.0,
+      "label": "@WEATHER.CloudShadowsSoftness",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.CloudShadowsCoverage", "type": "float", "default": 0.0, "min": -1.0, "max": 1.0,
+      "label": "@WEATHER.CloudShadowsCoverage",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsCoverage", "type": "float", "default": 0.4, "min": 0.0, "max": 1.0,
+      "label": "@WEATHER.VolumetricCloudsCoverage",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsBase", "type": "float", "default": 800.0, "min": 50.0, "max": 10000.0,
+      "label": "@WEATHER.VolumetricCloudsBase",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsThickness", "type": "float", "default": 600.0, "min": 50.0, "max": 5000.0,
+      "label": "@WEATHER.VolumetricCloudsThickness",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsDensity", "type": "float", "default": 0.03, "min": 0.0005, "max": 1.0,
+      "label": "@WEATHER.VolumetricCloudsDensity",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsDetail", "type": "float", "default": 0.6, "min": 0.0, "max": 1.0,
+      "label": "@WEATHER.VolumetricCloudsDetail",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsDetailScale", "type": "float", "default": 1300.0, "min": 20.0, "max": 10000.0,
+      "label": "@WEATHER.VolumetricCloudsDetailScale",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsHaze", "type": "float", "default": 25000.0, "min": 1000.0, "max": 200000.0,
+      "label": "@WEATHER.VolumetricCloudsHaze",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsMaxDistance", "type": "float", "default": 40000.0, "min": 1000.0, "max": 200000.0,
+      "label": "@WEATHER.VolumetricCloudsMaxDistance",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsBrightness", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0,
+      "label": "@WEATHER.VolumetricCloudsBrightness",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsSunTint", "type": "float", "default": 0.6, "min": 0.0, "max": 1.0,
+      "label": "@WEATHER.VolumetricCloudsSunTint",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsMoonlight", "type": "float", "default": 0.2, "min": 0.0, "max": 2.0,
+      "label": "@WEATHER.VolumetricCloudsMoonlight",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsSkyLight", "type": "float", "default": 0.5, "min": 0.0, "max": 1.0,
+      "label": "@WEATHER.VolumetricCloudsSkyLight",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsMinLight", "type": "float", "default": 0.25, "min": 0.0, "max": 0.9,
+      "label": "@WEATHER.VolumetricCloudsMinLight",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsSkyMatch", "type": "float", "default": 2.0, "min": 0.0, "max": 20.0,
+      "label": "@WEATHER.VolumetricCloudsSkyMatch",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsWeather", "type": "bool", "default": 1,
+      "label": "@WEATHER.VolumetricCloudsWeather", "description": "@WEATHER.VolumetricCloudsWeather.description",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.PbrSkyHorizonHue", "type": "bool", "default": 0,
+      "label": "@WEATHER.PbrSkyHorizonHue", "description": "@WEATHER.PbrSkyHorizonHue.description",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsVanilla", "type": "float", "default": 0.0, "min": 0.0, "max": 1.0,
+      "label": "@WEATHER.VolumetricCloudsVanilla",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsTranslucency", "type": "float", "default": 0.25, "min": 0.0, "max": 0.9,
+      "label": "@WEATHER.VolumetricCloudsTranslucency",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsEvolution", "type": "float", "default": 1.0, "min": 0.0, "max": 10.0,
+      "label": "@WEATHER.VolumetricCloudsEvolution",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsSaturation", "type": "float", "default": 1.0, "min": 0.0, "max": 2.0,
+      "label": "@WEATHER.VolumetricCloudsSaturation",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsMottle", "type": "float", "default": 0.4, "min": 0.0, "max": 1.0,
+      "label": "@WEATHER.VolumetricCloudsMottle",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsDetailFlow", "type": "float", "default": 0.0, "min": 0.0, "max": 4.0,
+      "label": "@WEATHER.VolumetricCloudsDetailFlow",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsShade", "type": "float", "default": 0.65, "min": 0.0, "max": 2.0,
+      "label": "@WEATHER.VolumetricCloudsShade",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsAbsorption", "type": "float", "default": 0.35, "min": 0.05, "max": 3.0,
+      "label": "@WEATHER.VolumetricCloudsAbsorption",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.CloudReflections", "type": "bool", "default": 1,
+      "label": "@REFLECTIONS.CloudReflections", "description": "@REFLECTIONS.CloudReflections.description",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.CloudReflectionsAtNight", "type": "bool", "default": 0,
+      "label": "@PERFORMANCE.CloudReflectionsAtNight", "description": "@PERFORMANCE.CloudReflectionsAtNight.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.CloudReflectionsBrightness", "type": "float", "default": 1.0, "min": 0.0, "max": 10.0,
+      "label": "@REFLECTIONS.CloudReflectionsBrightness",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.CloudReflectionsHalfResolution", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.CloudReflectionsHalfResolution", "description": "@PERFORMANCE.CloudReflectionsHalfResolution.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.CloudsHalfResolution", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.CloudsHalfResolution", "description": "@PERFORMANCE.CloudsHalfResolution.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSREdgeFade", "type": "float", "default": 0.1, "min": 0.001, "max": 0.5,
+      "label": "@REFLECTIONS.SSREdgeFade",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRGlossBoost", "type": "float", "default": 2.0, "min": 0.0, "max": 8.0,
+      "label": "@REFLECTIONS.SSRGlossBoost",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRGlossCutoff", "type": "float", "default": 0.5, "min": 0.0, "max": 1.0,
+      "label": "@REFLECTIONS.SSRGlossCutoff",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRWaterIntensity", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
+      "label": "@REFLECTIONS.SSRWaterIntensity",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRWaterBlur", "type": "float", "default": 3.0, "min": 0.0, "max": 32.0,
+      "label": "@REFLECTIONS.SSRWaterBlur",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRWaterRipple", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0,
+      "label": "@REFLECTIONS.SSRWaterRipple",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRGBufferNormals", "type": "bool", "default": 1,
+      "label": "@REFLECTIONS.SSRGBufferNormals", "description": "@REFLECTIONS.SSRGBufferNormals.description",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRTowardCamera", "type": "float", "default": 0.0, "min": 0.0, "max": 1.0,
+      "label": "@REFLECTIONS.SSRTowardCamera",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRBlur", "type": "float", "default": 0.0, "min": 0.0, "max": 32.0,
+      "label": "@REFLECTIONS.SSRBlur",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRDistanceFade", "type": "float", "default": 0.0, "min": 0.0, "max": 100.0,
+      "label": "@REFLECTIONS.SSRDistanceFade",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRVehicleUnits", "type": "float", "default": 4.0, "min": 0.0, "max": 100.0,
+      "label": "@REFLECTIONS.SSRVehicleUnits",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.ContactShadowsLength", "type": "float", "default": 0.3, "min": 0.05, "max": 10.0,
+      "label": "@LIGHTING.ContactShadowsLength",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.ContactShadowsThickness", "type": "float", "default": 0.15, "min": 0.01, "max": 10.0,
+      "label": "@LIGHTING.ContactShadowsThickness",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.ContactShadowsMaxDistance", "type": "float", "default": 60.0, "min": 1.0, "max": 1000.0,
+      "label": "@LIGHTING.ContactShadowsMaxDistance",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.ContactShadowsMoon", "type": "bool", "default": 1,
+      "label": "@LIGHTING.ContactShadowsMoon", "description": "@LIGHTING.ContactShadowsMoon.description",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.ContactShadowsStepJitter", "type": "bool", "default": 1,
+      "label": "@LIGHTING.ContactShadowsStepJitter", "description": "@LIGHTING.ContactShadowsStepJitter.description",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.ContactShadowsTemporal", "type": "float", "default": 0.8, "min": 0.0, "max": 0.95,
+      "label": "@LIGHTING.ContactShadowsTemporal",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.IndirectLightIntensity", "type": "float", "default": 1.5, "min": 0.0, "max": 8.0,
+      "label": "@LIGHTING.IndirectLightIntensity",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.IndirectLightMaxBrightness", "type": "float", "default": 4.0, "min": 0.05, "max": 8.0,
+      "label": "@LIGHTING.IndirectLightMaxBrightness",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.SkinScatteringWidth", "type": "float", "default": 0.03, "min": 0.001, "max": 0.1,
+      "label": "@LIGHTING.SkinScatteringWidth",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.SkinScatteringStrength", "type": "float", "default": 1.0, "min": 0.0, "max": 2.0,
+      "label": "@LIGHTING.SkinScatteringStrength",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.IndirectLightRayLength", "type": "float", "default": 4.0, "min": 0.1, "max": 20.0,
+      "label": "@LIGHTING.IndirectLightRayLength",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.IndirectLightThickness", "type": "float", "default": 0.5, "min": 0.01, "max": 10.0,
+      "label": "@LIGHTING.IndirectLightThickness",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.IndirectLightMaxDistance", "type": "float", "default": 60.0, "min": 1.0, "max": 1000.0,
+      "label": "@LIGHTING.IndirectLightMaxDistance",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.IndirectLightTemporal", "type": "float", "default": 0.9, "min": 0.0, "max": 0.97,
+      "label": "@LIGHTING.IndirectLightTemporal",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.LocalContactShadows", "type": "bool", "default": 1,
+      "label": "@LIGHTING.LocalContactShadows", "description": "@LIGHTING.LocalContactShadows.description",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.LocalContactShadowsLength", "type": "float", "default": 0.5, "min": 0.05, "max": 10.0,
+      "label": "@LIGHTING.LocalContactShadowsLength",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.LocalContactShadowsThickness", "type": "float", "default": 0.2, "min": 0.01, "max": 5.0,
+      "label": "@LIGHTING.LocalContactShadowsThickness",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.LocalContactShadowsMaxDistance", "type": "float", "default": 40.0, "min": 1.0, "max": 1000.0,
+      "label": "@LIGHTING.LocalContactShadowsMaxDistance",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.VolumetricLightIntensity", "type": "float", "default": 4.0, "min": 0.0, "max": 20.0,
+      "label": "@LIGHTING.VolumetricLightIntensity",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.VolumetricLightScale", "type": "float", "default": 0.25, "min": 0.0, "max": 2.0,
+      "label": "@LIGHTING.VolumetricLightScale",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.VolumetricLightMaxDistance", "type": "float", "default": 100.0, "min": 10.0, "max": 1000.0,
+      "label": "@LIGHTING.VolumetricLightMaxDistance",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.VolumetricLightHeadlightIntensity", "type": "float", "default": 2.0, "min": 0.0, "max": 20.0,
+      "label": "@LIGHTING.VolumetricLightHeadlightIntensity",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.VolumetricLightHeadlightLength", "type": "float", "default": 25.0, "min": 1.0, "max": 200.0,
+      "label": "@LIGHTING.VolumetricLightHeadlightLength",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.FillLights", "type": "bool", "default": 0,
+      "label": "@LIGHTING.FillLights", "description": "@LIGHTING.FillLights.description",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.FillLightsMinRadius", "type": "float", "default": 30.0, "min": 0.0, "max": 1000.0,
+      "label": "@LIGHTING.FillLightsMinRadius",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.VolumetricLightHeadlightPitch", "type": "float", "default": 6.0, "min": -45.0, "max": 45.0,
+      "label": "@LIGHTING.VolumetricLightHeadlightPitch",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRCarWindows", "type": "bool", "default": 1,
+      "label": "@REFLECTIONS.SSRCarWindows", "description": "@REFLECTIONS.SSRCarWindows.description",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRCarWindowsLength", "type": "float", "default": 15.0, "min": 1.0, "max": 100.0,
+      "label": "@REFLECTIONS.SSRCarWindowsLength",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRCarWindowsThickness", "type": "float", "default": 0.5, "min": 0.05, "max": 10.0,
+      "label": "@REFLECTIONS.SSRCarWindowsThickness",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRCarWindowsStepJitter", "type": "bool", "default": 1,
+      "label": "@REFLECTIONS.SSRCarWindowsStepJitter", "description": "@REFLECTIONS.SSRCarWindowsStepJitter.description",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionGTAOStrength", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0,
+      "label": "@POSTFX.AmbientOcclusionGTAOStrength",
+      "page": "advanced", "group": "@group.post processing", "visibility": "file"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionGTAOThinOccluders", "type": "float", "default": 0.5, "min": 0.0, "max": 1.0,
+      "label": "@POSTFX.AmbientOcclusionGTAOThinOccluders",
+      "page": "advanced", "group": "@group.post processing", "visibility": "file"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionGTAOMultiBounce", "type": "bool", "default": 1,
+      "label": "@POSTFX.AmbientOcclusionGTAOMultiBounce", "description": "@POSTFX.AmbientOcclusionGTAOMultiBounce.description",
+      "page": "advanced", "group": "@group.post processing", "visibility": "file"
+    },
+    {
+      "id": "REFLECTIONS.SSRSteps", "type": "int", "default": 32, "min": 4, "max": 128,
+      "label": "@REFLECTIONS.SSRSteps",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "REFLECTIONS.SSRRefineSteps", "type": "int", "default": 8, "min": 0, "max": 16,
+      "label": "@REFLECTIONS.SSRRefineSteps",
+      "page": "advanced", "group": "@group.reflections", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PERFORMANCE.ContactShadowsHalfResolution", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.ContactShadowsHalfResolution", "description": "@PERFORMANCE.ContactShadowsHalfResolution.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "LIGHTING.IndirectLightRays", "type": "int", "default": 4, "min": 1, "max": 16,
+      "label": "@LIGHTING.IndirectLightRays",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "LIGHTING.IndirectLightSteps", "type": "int", "default": 8, "min": 2, "max": 32,
+      "label": "@LIGHTING.IndirectLightSteps",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "LIGHTING.VolumetricLightHeadlightShadow", "type": "bool", "default": 0,
+      "label": "@LIGHTING.VolumetricLightHeadlightShadow", "description": "@LIGHTING.VolumetricLightHeadlightShadow.description",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionGTAOSlices", "type": "int", "default": 2, "min": 1, "max": 8,
+      "label": "@POSTFX.AmbientOcclusionGTAOSlices",
+      "page": "advanced", "group": "@group.post processing", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionGTAOSteps", "type": "int", "default": 4, "min": 1, "max": 16,
+      "label": "@POSTFX.AmbientOcclusionGTAOSteps",
+      "page": "advanced", "group": "@group.post processing", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "POSTFX.AmbientOcclusionGTAOTemporal", "type": "float", "default": 0.9, "min": 0.0, "max": 0.98,
+      "label": "@POSTFX.AmbientOcclusionGTAOTemporal",
+      "page": "advanced", "group": "@group.post processing", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PERFORMANCE.AmbientOcclusionHalfResolution", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.AmbientOcclusionHalfResolution", "description": "@PERFORMANCE.AmbientOcclusionHalfResolution.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "PROCEDURAL.GpuGrassGreen", "type": "string", "default": "",
+      "label": "@PROCEDURAL.GpuGrassGreen",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GpuGrassTip", "type": "string", "default": "",
+      "label": "@PROCEDURAL.GpuGrassTip",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GpuGrassDry", "type": "string", "default": "",
+      "label": "@PROCEDURAL.GpuGrassDry",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    }
+  ]
+}

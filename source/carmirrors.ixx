@@ -1430,7 +1430,7 @@ public:
 
         FusionFix::onInitEventAsync() += []()
         {
-            static auto readIni = [](CIniReader& ini)
+            static auto readIni = [](SettingsReader& ini)
             {
                 CarMirrors::reverse = ini.ReadInteger("MISC", "CarMirrorsReverse", 0) != 0;
                 CarMirrors::rounded = ini.ReadInteger("MISC", "CarMirrorsRounded", 1) != 0;
@@ -1453,8 +1453,8 @@ public:
                     int(CarMirrors::waterReflection), int(CarMirrors::reflectionShaders), int(CarMirrors::extraBuckets),
                     int(CarMirrors::lampCoronas), int(CarMirrors::isolateStates), int(CarMirrors::logStats), CarMirrors::sideAimX, CarMirrors::sideAimY, CarMirrors::interiorAimX, CarMirrors::interiorAimY);
             };
-            CIniReader iniReader("");
-            readIni(iniReader);
+            SettingsReader reader;
+            readIni(reader);
             IniReload::Add(readIni);
 
             // push ebx / push 166DA22 / push corners / push plane / call 0xA0F820 / xor bl, bl / add esp, C /

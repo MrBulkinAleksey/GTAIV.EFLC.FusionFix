@@ -15,6 +15,7 @@ export module framecapture;
 
 import common;
 import comvars;
+import settings;
 import drawcapture;
 import entityclass;
 import framehistory;
@@ -526,16 +527,16 @@ namespace FrameCapture
         return true;
     }
 
-    static void ReadIni(CIniReader& iniReader)
+    static void ReadIni(SettingsReader& reader)
     {
         {
             std::lock_guard lock(mutex);
-            keyOptions = iniReader.ReadString("DEBUG", "FrameCaptureKeyOptions", "kinds=peds draw_pictures=24 constants=8 raw=gbuffer_0 raw_ps=8");
+            keyOptions = reader.ReadString("DEBUG", "FrameCaptureKeyOptions", "kinds=peds draw_pictures=24 constants=8 raw=gbuffer_0 raw_ps=8");
         }
-        if (iniReader.ReadInteger("DEBUG", "FrameCapture", 0) == 0 || capturing)
+        if (reader.ReadInteger("DEBUG", "FrameCapture", 0) == 0 || capturing)
             return;
         Options o;
-        if (ParseOptions(iniReader.ReadString("DEBUG", "FrameCaptureOptions", ""), "FrameCaptureOptions", o))
+        if (ParseOptions(reader.ReadString("DEBUG", "FrameCaptureOptions", ""), "FrameCaptureOptions", o))
             Arm(o);
     }
 
@@ -568,8 +569,8 @@ public:
     {
         FusionFix::onInitEvent() += []()
         {
-            CIniReader iniReader("");
-            FrameCapture::ReadIni(iniReader);
+            SettingsReader reader;
+            FrameCapture::ReadIni(reader);
             IniReload::Add(FrameCapture::ReadIni);
             FusionFix::onGameProcessEvent() += FrameCapture::PollKey;
             DrawCapture::AddObserver(&FrameCapture::DrawObserver);

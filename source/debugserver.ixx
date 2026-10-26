@@ -26,6 +26,7 @@ module;
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <asi_settings/asi_settings.h>
 #include "FusionLog.hpp"
 
 #pragma comment(lib, "ws2_32.lib")
@@ -40,6 +41,7 @@ import inireload;
 import natives;
 import postfxprofiler;
 import profiler;
+import settings;
 
 // [DEBUG] DebugServerPort: a server on 127.0.0.1 that a tool (tools/gta4-live-mcp in the recomp's repository) reaches
 // through an SSH tunnel, to look into the running game from another machine: memory (read, search, signatures, and
@@ -836,7 +838,7 @@ namespace DebugServer
             {"pointer_size", std::to_string(sizeof(void*))},
             {"endianness", Quote("little")},
             {"allow_write", allowWrite ? "true" : "false"},
-            {"ini", Quote(Utf8(CIniReader("").GetIniPath()))},
+            {"ini", Quote(Utf8(SettingsPlugin().CfgPath()))},
             {"logs_dir", Quote(Utf8(FusionLog::Directory()))},
         });
     }
@@ -961,22 +963,26 @@ namespace DebugServer
         return Object({{"matches", Array(matches)}, {"total", std::to_string(pattern.size())}});
     }
 
+    // A setting of the description (SECTION.Key): its value in effect, empty for a key the description lacks
     std::string IniGet(const Request& request)
     {
-        CIniReader ini("");
         const std::string section = request.Get("section"), key = request.Get("key");
-        return Object({{"section", Quote(section)}, {"key", Quote(key)}, {"value", Quote(ini.ReadString(section, key, ""))}});
+        return Object({{"section", Quote(section)}, {"key", Quote(key)}, {"value", Quote(SettingsPlugin().Get(section + "." + key))}});
     }
 
-    // Writes the value to the ini and has it read again by the next frame, as Ctrl+Shift+F10 would.
+    // Sets the value as the menu would: stored in the cfg, and read again by the next frame as after Ctrl+Shift+F10.
     std::string IniSet(const Request& request)
     {
-        CIniReader ini("");
         const std::string section = request.Get("section"), key = request.Get("key"), value = request.Get("value");
-        ini.WriteString(section, key, value, true);
+        const auto id = section + "." + key;
+        const auto result = SettingsPlugin().Set(id, value, true);
+        if (result == ASI_SETTINGS_UNKNOWN_ID)
+            throw std::runtime_error("no setting " + id + " in the description (settings/GTAIV.EFLC.FusionFix.json)");
+        if (result != ASI_SETTINGS_OK)
+            throw std::runtime_error("the value " + value + " of " + id + " is refused (" + std::to_string(result) + ")");
         IniReload::Request();
         FusionLog::Write("DebugServer", "Ini", "[%s] %s = %s\n", section.c_str(), key.c_str(), value.c_str());
-        return Object({{"section", Quote(section)}, {"key", Quote(key)}, {"value", Quote(ini.ReadString(section, key, ""))},
+        return Object({{"section", Quote(section)}, {"key", Quote(key)}, {"value", Quote(SettingsPlugin().Get(id))},
             {"note", Quote("read again at the next frame; what is set up at startup needs a restart")}});
     }
 
@@ -2377,9 +2383,9 @@ public:
     {
         FusionFix::onInitEvent() += []()
         {
-            CIniReader iniReader("");
-            const int port = iniReader.ReadInteger("DEBUG", "DebugServerPort", 0);
-            DebugServer::allowWrite = iniReader.ReadInteger("DEBUG", "DebugServerAllowWrite", 0) != 0;
+            SettingsReader reader;
+            const int port = reader.ReadInteger("DEBUG", "DebugServerPort", 0);
+            DebugServer::allowWrite = reader.ReadInteger("DEBUG", "DebugServerAllowWrite", 0) != 0;
             if (port > 0 && port < 65536)
             {
                 FusionFix::onBeforePresent() += []()

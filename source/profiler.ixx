@@ -25,6 +25,7 @@ module;
 export module profiler;
 
 import common;
+import settings;
 
 // A sampling profiler ([DEBUG] Profiler in the ini): a thread of its own stops the busiest threads of the game
 // Profiler times a second for an instant each, takes where each one is (its instruction and the return addresses
@@ -1139,11 +1140,11 @@ public:
 
         FusionFix::onInitEvent() += []()
         {
-            CIniReader iniReader("");
-            nRate = std::clamp(iniReader.ReadInteger("DEBUG", "Profiler", 0), 0, 4000);
-            nThreads = std::clamp(iniReader.ReadInteger("DEBUG", "ProfilerThreads", 4), 1, 32);
-            nInterval = std::clamp(iniReader.ReadInteger("DEBUG", "ProfilerInterval", 30), 5, 600);
-            nSpikeMs = std::clamp(iniReader.ReadInteger("DEBUG", "ProfilerSpikeMs", 50), 0, 2000);
+            SettingsReader reader;
+            nRate = std::clamp(reader.ReadInteger("DEBUG", "Profiler", 0), 0, 4000);
+            nThreads = std::clamp(reader.ReadInteger("DEBUG", "ProfilerThreads", 4), 1, 32);
+            nInterval = std::clamp(reader.ReadInteger("DEBUG", "ProfilerInterval", 30), 5, 600);
+            nSpikeMs = std::clamp(reader.ReadInteger("DEBUG", "ProfilerSpikeMs", 50), 0, 2000);
             if (!nRate)
                 return;
             bRunning = true;

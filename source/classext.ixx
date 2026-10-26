@@ -15,24 +15,7 @@ export class CPedIntelligenceExt
 {
 public:
     float m_fTimeStepAccumulator = 0.0f;
-};
-
-export class CTimerExt
-{
-public:
-    static uint32_t m_logicalFrameCounter;
-    static uint32_t m_logicalFramesPassed;
-
-public:
-    static uint32_t GetLogicalFrameCounter()
-    {
-        return m_logicalFrameCounter;
-    }
-
-    static uint32_t GetLogicalFramesPassed() 
-    { 
-        return m_logicalFramesPassed;
-    }
+    float m_fPinnedDownDecay = 0.0f; // the part of a point not taken off the pinned-down amount yet
 };
 
 export class CCamFollowVehicleExt

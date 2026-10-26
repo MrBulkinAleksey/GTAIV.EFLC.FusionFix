@@ -355,8 +355,6 @@ namespace CoronaRender
         if (!bReady)
             return false;
 
-        static auto distantLights = FusionFixSettings.GetRef("PREF_DISTANTLIGHTS");
-        bool bDistantLights = distantLights && distantLights->get();
         uint32_t flags = *GetRenderFlags();
         bool reflection = (flags >> 0x12) & 1;  // technique 0xf, and coronas with +0x1b set left out
         bool dim = (flags >> 0x11) & 1;
@@ -589,7 +587,7 @@ namespace CoronaRender
                     brightness = t > limit ? limit : t;
                 }
                 else if (dim)
-                    brightness *= bDistantLights ? 1.0f : *pDimScale;   // as lodlights' WaterMultiplierHook has it
+                    brightness *= *pDimScale;
 
                 // Moved toward the camera by +0x14
                 float d[3] = { pos[0] - camera[0], pos[1] - camera[1], pos[2] - camera[2] };
@@ -666,8 +664,8 @@ public:
         FusionFix::onInitEvent() += []()
         {
             using namespace CoronaRender;
-            CIniReader iniReader("");
-            nMode = std::clamp(iniReader.ReadInteger("PROJECT2DFX", "CoronaRenderer", 1), 0, 2);
+            SettingsReader reader;
+            nMode = std::clamp(reader.ReadInteger("PROJECT2DFX", "CoronaRenderer", 1), 0, 2);
             if (!nMode)
                 return;
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
