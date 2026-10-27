@@ -1530,7 +1530,13 @@ namespace
         }
 
         Log("The helper exited, starting it again");
-        bridge->ReleaseImports();
+        {
+            // Nothing signals its fences any more: what still waits on them goes first
+            std::lock_guard lock(Watchdog::mutex);
+            bridge->SignalFromCpu(fenceValue);
+            bridge->ReleaseImports();
+            Watchdog::value = 0;
+        }
         helper.Stop(false);
         helper.Close();
         configuredBackend = 0;
@@ -1570,6 +1576,47 @@ namespace
         }
     }
 
+    // The GPU waits on the helper's fences, let through from a thread of their own when the helper doesn't signal them
+    // in time (it hangs, or its work waits for something that never comes). The render thread can't be the one: it may
+    // be blocked in a Present that waits for that GPU work, and never get back to CollectPending, which lets such a
+    // wait through too. Whatever replaces the bridge's fences (Import, ReleaseImports, PrepareGameFence) holds mutex.
+    namespace Watchdog
+    {
+        constexpr ULONGLONG TimeoutMs = 2000;
+        std::mutex mutex;
+        uint64_t value = 0;         // the output value the GPU waits for, 0 when none
+        ULONGLONG deadline = 0;
+
+        void Run()
+        {
+            static uint32_t reported = 0;
+            for (;;)
+            {
+                Sleep(100);
+                std::lock_guard lock(mutex);
+                if (!value || GetTickCount64() < deadline)
+                    continue;
+                if (bridge && !bridge->WaitOnCpu())
+                {
+                    if (Report(reported))
+                        Log("%s: the helper didn't signal %llu in %llu ms, the GPU's wait let through", CommandName(pendingCommand),
+                            value, TimeoutMs);
+                    bridge->SignalFromCpu(value);
+                }
+                value = 0;
+            }
+        }
+
+        void Arm(uint64_t outputValue)
+        {
+            static std::once_flag started;
+            std::call_once(started, [] { std::thread(Run).detach(); });
+            std::lock_guard lock(mutex);
+            value = outputValue;
+            deadline = GetTickCount64() + TimeoutMs;
+        }
+    }
+
     // The request posted last without waiting is answered before anything else is written. The answer came long
     // ago, the helper answers once its GPU work is submitted. False: nothing can be asked of the helper now.
     bool CollectPending()
@@ -1588,7 +1635,10 @@ namespace
             Log("%s %s%s", CommandName(pendingCommand), answer == HelperProcess::Answer::None ? "got no answer" : "failed", exited ? ", the helper exited" : "");
         // The copy of the output waits on the GPU for a value nobody will signal now
         if (answer == HelperProcess::Answer::None)
+        {
+            std::lock_guard lock(Watchdog::mutex);
             bridge->SignalFromCpu(pendingOutputValue);
+        }
         if (exited)
         {
             Lost();
@@ -1616,6 +1666,9 @@ namespace
         helper.Post(command);
         pendingCommand = command;
         pendingOutputValue = outputValue;
+        // The GPU waits for it (not on the CPU, where Request waits with a timeout)
+        if (outputValue && bridge && !bridge->WaitOnCpu())
+            Watchdog::Arm(outputValue);
     }
 }
 
@@ -1784,7 +1837,11 @@ export namespace Upscaler
             configuredPreset != frame.DLSSPreset || configuredFlags != flags;
         if (reconfigure)
         {
-            bridge->ReleaseImports();
+            {
+                std::lock_guard lock(Watchdog::mutex);
+                bridge->ReleaseImports();
+                Watchdog::value = 0;
+            }
             // A generated frame not taken yet went with the shared textures
             generatedValue = 0;
             // The helper hides its window without the presentation, or shows it again with its first frame
@@ -1813,8 +1870,11 @@ export namespace Upscaler
             shared.PresentWindow = reinterpret_cast<uint64_t>(frame.PresentWindow);
             shared.ChildWindow = 0;
             shared.PresentFenceHandle = 0;
-            if (bridge->PrepareGameFence(shared, helper.process))
-                shared.Flags |= Protocol::ConfigureFlags::GameFence;
+            {
+                std::lock_guard lock(Watchdog::mutex);
+                if (bridge->PrepareGameFence(shared, helper.process))
+                    shared.Flags |= Protocol::ConfigureFlags::GameFence;
+            }
             const auto configureStart = GetTickCount64();
             if (!helper.Request(Protocol::Command::Configure, 15000))
             {
@@ -1834,7 +1894,12 @@ export namespace Upscaler
                 Log("The helper could not set up its presentation, the game presents");
             else if ((flags & Protocol::ConfigureFlags::AmdPacing) && !(shared.Flags & Protocol::ConfigureFlags::AmdPacing))
                 Log("AMD's frame generation swap chain could not be set up: the helper paces the frames itself");
-            if (!bridge->Import(shared, frame.Width, frame.Height, outputWidth, outputHeight))
+            bool imported;
+            {
+                std::lock_guard lock(Watchdog::mutex);
+                imported = bridge->Import(shared, frame.Width, frame.Height, outputWidth, outputHeight);
+            }
+            if (!imported)
             {
                 Log("Configure %ux%u -> %ux%u: the shared resources could not be imported", frame.Width, frame.Height, outputWidth, outputHeight);
                 return false;
