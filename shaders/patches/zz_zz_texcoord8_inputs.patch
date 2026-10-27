@@ -1,0 +1,192 @@
+diff --git a/win32_30_nv8/gta_normal/gta_normalPS3.asm b/win32_30_nv8/gta_normal/gta_normalPS3.asm
+index 7b59117..d8f8428 100644
+--- a/win32_30_nv8/gta_normal/gta_normalPS3.asm
++++ b/win32_30_nv8/gta_normal/gta_normalPS3.asm
+@@ -54,7 +54,7 @@
+     dcl vPos.xy
+     dcl_2d s0
+     dcl_2d s1
+-    dcl_texcoord8 v5
++    dcl_texcoord8 v6 // FusionFix zz_zz_texcoord8_inputs.patch: v5 is ours
+     dcl_2d s12 // FusionFix detail texture
+     texld r0, v0, s0
+     // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
+@@ -346,8 +346,8 @@
+ // approximately 36 instruction slots used (2 texture, 34 arithmetic)
+ 
+     // Motion vectors next to the stencil: current minus previous position, in texture coordinates
+-    rcp r30.x, v5.w
+-    mul r30.xy, v5, r30.x
++    rcp r30.x, v6.w
++    mul r30.xy, v6, r30.x
+     mad r30.xy, r30, c201.xy, c201.z
+     mad r31.xy, vPos, c200.xy, c200.zw
+     add r29.yz, r31.xxy, -r30.xxy
+diff --git a/win32_30_nv8/gta_normal/gta_normalPS4.asm b/win32_30_nv8/gta_normal/gta_normalPS4.asm
+index 3f6de93..9a36403 100644
+--- a/win32_30_nv8/gta_normal/gta_normalPS4.asm
++++ b/win32_30_nv8/gta_normal/gta_normalPS4.asm
+@@ -55,7 +55,7 @@
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s10
+-    dcl_texcoord8 v5
++    dcl_texcoord8 v6 // FusionFix zz_zz_texcoord8_inputs.patch: v5 is ours
+     dcl_2d s12 // FusionFix detail texture
+     texld r0, v0, s1
+     add r0.z, -r0.w, c2.w
+@@ -336,8 +336,8 @@
+ // approximately 49 instruction slots used (4 texture, 45 arithmetic)
+ 
+     // Motion vectors next to the stencil: current minus previous position, in texture coordinates
+-    rcp r30.x, v5.w
+-    mul r30.xy, v5, r30.x
++    rcp r30.x, v6.w
++    mul r30.xy, v6, r30.x
+     mad r30.xy, r30, c201.xy, c201.z
+     mad r31.xy, vPos, c200.xy, c200.zw
+     add r29.yz, r31.xxy, -r30.xxy
+diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
+index 03e2cb7..746dc2b 100644
+--- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
++++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
+@@ -59,7 +59,7 @@
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
+-    dcl_texcoord8 v5
++    dcl_texcoord8 v6 // FusionFix zz_zz_texcoord8_inputs.patch: v5 is ours
+     dcl_2d s12 // FusionFix detail texture
+     texld r0, v0, s0
+     // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
+@@ -354,8 +354,8 @@
+ // approximately 39 instruction slots used (3 texture, 36 arithmetic)
+ 
+     // Motion vectors next to the stencil: current minus previous position, in texture coordinates
+-    rcp r30.x, v5.w
+-    mul r30.xy, v5, r30.x
++    rcp r30.x, v6.w
++    mul r30.xy, v6, r30.x
+     mad r30.xy, r30, c201.xy, c201.z
+     mad r31.xy, vPos, c200.xy, c200.zw
+     add r29.yz, r31.xxy, -r30.xxy
+diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
+index 5844024..6d1fd80 100644
+--- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
++++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
+@@ -60,7 +60,7 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s10
+-    dcl_texcoord8 v5
++    dcl_texcoord8 v6 // FusionFix zz_zz_texcoord8_inputs.patch: v5 is ours
+     dcl_2d s12 // FusionFix detail texture
+     texld r0, v0, s1
+     add r0.z, -r0.w, c2.w
+@@ -344,8 +344,8 @@
+ // approximately 52 instruction slots used (5 texture, 47 arithmetic)
+ 
+     // Motion vectors next to the stencil: current minus previous position, in texture coordinates
+-    rcp r30.x, v5.w
+-    mul r30.xy, v5, r30.x
++    rcp r30.x, v6.w
++    mul r30.xy, v6, r30.x
+     mad r30.xy, r30, c201.xy, c201.z
+     mad r31.xy, vPos, c200.xy, c200.zw
+     add r29.yz, r31.xxy, -r30.xxy
+diff --git a/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm b/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
+index d67d5e7..152a41b 100644
+--- a/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
++++ b/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
+@@ -44,7 +44,7 @@
+     dcl vPos.xy
+     dcl_2d s0
+     dcl_2d s1
+-    dcl_texcoord8 v5
++    dcl_texcoord8 v6 // FusionFix zz_zz_texcoord8_inputs.patch: v5 is ours
+     dcl_2d s12 // FusionFix detail texture
+     mul r20.xy, vPos.xy, c153.x
+     frc r20.xy, r20.xy
+@@ -187,8 +187,8 @@
+ // approximately 12 instruction slots used (2 texture, 10 arithmetic)
+ 
+     // Motion vectors next to the stencil: current minus previous position, in texture coordinates
+-    rcp r30.x, v5.w
+-    mul r30.xy, v5, r30.x
++    rcp r30.x, v6.w
++    mul r30.xy, v6, r30.x
+     mad r30.xy, r30, c201.xy, c201.z
+     mad r31.xy, vPos, c200.xy, c200.zw
+     add r29.yz, r31.xxy, -r30.xxy
+diff --git a/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm b/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
+index 6009ed4..20f9059 100644
+--- a/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
++++ b/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
+@@ -48,7 +48,7 @@
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
+-    dcl_texcoord8 v6
++    dcl_texcoord8 v7 // FusionFix zz_zz_texcoord8_inputs.patch: v6 is ours
+     dcl_2d s12 // FusionFix detail texture
+     mul r20.xy, vPos.xy, c153.x
+     frc r20.xy, r20.xy
+@@ -223,8 +223,8 @@
+ // approximately 15 instruction slots used (3 texture, 12 arithmetic)
+ 
+     // Motion vectors next to the stencil: current minus previous position, in texture coordinates
+-    rcp r30.x, v6.w
+-    mul r30.xy, v6, r30.x
++    rcp r30.x, v7.w
++    mul r30.xy, v7, r30.x
+     mad r30.xy, r30, c201.xy, c201.z
+     mad r31.xy, vPos, c200.xy, c200.zw
+     add r29.yz, r31.xxy, -r30.xxy
+diff --git a/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm b/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
+index b3c94c5..5aa63cc 100644
+--- a/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
++++ b/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
+@@ -52,7 +52,7 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s3
+-    dcl_texcoord8 v7
++    dcl_texcoord8 v8 // FusionFix zz_zz_texcoord8_inputs.patch: v7 is ours
+     dcl_2d s12 // FusionFix detail texture
+     mul r20.xy, vPos.xy, c153.x
+     frc r20.xy, r20.xy
+@@ -259,8 +259,8 @@
+ // approximately 18 instruction slots used (4 texture, 14 arithmetic)
+ 
+     // Motion vectors next to the stencil: current minus previous position, in texture coordinates
+-    rcp r30.x, v7.w
+-    mul r30.xy, v7, r30.x
++    rcp r30.x, v8.w
++    mul r30.xy, v8, r30.x
+     mad r30.xy, r30, c201.xy, c201.z
+     mad r31.xy, vPos, c200.xy, c200.zw
+     add r29.yz, r31.xxy, -r30.xxy
+diff --git a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
+index 6be65ab..14c843c 100644
+--- a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
++++ b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
+@@ -86,7 +86,7 @@
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
+-    dcl_texcoord8 v5
++    dcl_texcoord8 v8 // FusionFix zz_zz_texcoord8_inputs.patch: v5 is ours
+     dcl vPos.xy
+     mov r21.xyz, c74
+     mov r21.w, c73.x
+@@ -485,8 +485,8 @@
+ // approximately 78 instruction slots used (3 texture, 75 arithmetic)
+ 
+     // Motion vectors next to the stencil: current minus previous position, in texture coordinates
+-    rcp r30.x, v5.w
+-    mul r30.xy, v5, r30.x
++    rcp r30.x, v8.w
++    mul r30.xy, v8, r30.x
+     mad r30.xy, r30, c201.xy, c201.z
+     mad r31.xy, vPos, c200.xy, c200.zw
+     add r29.yz, r31.xxy, -r30.xxy
