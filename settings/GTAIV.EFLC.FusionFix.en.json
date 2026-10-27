@@ -388,6 +388,7 @@
   "FF_LIGHTING": "Lighting",
   "FF_TEXTURES": "Textures",
   "FF_DEBUG": "Debug",
+  "FF_ADVANCED": "Advanced",
   "SAO": "SAO",
   "GTAO": "GTAO",
   "SSRHalf": "Half Resolution",
