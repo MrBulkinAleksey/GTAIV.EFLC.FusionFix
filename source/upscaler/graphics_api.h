@@ -1215,17 +1215,6 @@ namespace FusionFixGraphicsApi
             return VkCreateInstanceHook().stdcall<int32_t>(info, allocator, instance);
         }
 
-        // FusionFix: switches of an experiment (Vulkan hangs in CreateDevice under Proton): an environment variable set to
-        // 1 leaves a step out, logged
-        inline bool Experiment(const char* name)
-        {
-            char value[8] = {};
-            if (!GetEnvironmentVariableA(name, value, DWORD(sizeof(value))) || value[0] != '1')
-                return false;
-            Log("Experiment: %s, its step left out", name);
-            return true;
-        }
-
         // Once, before DXVK creates its instance
         inline void HookVulkanLoader()
         {
@@ -1279,6 +1268,8 @@ namespace FusionFixGraphicsApi
 
         inline HRESULT WINAPI SystemCreateDevice(IDirect3D9*, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS*, IDirect3DDevice9**);
         inline HRESULT WINAPI SystemCreateDeviceEx(IDirect3D9Ex*, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS*, D3DDISPLAYMODEEX*, IDirect3DDevice9Ex**);
+        inline IDirect3D9* WINAPI Direct3DCreate9(UINT sdk);
+        inline HRESULT WINAPI Direct3DCreate9Ex(UINT sdk, IDirect3D9Ex** out);
 
         inline void RememberOn12(IDirect3D9* d3d)
         {
@@ -1483,6 +1474,27 @@ namespace FusionFixGraphicsApi
             if (s.systemPatched || !s.system)
                 return;
             s.systemPatched = true;
+            // FusionFix: under Wine no object of the system's d3d9 is made: it is Proton's DXVK, and one made here leaves
+            // vulkan.dll's CreateDevice waiting on a lock in dxgi.dll for good. Its Direct3DCreate9(Ex) themselves give
+            // vulkan.dll's objects instead, so a wrapper on the system's d3d9 runs on the DXVK next to the game too
+            // (Wine has no D3D9On12); the fallback calls the originals.
+            if (auto ntdll = GetModuleHandleW(L"ntdll.dll"); ntdll && GetProcAddress(ntdll, "wine_get_version"))
+            {
+                static safetyhook::InlineHook create9, create9Ex;
+                if (s.status.effective == Api::Vulkan)
+                {
+                    if (s.systemCreate9)
+                        create9 = safetyhook::create_inline(reinterpret_cast<void*>(s.systemCreate9), reinterpret_cast<void*>(&Direct3DCreate9));
+                    if (create9)
+                        s.systemCreate9 = create9.original<Create9>();
+                    if (s.systemCreate9Ex)
+                        create9Ex = safetyhook::create_inline(reinterpret_cast<void*>(s.systemCreate9Ex), reinterpret_cast<void*>(&Direct3DCreate9Ex));
+                    if (create9Ex)
+                        s.systemCreate9Ex = create9Ex.original<Create9Ex>();
+                }
+                Log("System objects: none under Wine, the system's Direct3DCreate9 %s", create9 ? "gives vulkan.dll's objects" : "left as it is");
+                return;
+            }
             if (auto create = reinterpret_cast<Create9>(GetProcAddress(s.system, "Direct3DCreate9")))
             {
                 if (auto d3d = create(D3D_SDK_VERSION))
@@ -1850,10 +1862,6 @@ namespace FusionFixGraphicsApi
             if (s.status.effective == Api::Vulkan)
             {
                 // By full path; DXVK's own imports (vulkan-1.dll) come from System32
-                // FusionFix: FUSIONFIX_PLAIN_DXVK_LOAD=1 loads it as the old proxy did (Vulkan hangs in CreateDevice under Proton)
-                if (detail::Experiment("FUSIONFIX_PLAIN_DXVK_LOAD"))
-                    s.dxvk = LoadLibraryW(DxvkPath().c_str());
-                else
                 s.dxvk = LoadLibraryExW(DxvkPath().c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
                 if (!s.dxvk || !GetProcAddress(s.dxvk, "Direct3DCreate9"))
                 {
@@ -1865,7 +1873,7 @@ namespace FusionFixGraphicsApi
                     s.status.effective = Api::Direct3D9;
                     s.status.why = why;
                 }
-                else if (!detail::Experiment("FUSIONFIX_NO_VULKAN_HOOK")) // FusionFix: an experiment, see above
+                else
                     detail::HookVulkanLoader();
             }
             // The driver now: its capabilities (exclusive fullscreen) are known before the game makes its window
@@ -1899,7 +1907,7 @@ namespace FusionFixGraphicsApi
                 s.status.why.empty() ? "" : ": ", s.status.why.c_str());
         }
         detail::PatchAll();
-        if ((s.status.effective != Api::Direct3D9 || s.noticePending) && !detail::Experiment("FUSIONFIX_NO_SYSTEM_PROBE")) // FusionFix: an experiment
+        if (s.status.effective != Api::Direct3D9 || s.noticePending)
             detail::PatchSystemObjects();
         // The notice names a wrapper found only now
         if (s.noticePending && !s.noticeShown)
