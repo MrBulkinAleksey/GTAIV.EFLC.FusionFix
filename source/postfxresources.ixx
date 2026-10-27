@@ -918,7 +918,7 @@ public:
     bool bVehicleBoxShadowsBlend = true; // VehicleBoxShadowsBlend, read with the others
     uint32_t nVehicleBoxShadowSlotFadeMs = 600;
     uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300, nVehicleBoxShadowSizeFadeMs = 300;
-    float fVehicleBoxShadowsMaxDistance = 100.0f; // metres from the camera to a lamp's light past which it has no boxes
+    float fVehicleBoxShadowsMaxDistance = 200.0f; // metres from the camera to a lamp's light past which it has no boxes
     int32_t nVehicleBoxShadowsPerLamp = 3; // cars a lamp shadows as boxes, up to five; each costs its lit pixels about as much again
     int32_t nVehicleBoxShadowsPerCar = 2;  // lamps that may shadow one car as a box, the strongest on it; 0 any number
     float fVehicleBoxShadowsMinLight = 0.04f; // the least share of a lamp's light at the car, (1 - distance / radius)^2, for a box
@@ -2048,7 +2048,7 @@ public:
             IniInt("NIGHTSHADOWS", "VehicleBoxShadowsPerLamp", &PostFxResource::nVehicleBoxShadowsPerLamp, 3, 1, 5),
             IniInt("NIGHTSHADOWS", "VehicleBoxShadowsPerCar", &PostFxResource::nVehicleBoxShadowsPerCar, 2, 0, 8),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsMinLight", &PostFxResource::fVehicleBoxShadowsMinLight, 0.04f, 0.0f, 1.0f),
-            IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsMaxDistance", &PostFxResource::fVehicleBoxShadowsMaxDistance, 100.0f, 0.0f, 1000.0f),
+            IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsMaxDistance", &PostFxResource::fVehicleBoxShadowsMaxDistance, 200.0f, 0.0f, 1000.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsFollowLight", &PostFxResource::fVehicleBoxShadowFollowLight, 1.0f, 0.0f, 1.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsLowLightNarrow", &PostFxResource::fVehicleBoxShadowLowLightNarrow, 1.0f, 0.2f, 1.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsLowLightHeight", &PostFxResource::fVehicleBoxShadowLowLightHeight, 0.6f, 0.2f, 1.0f),
