@@ -576,7 +576,8 @@ namespace DebugServer
         };
         settings.seconds = number("seconds", settings.seconds, 1, 300);
         settings.rate = number("rate", settings.rate, 50, 4000);
-        settings.threads = number("threads", settings.threads, 1, 32);
+        settings.threads = number("threads", settings.threads, 1, 64);
+        settings.waiting = request.Number("waiting", 0) != 0;
         settings.spikeMs = number("spike_ms", settings.spikeMs, 0, 2000);
         settings.functions = number("functions", settings.functions, 5, 500);
         settings.stacks = number("stacks", settings.stacks, 0, 1000);

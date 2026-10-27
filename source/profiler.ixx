@@ -51,7 +51,8 @@ import settings;
 // rate, threads and long frame length, started for it if the ini has it off and stopped after; the counts start
 // afresh with it, the periodic reports wait meanwhile, and its report (as the log's, with more functions, the
 // session's most common stacks and its long frames) is the answer, also written to the log as Profiler.Session,
-// with the .folded file of the whole run.
+// with the .folded file of the whole run. With `waiting` it samples the threads that wait as well (up to `threads` of
+// them), so a hung game shows what each thread waits in: the busiest alone leave a deadlock with nothing to show.
 namespace Profiler
 {
     constexpr uint32_t StackCopy = 4096;    // bytes of a stopped thread's stack looked at for return addresses; 1 KB
@@ -71,7 +72,9 @@ namespace Profiler
     export struct SessionSettings
     {
         int seconds = 10, rate = 1000, threads = 8, spikeMs = 50, functions = 40, stacks = 40, spikes = 10;
+        bool waiting = false;   // the threads that wait too, not only the busiest: where a hung game stands
     };
+    bool bWaitingToo = false;   // a session's `waiting`, while it runs
     std::mutex sessionMutex;
     std::condition_variable sessionDone;
     bool bSessionAsked = false, bSessionAnswered = false, bStopAfterSession = false;
@@ -504,7 +507,7 @@ namespace Profiler
         for (auto& [id, thread] : threads)
         {
             thread.sampled = false;
-            if (thread.alive && !thread.excluded && thread.cpuSecond > 100000) // 10 ms of the last second
+            if (thread.alive && !thread.excluded && (bWaitingToo || thread.cpuSecond > 100000)) // 10 ms of the last second
                 busiest.push_back(&thread);
         }
         std::sort(busiest.begin(), busiest.end(), [](auto a, auto b) { return a->cpuSecond > b->cpuSecond; });
@@ -1007,6 +1010,7 @@ namespace Profiler
                     bInSession = true;
                     before = { 0, nRate, nThreads, nSpikeMs };
                     nRate = session.rate, nThreads = session.threads, nSpikeMs = session.spikeMs;
+                    bWaitingToo = session.waiting;
                     lock.unlock();
                     QueryPerformanceCounter(&sessionStart);
                     ClearCounts();
@@ -1036,6 +1040,7 @@ namespace Profiler
                     sessionFolded.clear();
                     sessionSpikes.clear();
                     nRate = before.rate, nThreads = before.threads, nSpikeMs = before.spikeMs;
+                    bWaitingToo = false;
                     lastReport = now;
                     {
                         std::lock_guard lock(sessionMutex);
