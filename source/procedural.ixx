@@ -422,6 +422,10 @@ namespace Procedural
     std::unordered_map<uint8_t*, MadeFrom> madeFrom;
     uint32_t nConeReleased = 0;
 
+    // ProceduralGroundCovers (below): on, and the covers' version
+    bool bCovers = true;
+    volatile uint32_t nCoversVersion = 0;
+
     // Statistics for the log
     uint32_t nUsedMax = 0;
     uint32_t nCandidatesCapped = 0, nEntitiesCapped = 0;
@@ -807,7 +811,6 @@ namespace Procedural
     // definition, triangle) are not queued, props made before the cover came are let go (ReleaseCovered), and GPU grass
     // leaves those cells (ProceduralGround::CopyCovers). Covers are written on the main thread, which reads them
     // without the lock; the render thread's copies take it shared.
-    bool bCovers = true;
     constexpr float kCoverCell = 4.0f;
     constexpr float kCoverReach = 40.0f;
     constexpr float kCoverForget = 80.0f;
@@ -823,7 +826,6 @@ namespace Procedural
     struct CoverScan { uintptr_t vertices = 0; float centre[2] = {}; uint32_t next = 0; bool active = false; };
     std::unordered_map<const uint8_t*, CoverScan> coverScans;
     uint32_t nCoverFrame = ~0u, nCoverLeft = 0;
-    volatile uint32_t nCoversVersion = 0;
     uint32_t nCoverSkipped = 0, nCoverReleased = 0;
 
     uint8_t GrassSurface(uint32_t material);
