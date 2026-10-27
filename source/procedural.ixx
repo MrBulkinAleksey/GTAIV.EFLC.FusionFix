@@ -422,9 +422,40 @@ namespace Procedural
     std::unordered_map<uint8_t*, MadeFrom> madeFrom;
     uint32_t nConeReleased = 0;
 
-    // ProceduralGroundCovers (below): on, and the covers' version
+    // ProceduralGroundCovers (below): on, and the covers' version; the props made from the queue by the cell of their
+    // entry, so new covers find those under them without a walk of them all
     bool bCovers = true;
     volatile uint32_t nCoversVersion = 0;
+    constexpr float kCoverCell = 4.0f;
+    uint64_t CoverCellKey(int x, int y) { return uint64_t(uint32_t(x)) << 32 | uint32_t(y); }
+    int CoverCellOf(float v) { return int(std::floor(v / kCoverCell)); }
+    uint64_t CoverCellAt(const float* place) { return CoverCellKey(CoverCellOf(place[0]), CoverCellOf(place[1])); }
+    std::unordered_map<uint64_t, std::vector<uint8_t*>> madeCells;
+
+    void ForgetMade(uint8_t* record)
+    {
+        auto it = madeFrom.find(record);
+        if (it == madeFrom.end())
+            return;
+        if (auto cell = madeCells.find(CoverCellAt((const float*)it->second.entry)); cell != madeCells.end())
+        {
+            auto& records = cell->second;
+            if (auto at = std::find(records.begin(), records.end(), record); at != records.end())
+            {
+                *at = records.back();
+                records.pop_back();
+            }
+            if (records.empty())
+                madeCells.erase(cell);
+        }
+        madeFrom.erase(it);
+    }
+
+    void ForgetAllMade()
+    {
+        madeFrom.clear();
+        madeCells.clear();
+    }
 
     // Statistics for the log
     uint32_t nUsedMax = 0;
@@ -480,7 +511,7 @@ namespace Procedural
         nCarried = 0;
         waiting.clear();
         parked.clear();
-        madeFrom.clear();
+        ForgetAllMade();
         coneLastTime = 0;
         queuedAt.clear();
         Trace(std::format("I {} generator init, records {}", When(), Records()));
@@ -517,7 +548,7 @@ namespace Procedural
             *(uint32_t*)(generator + 0x5220) = VanillaRecords;
             pGameQueue = nullptr;
         }
-        madeFrom.clear();
+        ForgetAllMade();
     }
 
     // ProceduralGatherPriority: the manager takes ground triangles in the order of the collision it walks (CE 0xc87b00),
@@ -712,7 +743,11 @@ namespace Procedural
             auto queue = *(uint8_t**)(pGenerator + 0x5224);
             auto entry = (uint8_t*)a1;
             if (queue && entry >= queue && entry < queue + size_t(*(uint32_t*)(pGenerator + 0x5220)) * QueueEntrySize)
+            {
+                ForgetMade(record);
                 memcpy(madeFrom[record].entry, entry, QueueEntrySize);
+                madeCells[CoverCellAt((const float*)entry)].push_back(record);
+            }
         }
         if (record)
         {
@@ -759,7 +794,7 @@ namespace Procedural
     SafetyHookInline shRelease;
     void __fastcall Release(uint8_t* generator, void* edx, uint8_t* record, void* list)
     {
-        madeFrom.erase(record);
+        ForgetMade(record);
         if (auto entity = *(uintptr_t*)(record + 8))
         {
             float position[3] = {};
@@ -804,14 +839,14 @@ namespace Procedural
     // centre moved kCoverRescan or the bound changed. Those facing up, of other materials than the grassy ones
     // (GrassSurface; the bound's +0xd4 and +0x5c calls, as the bound's take makes them) within kCoverReach past the
     // gathering radius are kept in world space as the triangle build makes its corners (CE 0xc87f40: the int16
-    // vertices at bound +0xb0 times +0x90 plus +0xa0, through the record's matrix, rows from +0, unless its +0x40 is
-    // set; a quad's second triangle 0, 2, 3), in kCoverCell cells, until kCoverForget past that radius. A
+    // set; a quad's second triangle 0, 2, 3), in kCoverCell cells, until kCoverForget past that radius; walls and grass
+    // are marked by record and not looked at again while its bound stays. A
     // place on a grassy triangle is under one when it lies level with it or up to CoverHeight above, there or
     // kCoverAround away (a plant's leaves): the generator's candidates there (CE 0xc093a0: generator, position, normal,
-    // definition, triangle) are not queued, props made before the cover came are let go (ReleaseCovered), and GPU grass
-    // leaves those cells (ProceduralGround::CopyCovers). Covers are written on the main thread, which reads them
-    // without the lock; the render thread's copies take it shared.
-    constexpr float kCoverCell = 4.0f;
+    // definition, triangle) are not queued, props made there before the cover came are let go (ReleaseCovered, by the
+    // cells new covers came into), and GPU grass leaves those cells (ProceduralGround::CopyCovers, on its builder's
+    // thread). Covers are written on the main thread, which reads them without the lock and never waits for it: a scan
+    // the builder's copy holds off goes on the next frame.
     constexpr float kCoverReach = 40.0f;
     constexpr float kCoverForget = 80.0f;
     constexpr float kCoverAround = 0.25f;
@@ -822,17 +857,16 @@ namespace Procedural
     SRWLOCK coversLock = SRWLOCK_INIT;
     std::unordered_map<uint64_t, CoverPolygon> covers;              // by bound << 32 | polygon
     std::unordered_map<uint64_t, std::vector<uint64_t>> coverCells;
-    // By scan record: its bound's vertices and the centre when it was last looked at, the next polygon while it is
-    struct CoverScan { uintptr_t vertices = 0; float centre[2] = {}; uint32_t next = 0; bool active = false; };
+    // By scan record: its bound's vertices and the centre when it was last looked at, the next polygon while it is,
+    // its polygons that are no cover (walls, slivers, grass)
+    struct CoverScan { uintptr_t vertices = 0; float centre[2] = {}; uint32_t next = 0; bool active = false; std::vector<bool> settled; };
     std::unordered_map<const uint8_t*, CoverScan> coverScans;
     uint32_t nCoverFrame = ~0u, nCoverLeft = 0;
+    std::unordered_set<uint64_t> dirtyCells;    // those new covers came into, and the ring round them
     uint32_t nCoverSkipped = 0, nCoverReleased = 0;
 
     uint8_t GrassSurface(uint32_t material);
     bool GrassSurfacesKnown();
-
-    uint64_t CoverCellKey(int x, int y) { return uint64_t(uint32_t(x)) << 32 | uint32_t(y); }
-    int CoverCellOf(float v) { return int(std::floor(v / kCoverCell)); }
 
     // The height of `t` at x, y seen from above, false off it
     bool CoverHeightAt(const ProceduralGround::Cover& t, float x, float y, float& z)
@@ -858,10 +892,19 @@ namespace Procedural
         static constexpr float kOffsets[5][2] = { { 0.0f, 0.0f }, { kCoverAround, 0.0f }, { -kCoverAround, 0.0f }, { 0.0f, kCoverAround }, { 0.0f, -kCoverAround } };
         if (covers.empty())
             return false;
-        for (int i = 0; i < (around ? 5 : 1); ++i)
+        // The points' cells, each once (one mostly, at most four)
+        const int points = around ? 5 : 1;
+        uint64_t cells[5];
+        int cellCount = 0;
+        for (int i = 0; i < points; ++i)
         {
-            const float x = place[0] + kOffsets[i][0], y = place[1] + kOffsets[i][1];
-            auto cell = coverCells.find(CoverCellKey(CoverCellOf(x), CoverCellOf(y)));
+            const uint64_t cell = CoverCellKey(CoverCellOf(place[0] + kOffsets[i][0]), CoverCellOf(place[1] + kOffsets[i][1]));
+            if (std::find(cells, cells + cellCount, cell) == cells + cellCount)
+                cells[cellCount++] = cell;
+        }
+        for (int j = 0; j < cellCount; ++j)
+        {
+            auto cell = coverCells.find(cells[j]);
             if (cell == coverCells.end())
                 continue;
             for (const auto key : cell->second)
@@ -870,12 +913,13 @@ namespace Procedural
                 if (it == covers.end())
                     continue;
                 for (int t = 0; t < it->second.count; ++t)
-                {
-                    float z;
-                    if (CoverHeightAt(it->second.triangles[t], x, y, z) && z - place[2] > -ProceduralGround::CoverBelow &&
-                        z - place[2] < ProceduralGround::CoverHeight)
-                        return true;
-                }
+                    for (int i = 0; i < points; ++i)
+                    {
+                        float z;
+                        if (CoverHeightAt(it->second.triangles[t], place[0] + kOffsets[i][0], place[1] + kOffsets[i][1], z) &&
+                            z - place[2] > -ProceduralGround::CoverBelow && z - place[2] < ProceduralGround::CoverHeight)
+                            return true;
+                    }
             }
         }
         return false;
@@ -916,17 +960,17 @@ namespace Procedural
         covers.erase(it);
     }
 
-    // A polygon without plants or props
-    void OfferCover(const uint8_t* bound, const uint8_t* record, uint32_t index)
+    // A polygon without plants or props (the lock held): false when it is no cover while its bound stays
+    bool OfferCover(const uint8_t* bound, const uint8_t* record, uint32_t index)
     {
         const uint64_t key = uint64_t(uintptr_t(bound)) << 32 | index;
         const auto vertices = *(const uintptr_t*)(bound + 0xB0);
         auto known = covers.find(key);
         if (known != covers.end() && known->second.vertices == vertices)
-            return;
+            return true;
         const auto polygons = *(const uint8_t* const*)(bound + 0x8C);
         if (!polygons || !vertices || index >= *(const uint32_t*)(bound + 0xCC))
-            return;
+            return false;
         const auto corners = (const uint16_t*)(polygons + size_t(index) * 32 + 0x10);
         const int n = corners[3] ? 4 : 3;
         const float* scale = (const float*)(bound + 0x90);
@@ -949,7 +993,7 @@ namespace Procedural
         for (int k = 0; k < n && !inReach; ++k)
             inReach = std::abs(w[k][0] - centre[0]) < reach && std::abs(w[k][1] - centre[1]) < reach;
         if (!inReach)
-            return;
+            return true;
 
         CoverPolygon c{};
         c.vertices = vertices;
@@ -972,12 +1016,11 @@ namespace Procedural
         // Its material last: two of the bound's virtual calls, as the walk makes them for the triangle build (+0xd4 the
         // polygon's material index, +0x5c its material)
         if (!c.count)
-            return;
+            return false;
         using Call = uint32_t(__thiscall*)(const uint8_t*, uint32_t);
         const auto vtable = *(const uintptr_t* const*)bound;
         if (GrassSurface(((Call)vtable[0x5c / 4])(bound, ((Call)vtable[0xd4 / 4])(bound, index))) != 0)
-            return;
-        AcquireSRWLockExclusive(&coversLock);
+            return false;
         if (known != covers.end())
             RemoveCover(known);
         if (covers.size() < kMaxCovers)
@@ -996,11 +1039,14 @@ namespace Procedural
                 for (int x = c.x0; x <= c.x1; ++x)
                     for (int y = c.y0; y <= c.y1; ++y)
                         coverCells[CoverCellKey(x, y)].push_back(key);
+                for (int x = c.x0 - 1; x <= c.x1 + 1; ++x)
+                    for (int y = c.y0 - 1; y <= c.y1 + 1; ++y)
+                        dirtyCells.insert(CoverCellKey(x, y));
                 covers[key] = c;
             }
         }
         nCoversVersion = nCoversVersion + 1;
-        ReleaseSRWLockExclusive(&coversLock);
+        return true;
     }
 
     // The walk's call for `record`: its polygons without plants or props looked at, kCoverBudget a frame in all
@@ -1027,23 +1073,34 @@ namespace Procedural
         const float* centre = (const float*)(pManager + 0xF40);
         const auto vertices = *(const uintptr_t*)(bound + 0xB0);
         auto& scan = coverScans[record];
+        if (scan.vertices != vertices || scan.settled.size() != count)
+        {
+            scan.vertices = vertices;
+            scan.settled.assign(count, false);
+            scan.active = false;
+            scan.centre[0] = scan.centre[1] = 1e30f;
+        }
         if (!scan.active)
         {
             const float dx = centre[0] - scan.centre[0], dy = centre[1] - scan.centre[1];
-            if (scan.vertices == vertices && dx * dx + dy * dy < kCoverRescan * kCoverRescan)
+            if (dx * dx + dy * dy < kCoverRescan * kCoverRescan)
                 return;
-            scan = { vertices, { centre[0], centre[1] }, 0, true };
+            scan.centre[0] = centre[0], scan.centre[1] = centre[1];
+            scan.next = 0;
+            scan.active = true;
         }
-        else if (scan.vertices != vertices)
-            scan = { vertices, { centre[0], centre[1] }, 0, true };
+        if (!nCoverLeft || !TryAcquireSRWLockExclusive(&coversLock))
+            return;
         for (; scan.next < count && nCoverLeft; ++scan.next)
         {
             const uint32_t bit = 2 * scan.next;    // and the next, in the same word
-            if ((bits[bit >> 5] >> (bit & 31)) & 3)
+            if (scan.settled[scan.next] || ((bits[bit >> 5] >> (bit & 31)) & 3))
                 continue;
             nCoverLeft--;
-            OfferCover(bound, record, scan.next);
+            if (!OfferCover(bound, record, scan.next))
+                scan.settled[scan.next] = true;
         }
+        ReleaseSRWLockExclusive(&coversLock);
         scan.active = scan.next < count;
     }
 
@@ -1054,7 +1111,8 @@ namespace Procedural
             return;
         const float* centre = (const float*)(pManager + 0xF40);
         const float reach = std::sqrt((std::max)(*(const float*)(pManager + 0x20), 0.0f)) + kCoverForget;
-        AcquireSRWLockExclusive(&coversLock);
+        if (!TryAcquireSRWLockExclusive(&coversLock))
+            return;
         bool removed = false;
         for (auto it = covers.begin(); it != covers.end();)
         {
@@ -1094,31 +1152,33 @@ namespace Procedural
         shCandidate.unsafe_fastcall(generator, edx, position, normal, definition, triangle);
     }
 
-    // Props of grass made before a cover over them came (a teleport, the walk reaching the road later) go as the game
-    // lets them go, their entries not kept: when the covers changed, every half second at most
+    // Props of grass made before a cover over them came (a teleport, the scan reaching the road later) go as the game
+    // lets them go, their entries not kept: those made in the cells new covers came into
     void ReleaseCovered(uint8_t* generator)
     {
-        static uint32_t checkedVersion = 0;
-        static uint64_t lastCheck = 0;
-        const uint64_t now = GetTickCount64();
-        if (!bCovers || checkedVersion == nCoversVersion || now - lastCheck < 500)
+        if (dirtyCells.empty())
             return;
-        checkedVersion = nCoversVersion;
-        lastCheck = now;
         std::vector<std::pair<uint8_t*, uint8_t*>> covered;
-        for (auto& [record, from] : madeFrom)
-        {
-            if (covered.size() >= ReleasesPerUpdate)
+        if (bCovers)
+            for (const auto cell : dirtyCells)
             {
-                checkedVersion--;   // the rest next time
-                break;
+                auto made = madeCells.find(cell);
+                if (made == madeCells.end())
+                    continue;
+                for (auto record : made->second)
+                {
+                    auto from = madeFrom.find(record);
+                    if (from == madeFrom.end())
+                        continue;
+                    const auto entry = from->second.entry;
+                    const auto provider = *(uint8_t* const*)(entry + 0x1C);
+                    if (!*(uintptr_t*)(record + 8) || *(uint8_t**)(record + 0xC) != provider)
+                        continue;
+                    if (OnGrass(provider) && UnderCover((const float*)entry, true))
+                        covered.emplace_back(record, *(uint8_t**)(entry + 0xC) + 0x38);
+                }
             }
-            const auto provider = *(uint8_t* const*)(from.entry + 0x1C);
-            if (!*(uintptr_t*)(record + 8) || *(uint8_t**)(record + 0xC) != provider)
-                continue;
-            if (OnGrass(provider) && UnderCover((const float*)from.entry, true))
-                covered.emplace_back(record, *(uint8_t**)(from.entry + 0xC) + 0x38);
-        }
+        dirtyCells.clear();
         for (auto& [record, list] : covered)
         {
             if (bTrace)

@@ -499,6 +499,8 @@ namespace GpuGrass
         // triangles each time, and the blades at an edge came and went as the camera moved
         const float originX = std::floor((camera[0] - kEdgeReach) / kEdgeCell) * kEdgeCell;
         const float originY = std::floor((camera[1] - kEdgeReach) / kEdgeCell) * kEdgeCell;
+        // Here, not on the render thread: a copy of them all
+        ProceduralGround::CopyCovers(build.covers, camera[0], camera[1], kEdgeReach + kEdgeCell);
         static std::vector<float> distance;     // in cells; 0 where no grass grows (the builder's thread only)
         static std::vector<float> top;
         static std::vector<uint8_t> covered;
@@ -643,7 +645,6 @@ namespace GpuGrass
                 return;
             piecesVersion = groundVersion;
             piecesCoversVersion = coversVersion;
-            ProceduralGround::CopyCovers(build.covers, camera[0], camera[1], kEdgeReach + kEdgeCell);
             build.grassy.clear();
             build.grassy.reserve(ground.size());
             for (auto it = ground.begin(); it != ground.end();)
