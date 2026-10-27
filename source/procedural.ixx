@@ -316,6 +316,12 @@ namespace Procedural
     float fConeTurnLead = 0.3f;             // seconds
     constexpr size_t ParkedLimit = 65536;   // positions kept at most, past it new ones are made at once
     std::vector<uint8_t> parked;
+    // A share of the parked positions asked each update whether they are wanted again, all of them over
+    // ParkedWalkUpdates: they are all more than ProceduralConeBack behind, and a turning camera is led by
+    // ProceduralConeTurnLead, so a few frames later doesn't show; asking all of them every frame (tens of thousands,
+    // copied into a new store each time) cost as much as ReleaseOutsideCone did
+    constexpr size_t ParkedWalkUpdates = 4;
+    size_t parkedCursor = 0;
 
     // The cone of one pass over the queue
     struct Cone
@@ -534,6 +540,7 @@ namespace Procedural
         nCarried = 0;
         waiting.clear();
         parked.clear();
+        parkedCursor = 0;
         ForgetAllMade();
         coneLastTime = 0;
         queuedAt.clear();
@@ -1318,30 +1325,55 @@ namespace Procedural
             if (bConeRelease || ProceduralGround::HideGrass)
                 ReleaseOutsideCone(generator);
             uint32_t capacity = *(uint32_t*)(generator + 0x5220);
-            std::vector<uint8_t> keep;
-            keep.reserve(parked.size());
-            for (size_t offset = 0; offset < parked.size(); offset += QueueEntrySize)
+            // A parked one goes by its last's place taken
+            const auto take = [](size_t index)
             {
-                auto entry = parked.data() + offset;
-                bool removed = false;
-                if (removals)
+                const size_t last = parked.size() - QueueEntrySize;
+                if (index * QueueEntrySize != last)
+                    memcpy(parked.data() + index * QueueEntrySize, parked.data() + last, QueueEntrySize);
+                parked.resize(last);
+            };
+            // Positions of a provider removed this update go, all of them (seldom any)
+            if (removals && removalCount)
+            {
+                for (size_t i = 0; i < parked.size() / QueueEntrySize;)
                 {
-                    auto provider = *(uintptr_t*)(entry + 0x1C);
+                    auto provider = *(uintptr_t*)(parked.data() + i * QueueEntrySize + 0x1C);
+                    bool removed = false;
                     for (uint32_t j = 0; j < removalCount && !removed; j++)
                         removed = *(uintptr_t*)(removals + size_t(j) * 8) == provider;
-                }
-                if (removed)
-                {
+                    if (!removed)
+                    {
+                        i++;
+                        continue;
+                    }
                     nDropped++;
-                    continue;
+                    take(i);
                 }
-                if (count < capacity && Wanted(entry))
+            }
+            // This update's share: those wanted again go to the queue while it has room
+            {
+                size_t total = parked.size() / QueueEntrySize;
+                size_t share = std::min(total, std::max<size_t>((total + ParkedWalkUpdates - 1) / ParkedWalkUpdates, 512));
+                if (parkedCursor >= total)
+                    parkedCursor = 0;
+                for (; share && count < capacity; --share)
                 {
-                    memcpy(queue + size_t(count) * QueueEntrySize, entry, QueueEntrySize);
-                    count++;
-                    continue;
+                    auto entry = parked.data() + parkedCursor * QueueEntrySize;
+                    if (Wanted(entry))
+                    {
+                        memcpy(queue + size_t(count) * QueueEntrySize, entry, QueueEntrySize);
+                        count++;
+                        // The last one comes here: looked at next, unless it was the last
+                        take(parkedCursor);
+                        if (--total == 0)
+                            break;
+                        if (parkedCursor >= total)
+                            parkedCursor = 0;
+                        continue;
+                    }
+                    parkedCursor = parkedCursor + 1 == total ? 0 : parkedCursor + 1;
                 }
-                keep.insert(keep.end(), entry, entry + QueueEntrySize);
             }
             uint32_t write = 0;
             for (uint32_t i = 0; i < count; i++)
@@ -1349,9 +1381,9 @@ namespace Procedural
                 auto entry = queue + size_t(i) * QueueEntrySize;
                 if (!Wanted(entry))
                 {
-                    if (keep.size() < ParkedLimit * QueueEntrySize)
+                    if (parked.size() < ParkedLimit * QueueEntrySize)
                     {
-                        keep.insert(keep.end(), entry, entry + QueueEntrySize);
+                        parked.insert(parked.end(), entry, entry + QueueEntrySize);
                         continue;
                     }
                     nConeFull++;
@@ -1362,7 +1394,6 @@ namespace Procedural
             }
             carriedLeft = std::min(carriedLeft, write);
             count = uint16_t(write);
-            parked.swap(keep);
             nParkedNow = uint32_t(parked.size() / QueueEntrySize);
         }
         nQueueMax = std::max<uint32_t>(nQueueMax, count);
