@@ -2,7 +2,7 @@
 // triangles the procedural manager holds, drawn into the G-buffer at the end of its pass, so the game's lighting,
 // shadows and fog take them as any other surface.
 //
-// One mesh of kCards cards (stream 0) is drawn once per piece of ground (stream 1, instanced): a piece is a triangle of
+// One mesh of GpuGrassClumps cards, or crosses of two (stream 0) is drawn once per piece of ground (stream 1, instanced): a piece is a triangle of
 // at most a metre and a half square, its corner and two edges; each card stands at its own barycentric place on it,
 // turned and sized by its own random values, and a piece keeps only the first `share` of its cards (by area, the
 // surface's grass and the distance); the others go to one point and draw nothing. A card is an upright quad of three
@@ -415,9 +415,11 @@ PSOutput GrassPS(VSOutput input, float2 vPos : VPOS)
     float light = lerp(lerp(0.55, 0.3, dense), 1.05, saturate(up * 1.3)) * input.ground.w;
     colour *= debug ? lerp(0.6, 1.0, light / 1.05) : light;
 
-    // Rounded across the blade; against the sun a thin blade lets it through: its normal turns to the sun, so the
-    // game's lighting (and its sun shadow) lights it as from the front, and it glows warm
-    float3 normal = normalize(input.normal.xyz + input.across.xyz * (card.b * 2.0 - 1.0));
+    // Rounded across the blade, and each blade of the card turned its own way a little (by its shade, a random value
+    // of its own), so the blades of a card are not all lit alike, as one flat facet; against the sun a thin blade lets
+    // it through: its normal turns to the sun, so the game's lighting (and its sun shadow) lights it as from the front,
+    // and it glows warm
+    float3 normal = normalize(input.normal.xyz + input.across.xyz * (card.b * 2.0 - 1.0 + (shade - 0.45) * 1.2));
     float backlit = saturate(dot(normalize(input.view.xyz), vec4Sun.xyz));
     backlit *= backlit * backlit * input.view.w * vec4Sun.w * saturate(up * 1.5);
     normal = normalize(lerp(normal, vec4Sun.xyz, backlit * 0.8));
