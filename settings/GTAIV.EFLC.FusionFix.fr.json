@@ -400,6 +400,7 @@
   "FF_LIGHTING": "Éclairage",
   "FF_TEXTURES": "Textures",
   "FF_DEBUG": "Debug",
+  "FF_ADVANCED": "Avancé",
   "SSRHalf": "Half Resolution",
   "SSRFull": "Full Resolution",
   "SSR": "Screen Space Reflections",

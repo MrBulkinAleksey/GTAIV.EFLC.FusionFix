@@ -2634,8 +2634,6 @@ public:
             AddEmptyLine(screen, before);
             AddSetting(screen, "MAIN.WindowMode", before);
             AddSetting(screen, "MAIN.BlockOnLostFocus", before);
-            // Shown on the game, with a warning in the help line while it's on
-            AddSetting(screen, "SHADOWS.ExtraNightShadows", before);
             AddEmptyLine(screen, before);
             AddSetting(screen, "MISC.LightSyncRGB", before);
             AddSetting(screen, "MISC.TimedEvents", before);
@@ -2705,24 +2703,25 @@ public:
             AddSetting(screen, "MISC.AltDialogue");
         }
 
-        // Display: Field of View after Saturation, the image and lighting options before Restore Defaults, then the HDR
-        // page, whose rows HDR adds (GetHdrScreens)
+        // Display: an Advanced page before Restore Defaults with Fusion Fix's image and lighting options, then the HDR
+        // page, whose rows HDR adds (GetHdrScreens). The game's own options stay as they are.
         for (auto screen : { MenuScreen::Display, MenuScreen::TitleDisplay })
         {
-            AddSetting(screen, "MISC.FieldOfView", "MO_SUB");
-            AddSetting(screen, "MAIN.Definition", "MO_DEF");
-            AddSetting(screen, "MISC.ConsoleGamma", "MO_DEF");
-            AddSetting(screen, "MISC.ConsoleAutoExposure", "MO_DEF");
-            AddSetting(screen, "MAIN.MotionBlur", "MO_DEF");
-            AddSetting(screen, "MISC.DepthOfField", "MO_DEF");
-            AddSetting(screen, "MISC.TreeLighting", "MO_DEF");
-            AddSetting(screen, "MISC.TreeAlpha", "MO_DEF");
+            auto advanced = AddPage(screen, "@FF_ADVANCED", "MO_DEF");
+            AddSetting(advanced, "MISC.FieldOfView");
+            AddEmptyLine(advanced);
+            AddSetting(advanced, "MAIN.Definition");
+            AddSetting(advanced, "MISC.ConsoleGamma");
+            AddSetting(advanced, "MISC.ConsoleAutoExposure");
+            AddSetting(advanced, "MAIN.MotionBlur");
+            AddSetting(advanced, "MISC.DepthOfField");
+            AddSetting(advanced, "MISC.TreeLighting");
+            AddSetting(advanced, "MISC.TreeAlpha");
             // Grass and procedural props go further by a quarter of the game's distance a step (procedural.ixx)
-            AddSetting(screen, "PROCEDURAL.ProceduralDistance", "MO_DEF");
-            AddEmptyLine(screen, "MO_DEF");
-            AddSetting(screen, "MAIN.Bloom", "MO_DEF");
-            AddSetting(screen, "MISC.ScreenFilter", "MO_DEF");
-            AddEmptyLine(screen, "MO_DEF");
+            AddSetting(advanced, "PROCEDURAL.ProceduralDistance");
+            AddEmptyLine(advanced);
+            AddSetting(advanced, "MAIN.Bloom");
+            AddSetting(advanced, "MISC.ScreenFilter");
             hdrScreens.push_back(AddPage(screen, "@ff.page.hdr", "MO_DEF", true, [] { return SettingValueText(ownPlugin, "HDR.HDR"); }));
             AddEmptyLine(screen, "MO_DEF");
         }
@@ -2732,20 +2731,24 @@ public:
         {
             // Definition is in Display
             RemoveOption(screen, "MO_DOF", "PREF_DOF");
-            AddSetting(screen, "FRAMELIMIT.FpsLimitPreset", "MO_ANALYZER");
-            AddSetting(screen, "MISC.Antialiasing", "MO_ANALYZER");
+
+            // Advanced: Fusion Fix's options of the frame, before the Lighting, Textures and Debug pages
+            auto advanced = AddPage(screen, "@FF_ADVANCED", "MO_ANALYZER");
+            AddSetting(advanced, "FRAMELIMIT.FpsLimitPreset");
+            AddSetting(advanced, "MISC.Antialiasing");
             // With DLAA and FSR: the scene below the screen size (applied with a device reset), AMD frame generation
-            AddSetting(screen, "ANTIALIASING.UpscalerQuality", "MO_ANALYZER");
-            AddSetting(screen, "ANTIALIASING.FrameGeneration", "MO_ANALYZER");
-            AddEmptyLine(screen, "MO_ANALYZER");
-            AddSetting(screen, "FOG.VolumetricFog", "MO_ANALYZER");
-            AddSetting(screen, "MISC.SunShafts", "MO_ANALYZER");
-            AddSetting(screen, "MISC.UnclampLighting", "MO_ANALYZER");
-            AddSetting(screen, "MISC.ToneMapping", "MO_ANALYZER");
-            AddSetting(screen, "MISC.AmbientOcclusion", "MO_ANALYZER");
-            AddSetting(screen, "SHADOWS.ShadowFilter", "MO_ANALYZER");
-            AddSetting(screen, "MAIN.GraphicsAPI", "MO_ANALYZER");
-            AddEmptyLine(screen, "MO_ANALYZER");
+            AddSetting(advanced, "ANTIALIASING.UpscalerQuality");
+            AddSetting(advanced, "ANTIALIASING.FrameGeneration");
+            AddEmptyLine(advanced);
+            AddSetting(advanced, "FOG.VolumetricFog");
+            AddSetting(advanced, "MISC.SunShafts");
+            AddSetting(advanced, "MISC.UnclampLighting");
+            AddSetting(advanced, "MISC.ToneMapping");
+            AddSetting(advanced, "MISC.AmbientOcclusion");
+            AddSetting(advanced, "SHADOWS.ShadowFilter");
+            // With a warning in the help line while it's on
+            AddSetting(advanced, "SHADOWS.ExtraNightShadows");
+            AddSetting(advanced, "MAIN.GraphicsAPI");
 
             // Lighting: the screen space effects, the sky and the night shadows
             auto lighting = AddPage(screen, "@FF_LIGHTING", "MO_ANALYZER");
