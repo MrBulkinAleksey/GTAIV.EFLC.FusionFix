@@ -739,8 +739,8 @@ public:
                             const bool artificial = !*reinterpret_cast<const uint8_t*>(regs.esp + 0x0B);
                             if (bCEAdapter)
                             {
-                                // A light's own object (LampsSkipOwnObject)
-                                if (PropCaches::OwnObject(regs.esi, regs.eax))
+                                // A light's own object (LampsSkipOwnObject), a traffic signal's too
+                                if (PropCaches::OwnObject(regs.esi, regs.eax) || EmergencyTrafficShadows::TrafficSignal::OwnSignal(regs.esi))
                                     return_to(loc_AE3867);
                                 // Exclude the occupied car/occupants only in their own
                                 // immediate headlight pass; retain their lamp shadows.

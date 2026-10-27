@@ -370,6 +370,17 @@ namespace EmergencyTrafficShadows
                 if (age > 2 && registry.Suspend(index)) snapshots[index].state = 0;
             }
         }
+
+        // LampsSkipOwnObject for a signal: its light's key is a reserved one, not its object's address plus an
+        // offset, so PropCaches::OwnObject never knew it and the signal's pole and heads went into its own map.
+        static bool OwnSignal(uintptr_t entity) noexcept
+        {
+            const auto index = KeyIndex(PropCaches::scopeKey);
+            if (index == UINT32_MAX || snapshots[index].state.load(std::memory_order_acquire) == 2 ||
+                snapshots[index].owner.load(std::memory_order_acquire) != static_cast<uint32_t>(entity)) return false;
+            ++PropCaches::ownSkipped;
+            return true;
+        }
     }
 
     // Emergency vehicle lights: up to two vehicles with their sirens on within 30 m (the player's
