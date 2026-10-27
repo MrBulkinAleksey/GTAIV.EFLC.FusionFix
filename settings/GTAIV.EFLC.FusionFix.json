@@ -2567,7 +2567,7 @@
       "page": "advanced", "group": "@group.night shadows", "visibility": "file"
     },
     {
-      "id": "NIGHTSHADOWS.VehicleBoxShadowsMaxDistance", "type": "float", "default": 60.0, "min": 0.0, "max": 1000.0,
+      "id": "NIGHTSHADOWS.VehicleBoxShadowsMaxDistance", "type": "float", "default": 200.0, "min": 0.0, "max": 1000.0,
       "label": "@NIGHTSHADOWS.VehicleBoxShadowsMaxDistance",
       "page": "advanced", "group": "@group.night shadows", "visibility": "file"
     },
