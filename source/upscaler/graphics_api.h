@@ -1215,6 +1215,17 @@ namespace FusionFixGraphicsApi
             return VkCreateInstanceHook().stdcall<int32_t>(info, allocator, instance);
         }
 
+        // FusionFix: switches of an experiment (Vulkan hangs in CreateDevice under Proton): an environment variable set to
+        // 1 leaves a step out, logged
+        inline bool Experiment(const char* name)
+        {
+            char value[8] = {};
+            if (!GetEnvironmentVariableA(name, value, DWORD(sizeof(value))) || value[0] != '1')
+                return false;
+            Log("Experiment: %s, its step left out", name);
+            return true;
+        }
+
         // Once, before DXVK creates its instance
         inline void HookVulkanLoader()
         {
@@ -1839,6 +1850,10 @@ namespace FusionFixGraphicsApi
             if (s.status.effective == Api::Vulkan)
             {
                 // By full path; DXVK's own imports (vulkan-1.dll) come from System32
+                // FusionFix: FUSIONFIX_PLAIN_DXVK_LOAD=1 loads it as the old proxy did (Vulkan hangs in CreateDevice under Proton)
+                if (detail::Experiment("FUSIONFIX_PLAIN_DXVK_LOAD"))
+                    s.dxvk = LoadLibraryW(DxvkPath().c_str());
+                else
                 s.dxvk = LoadLibraryExW(DxvkPath().c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
                 if (!s.dxvk || !GetProcAddress(s.dxvk, "Direct3DCreate9"))
                 {
@@ -1850,7 +1865,7 @@ namespace FusionFixGraphicsApi
                     s.status.effective = Api::Direct3D9;
                     s.status.why = why;
                 }
-                else
+                else if (!detail::Experiment("FUSIONFIX_NO_VULKAN_HOOK")) // FusionFix: an experiment, see above
                     detail::HookVulkanLoader();
             }
             // The driver now: its capabilities (exclusive fullscreen) are known before the game makes its window
@@ -1884,7 +1899,7 @@ namespace FusionFixGraphicsApi
                 s.status.why.empty() ? "" : ": ", s.status.why.c_str());
         }
         detail::PatchAll();
-        if (s.status.effective != Api::Direct3D9 || s.noticePending)
+        if ((s.status.effective != Api::Direct3D9 || s.noticePending) && !detail::Experiment("FUSIONFIX_NO_SYSTEM_PROBE")) // FusionFix: an experiment
             detail::PatchSystemObjects();
         // The notice names a wrapper found only now
         if (s.noticePending && !s.noticeShown)
