@@ -152,13 +152,15 @@ bool CardKept(VSInput input, out float3 root, out float edge, out float distance
     if (uv.x + uv.y > 1.0)
         uv = 1.0 - uv;
     root = input.corner.xyz + input.edge1.xyz * uv.x + input.edge2.xyz * uv.y;
-    // At the root itself, filtered between the cells; without EdgeTex none (hard edges)
+    // At the root itself, filtered between the cells; without EdgeTex none (hard edges). Under a road or a pavement
+    // (ProceduralGroundCovers) the grid holds -1: no card kept there
     edge = vec4EdgeGrid.w > 0.0 ? tex2Dlod(EdgeTex, float4((root.xy - vec4EdgeGrid.xy) * vec4EdgeGrid.z, 0.0, 0.0)).r : 1.0;
     distance = length(root - vec4Eye.xyz);
     float thinned = 0.5 * saturate((distance - 15.0) / 15.0);
     // How far each test is from leaving the card out, in the share of cards: MakeCard shortens it over the last
     // twelfth, so no card appears or goes at once as the camera moves
     keep = min(edge * 1.2 + 0.15 - frac(input.vertex.w * 7.13 + 0.31), frac(input.vertex.w * 5.37 + 0.71) - thinned);
+    edge = saturate(edge);
     return input.vertex.z < input.edge1.w && keep >= 0.0;
 }
 
@@ -483,7 +485,7 @@ float4 GroundTintPS(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0
     float3 dir = float3(dot(v, vec4WorldX.xyz), dot(v, vec4WorldY.xyz), dot(v, vec4WorldZ.xyz));
     float3 P = float3(vec4WorldX.w, vec4WorldY.w, vec4WorldZ.w) + dir * z;
     float2 g = (P.xy - vec4EdgeGrid.xy) * vec4EdgeGrid.z;
-    float cover = all(g == saturate(g)) ? tex2D(TintEdgeTex, g).r : 0.0;
+    float cover = all(g == saturate(g)) ? saturate(tex2D(TintEdgeTex, g).r) : 0.0;
     float fade = saturate((fTintRange - length(dir * z)) * 0.1);
     float k = vec4GroundTint.w * allow * ground * cover * fade;
     return float4(lerp(1.0, vec4GroundTint.rgb, k), 1.0);

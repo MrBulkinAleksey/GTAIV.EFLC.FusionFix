@@ -78,6 +78,8 @@ import entityclass;
 //    price of a draw, 5-9 us each for the posts, some 1.5 ms of a 6 ms G-buffer looking over a park.
 //    Taken where the entity goes into the phases' lists (CE 0xae43a0): the render lists' hooks above miss most
 //    objects (a log: CJ_MH_CP_POST1 kept 30 cascade draws a frame 75 m out).
+//  - ProceduralGroundCovers: grass that runs on under a road or a pavement grows no props there, nor GPU grass
+//    (Procedural::UnderCover).
 //
 // And what keeps the cost of more props down (the game already keeps them out of shadows: it sets
 // entity +0x24 0x10000 on each, and the render lists then drop the shadow phases, CE 0xae85a5/0xae7058):
@@ -120,6 +122,16 @@ export namespace ProceduralGround
     // procedural.dat's PROCOBJ records (CE 0x16c8fb0): +4 count, records of 0x44 from +8: +0 tag, +4 model index,
     // +8 spacing; nullptr until loaded
     uint8_t* Definitions();
+
+    // ProceduralGroundCovers: surfaces without plants or props (roads, pavements, roofs) near the camera, which grass
+    // under them gives way to (Procedural::UnderCover): grass where one lies level with it (CoverBelow under it at
+    // most) or up to CoverHeight above. Any thread: their version, changing as they come and go, and those within
+    // `reach` (flat) of x, y
+    struct Cover { float corner[3][3]; };
+    constexpr float CoverHeight = 3.0f;
+    constexpr float CoverBelow = 0.03f;
+    uint32_t CoversVersion();
+    void CopyCovers(std::vector<Cover>& out, float x, float y, float reach);
 }
 
 namespace Procedural
@@ -589,6 +601,11 @@ namespace Procedural
         fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
         fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
         bConeRelease = iniReader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
+        if (const bool covers = iniReader.ReadInteger("PROCEDURAL", "ProceduralGroundCovers", 1) != 0; covers != bCovers)
+        {
+            bCovers = covers;
+            nCoversVersion = nCoversVersion + 1;
+        }
         nSpawnsPerUpdate = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralSpawnsPerUpdate", 128), 0, 0xFFFF);
     }
 
@@ -685,7 +702,7 @@ namespace Procedural
                     queued ? Where((float*)entry) : std::string(), waited));
             }
         }
-        if (record && (bConeRelease || ProceduralGround::HideGrass) && pGenerator)
+        if (record && (bConeRelease || ProceduralGround::HideGrass || bCovers) && pGenerator)
         {
             // Made from the queue (a1 its entry; the caller sets the record's provider, +0xc, right after)
             auto queue = *(uint8_t**)(pGenerator + 0x5224);
@@ -775,6 +792,340 @@ namespace Procedural
         return InCone((const float*)entry) && !GrassGivesWay(entry);
     }
 
+    // ProceduralGroundCovers: grass that runs on under a road or a pavement (terrain kept a little below the street) grew
+    // its plants, and GPU grass its blades, up through the asphalt. The manager walks each of its bounds' scan records
+    // every frame (CE 0xc87b00: manager, record, centre, an eighth of the polygons); at its call the record's polygons
+    // with neither the plants nor the props bit (record +0x48, bits 2i and 2i + 1 of +0x54 slots; its bound through
+    // +0x44, +0x38, +4, +0xc as the walk takes it) are looked at here, kCoverBudget a frame, again once the manager's
+    // centre moved kCoverRescan or the bound changed. Those facing up, of other materials than the grassy ones
+    // (GrassSurface; the bound's +0xd4 and +0x5c calls, as the bound's take makes them) within kCoverReach past the
+    // gathering radius are kept in world space as the triangle build makes its corners (CE 0xc87f40: the int16
+    // vertices at bound +0xb0 times +0x90 plus +0xa0, through the record's matrix, rows from +0, unless its +0x40 is
+    // set; a quad's second triangle 0, 2, 3), in kCoverCell cells, until kCoverForget past that radius. A
+    // place on a grassy triangle is under one when it lies level with it or up to CoverHeight above, there or
+    // kCoverAround away (a plant's leaves): the generator's candidates there (CE 0xc093a0: generator, position, normal,
+    // definition, triangle) are not queued, props made before the cover came are let go (ReleaseCovered), and GPU grass
+    // leaves those cells (ProceduralGround::CopyCovers). Covers are written on the main thread, which reads them
+    // without the lock; the render thread's copies take it shared.
+    bool bCovers = true;
+    constexpr float kCoverCell = 4.0f;
+    constexpr float kCoverReach = 40.0f;
+    constexpr float kCoverForget = 80.0f;
+    constexpr float kCoverAround = 0.25f;
+    constexpr float kCoverRescan = 16.0f;
+    constexpr uint32_t kCoverBudget = 4000;     // polygons a frame
+    constexpr size_t kMaxCovers = 200000;
+    struct CoverPolygon { ProceduralGround::Cover triangles[2]; int count; uintptr_t vertices; int x0, y0, x1, y1; };
+    SRWLOCK coversLock = SRWLOCK_INIT;
+    std::unordered_map<uint64_t, CoverPolygon> covers;              // by bound << 32 | polygon
+    std::unordered_map<uint64_t, std::vector<uint64_t>> coverCells;
+    // By scan record: its bound's vertices and the centre when it was last looked at, the next polygon while it is
+    struct CoverScan { uintptr_t vertices = 0; float centre[2] = {}; uint32_t next = 0; bool active = false; };
+    std::unordered_map<const uint8_t*, CoverScan> coverScans;
+    uint32_t nCoverFrame = ~0u, nCoverLeft = 0;
+    volatile uint32_t nCoversVersion = 0;
+    uint32_t nCoverSkipped = 0, nCoverReleased = 0;
+
+    uint8_t GrassSurface(uint32_t material);
+    bool GrassSurfacesKnown();
+
+    uint64_t CoverCellKey(int x, int y) { return uint64_t(uint32_t(x)) << 32 | uint32_t(y); }
+    int CoverCellOf(float v) { return int(std::floor(v / kCoverCell)); }
+
+    // The height of `t` at x, y seen from above, false off it
+    bool CoverHeightAt(const ProceduralGround::Cover& t, float x, float y, float& z)
+    {
+        const float* a = t.corner[0];
+        const float* b = t.corner[1];
+        const float* c = t.corner[2];
+        const float d = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
+        if (std::abs(d) < 1e-6f)
+            return false;
+        const float l1 = ((b[1] - c[1]) * (x - c[0]) + (c[0] - b[0]) * (y - c[1])) / d;
+        const float l2 = ((c[1] - a[1]) * (x - c[0]) + (a[0] - c[0]) * (y - c[1])) / d;
+        const float l3 = 1.0f - l1 - l2;
+        if (l1 < 0.0f || l2 < 0.0f || l3 < 0.0f)
+            return false;
+        z = l1 * a[2] + l2 * b[2] + l3 * c[2];
+        return true;
+    }
+
+    // Main thread
+    bool UnderCover(const float* place, bool around)
+    {
+        static constexpr float kOffsets[5][2] = { { 0.0f, 0.0f }, { kCoverAround, 0.0f }, { -kCoverAround, 0.0f }, { 0.0f, kCoverAround }, { 0.0f, -kCoverAround } };
+        if (covers.empty())
+            return false;
+        for (int i = 0; i < (around ? 5 : 1); ++i)
+        {
+            const float x = place[0] + kOffsets[i][0], y = place[1] + kOffsets[i][1];
+            auto cell = coverCells.find(CoverCellKey(CoverCellOf(x), CoverCellOf(y)));
+            if (cell == coverCells.end())
+                continue;
+            for (const auto key : cell->second)
+            {
+                auto it = covers.find(key);
+                if (it == covers.end())
+                    continue;
+                for (int t = 0; t < it->second.count; ++t)
+                {
+                    float z;
+                    if (CoverHeightAt(it->second.triangles[t], x, y, z) && z - place[2] > -ProceduralGround::CoverBelow &&
+                        z - place[2] < ProceduralGround::CoverHeight)
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // One of the manager's triangles of a grassy material
+    bool OnGrass(const uint8_t* triangle)
+    {
+        if (!pManager || !triangle)
+            return false;
+        const auto records = *(const uint8_t* const*)(pManager + 0xF30);
+        const uint32_t capacity = *(const uint32_t*)(pManager + 0x18);
+        if (!records || triangle < records || triangle >= records + size_t(capacity) * 0x60 || (triangle - records) % 0x60)
+            return false;
+        return GrassSurface(*(const uint32_t*)(triangle + 0x4c)) != 0;
+    }
+
+    void RemoveCover(std::unordered_map<uint64_t, CoverPolygon>::iterator it)    // the lock held
+    {
+        const auto& c = it->second;
+        for (int x = c.x0; x <= c.x1; ++x)
+            for (int y = c.y0; y <= c.y1; ++y)
+            {
+                auto cell = coverCells.find(CoverCellKey(x, y));
+                if (cell == coverCells.end())
+                    continue;
+                auto& keys = cell->second;
+                for (size_t i = 0; i < keys.size(); ++i)
+                    if (keys[i] == it->first)
+                    {
+                        keys[i] = keys.back();
+                        keys.pop_back();
+                        break;
+                    }
+                if (keys.empty())
+                    coverCells.erase(cell);
+            }
+        covers.erase(it);
+    }
+
+    // A polygon without plants or props
+    void OfferCover(const uint8_t* bound, const uint8_t* record, uint32_t index)
+    {
+        const uint64_t key = uint64_t(uintptr_t(bound)) << 32 | index;
+        const auto vertices = *(const uintptr_t*)(bound + 0xB0);
+        auto known = covers.find(key);
+        if (known != covers.end() && known->second.vertices == vertices)
+            return;
+        const auto polygons = *(const uint8_t* const*)(bound + 0x8C);
+        if (!polygons || !vertices || index >= *(const uint32_t*)(bound + 0xCC))
+            return;
+        const auto corners = (const uint16_t*)(polygons + size_t(index) * 32 + 0x10);
+        const int n = corners[3] ? 4 : 3;
+        const float* scale = (const float*)(bound + 0x90);
+        const float* offset = (const float*)(bound + 0xA0);
+        const float* m = (const float*)record;
+        const auto instance = *(const uint8_t* const*)(record + 0x44);
+        const bool transform = !record[0x40] && instance && *(const uintptr_t*)(instance + 0x38);
+        float w[4][3];
+        for (int k = 0; k < n; ++k)
+        {
+            const auto v = (const int16_t*)vertices + size_t(corners[k]) * 3;
+            const float l[3] = { v[0] * scale[0] + offset[0], v[1] * scale[1] + offset[1], v[2] * scale[2] + offset[2] };
+            for (int r = 0; r < 3; ++r)
+                w[k][r] = transform ? m[r] * l[0] + m[4 + r] * l[1] + m[8 + r] * l[2] + m[12 + r] : l[r];
+        }
+        // Near enough: kept while it is, looked at again when it comes nearer
+        const float* centre = (const float*)(pManager + 0xF40);
+        const float reach = std::sqrt((std::max)(*(const float*)(pManager + 0x20), 0.0f)) + kCoverReach;
+        bool inReach = false;
+        for (int k = 0; k < n && !inReach; ++k)
+            inReach = std::abs(w[k][0] - centre[0]) < reach && std::abs(w[k][1] - centre[1]) < reach;
+        if (!inReach)
+            return;
+
+        CoverPolygon c{};
+        c.vertices = vertices;
+        static constexpr int kTriangles[2][3] = { { 0, 1, 2 }, { 0, 2, 3 } };
+        for (int t = 0; t < (n == 4 ? 2 : 1); ++t)
+        {
+            const float* a = w[kTriangles[t][0]];
+            const float* b = w[kTriangles[t][1]];
+            const float* d = w[kTriangles[t][2]];
+            const float u[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] }, v[3] = { d[0] - a[0], d[1] - a[1], d[2] - a[2] };
+            const float nx = u[1] * v[2] - u[2] * v[1], ny = u[2] * v[0] - u[0] * v[2], nz = u[0] * v[1] - u[1] * v[0];
+            const float length = std::sqrt(nx * nx + ny * ny + nz * nz);
+            // Walls and slivers cover no ground
+            if (length < 1e-4f || std::abs(nz) < 0.3f * length)
+                continue;
+            auto& out = c.triangles[c.count++];
+            for (int k = 0; k < 3; ++k)
+                out.corner[0][k] = a[k], out.corner[1][k] = b[k], out.corner[2][k] = d[k];
+        }
+        // Its material last: two of the bound's virtual calls, as the walk makes them for the triangle build (+0xd4 the
+        // polygon's material index, +0x5c its material)
+        if (!c.count)
+            return;
+        using Call = uint32_t(__thiscall*)(const uint8_t*, uint32_t);
+        const auto vtable = *(const uintptr_t* const*)bound;
+        if (GrassSurface(((Call)vtable[0x5c / 4])(bound, ((Call)vtable[0xd4 / 4])(bound, index))) != 0)
+            return;
+        AcquireSRWLockExclusive(&coversLock);
+        if (known != covers.end())
+            RemoveCover(known);
+        if (covers.size() < kMaxCovers)
+        {
+            float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+            for (int t = 0; t < c.count; ++t)
+                for (int k = 0; k < 3; ++k)
+                {
+                    x0 = (std::min)(x0, c.triangles[t].corner[k][0]), x1 = (std::max)(x1, c.triangles[t].corner[k][0]);
+                    y0 = (std::min)(y0, c.triangles[t].corner[k][1]), y1 = (std::max)(y1, c.triangles[t].corner[k][1]);
+                }
+            c.x0 = CoverCellOf(x0), c.x1 = CoverCellOf(x1), c.y0 = CoverCellOf(y0), c.y1 = CoverCellOf(y1);
+            // Larger than any road piece: left out
+            if (c.x1 - c.x0 <= 32 && c.y1 - c.y0 <= 32)
+            {
+                for (int x = c.x0; x <= c.x1; ++x)
+                    for (int y = c.y0; y <= c.y1; ++y)
+                        coverCells[CoverCellKey(x, y)].push_back(key);
+                covers[key] = c;
+            }
+        }
+        nCoversVersion = nCoversVersion + 1;
+        ReleaseSRWLockExclusive(&coversLock);
+    }
+
+    // The walk's call for `record`: its polygons without plants or props looked at, kCoverBudget a frame in all
+    void ScanForCovers(const uint8_t* record)
+    {
+        // Until the grassy materials are known any lawn would be a cover of its own grass
+        if (!bCovers || !record || !pManager || !GrassSurfacesKnown())
+            return;
+        const auto instance = *(const uint8_t* const*)(record + 0x44);
+        const auto archetype = instance ? *(const uint8_t* const*)(instance + 0x38) : nullptr;
+        const auto holder = archetype ? *(const uint8_t* const*)(archetype + 4) : nullptr;
+        const auto bound = holder ? *(const uint8_t* const*)(holder + 0xC) : nullptr;
+        const auto bits = *(const uint32_t* const*)(record + 0x48);
+        if (!bound || !bits)
+            return;
+        const uint32_t count = *(const uint16_t*)(record + 0x54) / 2;
+        if (count != *(const uint32_t*)(bound + 0xCC))
+            return;
+        if (nCoverFrame != Frame())
+        {
+            nCoverFrame = Frame();
+            nCoverLeft = kCoverBudget;
+        }
+        const float* centre = (const float*)(pManager + 0xF40);
+        const auto vertices = *(const uintptr_t*)(bound + 0xB0);
+        auto& scan = coverScans[record];
+        if (!scan.active)
+        {
+            const float dx = centre[0] - scan.centre[0], dy = centre[1] - scan.centre[1];
+            if (scan.vertices == vertices && dx * dx + dy * dy < kCoverRescan * kCoverRescan)
+                return;
+            scan = { vertices, { centre[0], centre[1] }, 0, true };
+        }
+        else if (scan.vertices != vertices)
+            scan = { vertices, { centre[0], centre[1] }, 0, true };
+        for (; scan.next < count && nCoverLeft; ++scan.next)
+        {
+            const uint32_t bit = 2 * scan.next;    // and the next, in the same word
+            if ((bits[bit >> 5] >> (bit & 31)) & 3)
+                continue;
+            nCoverLeft--;
+            OfferCover(bound, record, scan.next);
+        }
+        scan.active = scan.next < count;
+    }
+
+    // Covers far behind the gathering radius go
+    void ForgetFarCovers()
+    {
+        if (!pManager || covers.empty())
+            return;
+        const float* centre = (const float*)(pManager + 0xF40);
+        const float reach = std::sqrt((std::max)(*(const float*)(pManager + 0x20), 0.0f)) + kCoverForget;
+        AcquireSRWLockExclusive(&coversLock);
+        bool removed = false;
+        for (auto it = covers.begin(); it != covers.end();)
+        {
+            const auto& c = it->second;
+            const float cx = (c.x0 + c.x1 + 1) * 0.5f * kCoverCell, cy = (c.y0 + c.y1 + 1) * 0.5f * kCoverCell;
+            if (std::abs(cx - centre[0]) > reach || std::abs(cy - centre[1]) > reach)
+            {
+                auto next = std::next(it);
+                RemoveCover(it);
+                it = next;
+                removed = true;
+            }
+            else
+                ++it;
+        }
+        if (removed)
+            nCoversVersion = nCoversVersion + 1;
+        ReleaseSRWLockExclusive(&coversLock);
+    }
+
+    SafetyHookInline shWalk;
+    bool __fastcall Walk(uint8_t* manager, void* edx, const uint8_t* record, const float* centre, int32_t part)
+    {
+        ScanForCovers(record);
+        return shWalk.unsafe_fastcall<bool>(manager, edx, record, centre, part);
+    }
+
+    // The generator's candidate, not queued where its grass is under a cover
+    SafetyHookInline shCandidate;
+    void __fastcall Candidate(uint8_t* generator, void* edx, const float* position, const float* normal, const uint8_t* definition, const uint8_t* triangle)
+    {
+        if (bCovers && position && OnGrass(triangle) && UnderCover(position, true))
+        {
+            nCoverSkipped++;
+            return;
+        }
+        shCandidate.unsafe_fastcall(generator, edx, position, normal, definition, triangle);
+    }
+
+    // Props of grass made before a cover over them came (a teleport, the walk reaching the road later) go as the game
+    // lets them go, their entries not kept: when the covers changed, every half second at most
+    void ReleaseCovered(uint8_t* generator)
+    {
+        static uint32_t checkedVersion = 0;
+        static uint64_t lastCheck = 0;
+        const uint64_t now = GetTickCount64();
+        if (!bCovers || checkedVersion == nCoversVersion || now - lastCheck < 500)
+            return;
+        checkedVersion = nCoversVersion;
+        lastCheck = now;
+        std::vector<std::pair<uint8_t*, uint8_t*>> covered;
+        for (auto& [record, from] : madeFrom)
+        {
+            if (covered.size() >= ReleasesPerUpdate)
+            {
+                checkedVersion--;   // the rest next time
+                break;
+            }
+            const auto provider = *(uint8_t* const*)(from.entry + 0x1C);
+            if (!*(uintptr_t*)(record + 8) || *(uint8_t**)(record + 0xC) != provider)
+                continue;
+            if (OnGrass(provider) && UnderCover((const float*)from.entry, true))
+                covered.emplace_back(record, *(uint8_t**)(from.entry + 0xC) + 0x38);
+        }
+        for (auto& [record, list] : covered)
+        {
+            if (bTrace)
+                Trace(std::format("U {}", When()));
+            Release(generator, nullptr, record, list);
+            nCoverReleased++;
+        }
+    }
+
     // Props made from the queue that are now well outside the cone (ProceduralConeRelease), or grass props the camera
     // came near enough for GPU grass to grow in their place (by GrassReleaseSlack more), go as the game lets them go
     // (CE 0xc0a920, from the list of their procedural.dat record, +0x38 of the record the entry's +0xc points to), and
@@ -848,6 +1199,14 @@ namespace Procedural
             count = uint16_t(write);
         }
         nCarried = 0;
+
+        ReleaseCovered(generator);
+        static uint64_t lastForget = 0;
+        if (const uint64_t now = GetTickCount64(); now - lastForget >= 2000)
+        {
+            lastForget = now;
+            ForgetFarCovers();
+        }
 
         // The cone: kept positions of a removed provider go, those now inside come back (nearest first is the sort
         // below), and those outside are kept, while there is room; past it they are made
@@ -1170,6 +1529,12 @@ namespace Procedural
             if (surface == nGrassMaterials[i])
                 return uint8_t(i + 1);
         return 0;
+    }
+
+    bool GrassSurfacesKnown()
+    {
+        GrassSurface(0);
+        return nGrassMaterials[0] >= 0 || nGrassMaterials[1] >= 0;
     }
 
     // GatherGrassSurfaces: where the manager marks each polygon of a bound for plants (bit 2i, the tag has a PLANT
@@ -1580,6 +1945,20 @@ public:
                     shRemoveTriangle = safetyhook::create_inline(pattern.get_first(0), RemoveTriangle);
             }
 
+            // ProceduralGroundCovers: the manager's walk of a scan record (its first instructions, CE 0xc87b00), and the
+            // generator's candidates
+            {
+                auto walk = hook::pattern("55 8B EC 83 E4 F0 83 EC 58 56 57 8B 7D 08 8B F1 8B 47 44");
+                auto candidate = hook::pattern("55 8B EC 83 E4 F0 8B D1 83 EC 20 0F B7 82 28 52 00 00");
+                if (!walk.empty() && !candidate.empty())
+                {
+                    shWalk = safetyhook::create_inline(walk.get_first(0), Walk);
+                    shCandidate = safetyhook::create_inline(candidate.get_first(0), Candidate);
+                }
+                else
+                    Log("GroundCovers", "not found: grass under roads grows through them");
+            }
+
             // GatherGrassSurfaces: the material manager and the names the game finds GRASS and SHORT_GRASS by (CE 0xcf2d59),
             // the bound's polygon marks (CE 0xc86903 the material in eax, 0xc86926 the props bit in al) and the generator's
             // props of a triangle (CE 0xc0a800)
@@ -1709,9 +2088,10 @@ public:
             auto alive = props.size();
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
-                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, grass left to GPU grass {}, heavy out of cascades {}, heavy left out {}, faded far left out {}; box full {}, candidates capped {}",
+                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, grass left to GPU grass {}, heavy out of cascades {}, heavy left out {}, faded far left out {}; under covers not queued {}, let go {}, covers kept {}; box full {}, candidates capped {}",
                 fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
-                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nGrassHidden, nHeavyCascades, nHeavyScene, nFadeCulled, nEntitiesCapped, nCandidatesCapped));
+                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nGrassHidden, nHeavyCascades, nHeavyScene, nFadeCulled, nCoverSkipped, nCoverReleased, covers.size(), nEntitiesCapped, nCandidatesCapped));
+            nCoverSkipped = nCoverReleased = 0;
             fUpdateMs = fUpdateMaxMs = 0.0;
             nUpdates = 0;
             nQueueMax = nWaitingMax = 0;
@@ -1727,5 +2107,26 @@ namespace ProceduralGround
     uint8_t* Definitions()
     {
         return Procedural::pDefinitions;
+    }
+
+    uint32_t CoversVersion()
+    {
+        return Procedural::nCoversVersion;
+    }
+
+    void CopyCovers(std::vector<Cover>& out, float x, float y, float reach)
+    {
+        using namespace Procedural;
+        out.clear();
+        if (!bCovers)
+            return;
+        AcquireSRWLockShared(&coversLock);
+        for (const auto& [key, c] : covers)
+        {
+            if ((c.x1 + 1) * kCoverCell < x - reach || c.x0 * kCoverCell > x + reach || (c.y1 + 1) * kCoverCell < y - reach || c.y0 * kCoverCell > y + reach)
+                continue;
+            out.insert(out.end(), c.triangles, c.triangles + c.count);
+        }
+        ReleaseSRWLockShared(&coversLock);
     }
 }
