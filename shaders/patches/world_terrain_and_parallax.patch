@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS3.asm b/win32_30_nv8/gta_default/gta_defaultPS3.asm
-index ff566cc..37ea8d0 100644
+index 9f1fa34..cd88d0d 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS3.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS3.asm
 @@ -21,6 +21,16 @@
@@ -19,7 +19,7 @@ index ff566cc..37ea8d0 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -34,23 +44,191 @@
+@@ -34,24 +44,192 @@
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
@@ -27,6 +27,7 @@ index ff566cc..37ea8d0 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
+     dcl_texcoord8 v3
      dcl_2d s12 // FusionFix detail texture
 -    texld r0, v0, s0
 +    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping on natural ground facing up
@@ -215,7 +216,7 @@ index ff566cc..37ea8d0 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -104,10 +282,94 @@
+@@ -105,10 +283,94 @@
          mov r0.xyz, r25
        endif
      endif
@@ -311,7 +312,7 @@ index ff566cc..37ea8d0 100644
        texld r24, r24, s12
        mad r25.x, r24.z, c190.y, c190.z
        mul r0.xyz, r0, r25.x
-@@ -129,7 +391,45 @@
+@@ -130,7 +392,45 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -358,7 +359,7 @@ index ff566cc..37ea8d0 100644
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, -c0.y
-@@ -137,7 +437,9 @@
+@@ -138,7 +438,9 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -370,7 +371,7 @@ index ff566cc..37ea8d0 100644
      // mov oC2.w, r1.x
      add r20.x, -c152.w, r1.x
 diff --git a/win32_30_nv8/gta_default/gta_defaultPS4.asm b/win32_30_nv8/gta_default/gta_defaultPS4.asm
-index 3c1f0f3..5f3db10 100644
+index 543e825..1a36217 100644
 --- a/win32_30_nv8/gta_default/gta_defaultPS4.asm
 +++ b/win32_30_nv8/gta_default/gta_defaultPS4.asm
 @@ -21,6 +21,16 @@
@@ -390,7 +391,7 @@ index 3c1f0f3..5f3db10 100644
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      def c2, 0.5, 0, 1, 0.25
-@@ -32,23 +42,191 @@
+@@ -32,24 +42,192 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -398,6 +399,7 @@ index 3c1f0f3..5f3db10 100644
      dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s10
+     dcl_texcoord8 v3
      dcl_2d s12 // FusionFix detail texture
 -    texld r0, v0, s0
 +    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping on natural ground facing up
@@ -586,7 +588,7 @@ index 3c1f0f3..5f3db10 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -102,15 +280,137 @@
+@@ -103,15 +281,137 @@
          mov r0.xyz, r25
        endif
      endif
@@ -726,7 +728,7 @@ index 3c1f0f3..5f3db10 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
      mul r0.w, r0.w, v2.w
-@@ -119,7 +419,9 @@
+@@ -120,7 +420,9 @@
      mul r0.w, r0.w, c39.x
      mov oC0, r0
      mov oC1.w, r0.w
@@ -738,7 +740,7 @@ index 3c1f0f3..5f3db10 100644
      mov oC2.w, r0.w
      mov r0.yz, c0
 diff --git a/win32_30_nv8/gta_normal/gta_normalPS3.asm b/win32_30_nv8/gta_normal/gta_normalPS3.asm
-index 6155923..ab1f51f 100644
+index 97f0756..d68e8d5 100644
 --- a/win32_30_nv8/gta_normal/gta_normalPS3.asm
 +++ b/win32_30_nv8/gta_normal/gta_normalPS3.asm
 @@ -27,6 +27,13 @@
@@ -763,7 +765,7 @@ index 6155923..ab1f51f 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -111,6 +119,89 @@
+@@ -112,6 +120,89 @@
          mov r0.xyz, r25
        endif
      endif
@@ -853,7 +855,7 @@ index 6155923..ab1f51f 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -184,7 +275,7 @@
+@@ -185,7 +276,7 @@
      mov oC1.w, r1.x
      mul r30.w, r1.z, c72.x
      mul oC2.x, r30.w, r29.x // FusionFix specular anti-aliasing: lowered with the wider highlight
@@ -863,7 +865,7 @@ index 6155923..ab1f51f 100644
      add r20.x, -c152.w, r1.x
      cmp oC2.w, r20.x, c1.z, -c1.y
 diff --git a/win32_30_nv8/gta_normal/gta_normalPS4.asm b/win32_30_nv8/gta_normal/gta_normalPS4.asm
-index cef7cdb..13744f5 100644
+index e9c433c..8cbdf6b 100644
 --- a/win32_30_nv8/gta_normal/gta_normalPS4.asm
 +++ b/win32_30_nv8/gta_normal/gta_normalPS4.asm
 @@ -29,6 +29,13 @@
@@ -888,7 +890,7 @@ index cef7cdb..13744f5 100644
      dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s1
-@@ -116,6 +124,89 @@
+@@ -117,6 +125,89 @@
          mov r1.xyz, r25
        endif
      endif
@@ -978,7 +980,7 @@ index cef7cdb..13744f5 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -175,7 +266,7 @@
+@@ -176,7 +267,7 @@
      mov oC1.w, r0.x
      mul r30.w, r0.z, c72.x
      mul oC2.x, r30.w, r29.x // FusionFix specular anti-aliasing: lowered with the wider highlight
@@ -986,9 +988,9 @@ index cef7cdb..13744f5 100644
 +    mul oC2.z, v4.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
      mov oC2.w, r0.x
      mov r0.xw, c2
-     mul oC3, r0.wxxx, c52.x
+     mul r29, r0.wxxx, c52.x
 diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
-index 95f58df..67e8364 100644
+index 60c07d2..93320c0 100644
 --- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
 +++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
 @@ -31,6 +31,13 @@
@@ -1013,7 +1015,7 @@ index 95f58df..67e8364 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -116,6 +124,89 @@
+@@ -117,6 +125,89 @@
          mov r0.xyz, r25
        endif
      endif
@@ -1103,7 +1105,7 @@ index 95f58df..67e8364 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -192,7 +283,7 @@
+@@ -193,7 +284,7 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -1113,7 +1115,7 @@ index 95f58df..67e8364 100644
      add r20.x, -c152.w, r1.x
      cmp oC2.w, r20.x, c1.z, -c1.y
 diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
-index 5bdd4d9..28fe345 100644
+index 5ae38c3..a795c35 100644
 --- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
 +++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
 @@ -33,6 +33,13 @@
@@ -1138,7 +1140,7 @@ index 5bdd4d9..28fe345 100644
      dcl_texcoord9 v9
      dcl_2d s0
      dcl_2d s1
-@@ -121,6 +129,89 @@
+@@ -122,6 +130,89 @@
          mov r1.xyz, r25
        endif
      endif
@@ -1228,7 +1230,7 @@ index 5bdd4d9..28fe345 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -183,7 +274,7 @@
+@@ -184,7 +275,7 @@
      mov oC0.xyz, r1
      mov oC0.w, r0.x
      mov oC1.w, r0.x
@@ -1236,9 +1238,9 @@ index 5bdd4d9..28fe345 100644
 +    mul oC2.z, v4.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
      mov oC2.w, r0.x
      mov r0.xw, c2
-     mul oC3, r0.wxxx, c52.x
+     mul r29, r0.wxxx, c52.x
 diff --git a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm b/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
-index 651fe30..048402d 100644
+index 17ea590..59564b9 100644
 --- a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
 +++ b/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
 @@ -29,6 +29,11 @@
@@ -1253,7 +1255,7 @@ index 651fe30..048402d 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -58,6 +63,41 @@
+@@ -59,6 +64,41 @@
      mul r0.z, r1.y, c66.x
      mad r0.z, r0.w, c66.x, -r0.z
      mad r0.xy, r0.z, r0, v0
@@ -1295,7 +1297,7 @@ index 651fe30..048402d 100644
      texld r2, r0, s0
      // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
      // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
-@@ -161,6 +201,14 @@
+@@ -162,6 +202,14 @@
      rsq r1.z, r1.z
      dp2add r1.x, r1, r1, c2.w
      cmp r1.x, r1.x, -c2.x, -c2.y
@@ -1311,7 +1313,7 @@ index 651fe30..048402d 100644
      mul oC2.z, r1.x, v4.x
      mul r1.x, r1.x, c73.x
 diff --git a/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm b/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
-index 1a11347..b747bbc 100644
+index 93a0929..69bbdeb 100644
 --- a/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
 +++ b/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
 @@ -31,6 +31,11 @@
@@ -1326,7 +1328,7 @@ index 1a11347..b747bbc 100644
      def c0, 0.5, -0.5, -0.00200000009, 0.001953125
      def c1, 0, -1, -0, 9.99999975e-006
      def c2, 3.99600005, 4, 0.125, 0.25
-@@ -58,6 +63,41 @@
+@@ -59,6 +64,41 @@
      mul r0.z, r1.x, c66.x
      mad r0.z, r0.w, c66.x, -r0.z
      mad r0.xy, r0.z, r0, v0
@@ -1368,7 +1370,7 @@ index 1a11347..b747bbc 100644
      texld r2, r0, s1
      texld r0, r0, s0
      // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
-@@ -150,6 +190,14 @@
+@@ -151,6 +191,14 @@
      rsq r2.z, r2.z
      dp2add r2.x, r2, r2, c0.z
      cmp r2.x, r2.x, -c1.y, -c1.z
@@ -1384,7 +1386,7 @@ index 1a11347..b747bbc 100644
      mul oC2.z, r2.x, v4.x
      mul r0.x, r2.x, c73.x
 diff --git a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
-index 1234f9b..8a7294f 100644
+index 3f35f3f..ac6fc46 100644
 --- a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
 +++ b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
 @@ -33,6 +33,11 @@
@@ -1399,7 +1401,7 @@ index 1234f9b..8a7294f 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -63,6 +68,41 @@
+@@ -64,6 +69,41 @@
      mul r0.z, r1.y, c66.x
      mad r0.z, r0.w, c66.x, -r0.z
      mad r0.xy, r0.z, r0, v0
@@ -1441,7 +1443,7 @@ index 1234f9b..8a7294f 100644
      texld r2, r0, s0
      // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
      // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
-@@ -170,6 +210,14 @@
+@@ -171,6 +211,14 @@
      mul r2.w, r2.w, c73.x
      dp2add r1.x, r1, r1, c2.w
      cmp r1.x, r1.x, -c2.x, -c2.y
@@ -1457,7 +1459,7 @@ index 1234f9b..8a7294f 100644
      mul oC2.z, r1.x, v4.x
      mul r1.x, r2.w, r1.x
 diff --git a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
-index 828f4ae..22e66d4 100644
+index 48fed17..bb28889 100644
 --- a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
 +++ b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
 @@ -35,6 +35,11 @@
@@ -1472,7 +1474,7 @@ index 828f4ae..22e66d4 100644
      def c0, 0.5, -0.5, -0.00200000009, 0.001953125
      def c1, 0, -1, -0, 9.99999975e-006
      def c2, 3.99600005, 4, 0.125, 0.25
-@@ -63,6 +68,41 @@
+@@ -64,6 +69,41 @@
      mul r0.z, r1.x, c66.x
      mad r0.z, r0.w, c66.x, -r0.z
      mad r0.xy, r0.z, r0, v0
@@ -1514,7 +1516,7 @@ index 828f4ae..22e66d4 100644
      texld r1, r0, s1
      texld r0, r0, s0
      // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
-@@ -159,6 +199,14 @@
+@@ -160,6 +200,14 @@
      mul r2.w, r2.w, c73.x
      dp2add r1.x, r1, r1, c0.z
      cmp r1.x, r1.x, -c1.y, -c1.z
@@ -1530,7 +1532,7 @@ index 828f4ae..22e66d4 100644
      mul oC2.z, r1.x, v4.x
      mul r0.x, r2.w, r1.x
 diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
-index 88a09b5..d666ce7 100644
+index 5b697af..19b3c74 100644
 --- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
 +++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
 @@ -29,6 +29,11 @@
@@ -1545,79 +1547,6 @@ index 88a09b5..d666ce7 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -69,6 +74,41 @@
-       mov r3.yzw, r5.xxyw
-       cmp r2, r0.z, r2, r3
-     endrep
-+    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping, the view ray
-+    // --- marched through the height map in more steps the flatter it looks along the surface, and the
-+    // --- hit found between the last two of them, in place of one offset by the height under the pixel.
-+    if b15
-+      dsx r26.xy, v0.xyxy
-+      dsy r22.xy, v0.xyxy
-+      dp3 r27.w, v5, v5
-+      rsq r27.w, r27.w
-+      mul r27.z, v5.z, r27.w
-+      mad r27.z, -r27_abs.z, c170.y, c170.y
-+      add r27.z, r27.z, c170.x
-+      rcp r27.z, r27.z // the step
-+      mul r21.xy, -r1, c170.z
-+      mov r21.zw, v0.xyxy
-+      mov r28.x, c187.x
-+      mov r28.y, c187.y
-+      rep i1
-+        mov r28.zw, r28.xxxy
-+        add r28.x, r28.x, r27.z
-+        min r28.x, r28.x, c187.y
-+        mad r23.xy, r28.x, -r21, r21.zwzw
-+        texldd r29, r23, s1, r26, r22
-+        add r29.x, c187.y, -r28.x
-+        add r28.y, r29.x, -r29.w // how far above the height map the ray still is
-+        break_le r28.y, c187.x
-+      endrep
-+      add r29.x, r28.w, -r28.y
-+      rcp r29.x, r29.x
-+      mul r29.x, r28.w, r29.x
-+      add r29.y, r28.x, -r28.z
-+      mad r29.y, r29.x, r29.y, r28.z
-+      mad r1.zw, r29.y, -r21, r21.zwzw
-+      texld r29, r1.zwzw, s1
-+      mov r2.yzw, r29.xxyw
-+    endif
-     texld r0, r1.zwzw, s0
-     // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
-     // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
-@@ -171,6 +211,14 @@
-     rsq r0.w, r0.w
-     dp2add r2.x, r2.yzzw, r2.yzzw, c2.x
-     cmp r2.x, r2.x, -c1.y, -c1.z
-+    // --- FusionFix ground surfaces: GroundSurfacesDebug, half the colour the debug colour
-+    if b15
-+      mov r21.w, c170.w
-+      if_gt r21.w, c187.x
-+        add r21.xyz, c185, -r0
-+        mad r0.xyz, r21, c187.z, r0
-+      endif
-+    endif
-     mul oC0.xyz, r0, r2.x
-     mul oC2.z, r2.x, v4.x
-     mul r0.x, r2.x, c73.x
-diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
-index 7d9644a..22ff627 100644
---- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
-+++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
-@@ -31,6 +31,11 @@
- 
-     ps_3_0
-     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 6.3198560741e-43 // 451
-+    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
-+    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
-+    def c186, 0.37, 0.61, 1e-12, 2 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
-+    def c185, 0, 1, 1, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
-+    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the most steps
-     def c0, 9.99999975e-006, 0, 1, -0.125
-     def c1, -1, -0, -0.5, -0.00200000009
-     def c2, 0.001953125, 0, 0, 0
 @@ -70,6 +75,41 @@
        mov r3.yzw, r5.xxyw
        cmp r2, r0.z, r2, r3
@@ -1660,7 +1589,80 @@ index 7d9644a..22ff627 100644
      texld r0, r1.zwzw, s0
      // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
      // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
-@@ -161,6 +201,14 @@
+@@ -172,6 +212,14 @@
+     rsq r0.w, r0.w
+     dp2add r2.x, r2.yzzw, r2.yzzw, c2.x
+     cmp r2.x, r2.x, -c1.y, -c1.z
++    // --- FusionFix ground surfaces: GroundSurfacesDebug, half the colour the debug colour
++    if b15
++      mov r21.w, c170.w
++      if_gt r21.w, c187.x
++        add r21.xyz, c185, -r0
++        mad r0.xyz, r21, c187.z, r0
++      endif
++    endif
+     mul oC0.xyz, r0, r2.x
+     mul oC2.z, r2.x, v4.x
+     mul r0.x, r2.x, c73.x
+diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
+index add3bf3..bf81968 100644
+--- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
++++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
+@@ -31,6 +31,11 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 6.3198560741e-43 // 451
++    def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
++    def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
++    def c186, 0.37, 0.61, 1e-12, 2 // FusionFix ground surfaces: second read's offset, smallest area, shader kind (texturequality.ixx counts them)
++    def c185, 0, 1, 1, 0 // FusionFix ground surfaces: GroundSurfacesDebug colour
++    defi i1, 32, 0, 0, 0 // FusionFix ground surfaces: the most steps
+     def c0, 9.99999975e-006, 0, 1, -0.125
+     def c1, -1, -0, -0.5, -0.00200000009
+     def c2, 0.001953125, 0, 0, 0
+@@ -71,6 +76,41 @@
+       mov r3.yzw, r5.xxyw
+       cmp r2, r0.z, r2, r3
+     endrep
++    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping, the view ray
++    // --- marched through the height map in more steps the flatter it looks along the surface, and the
++    // --- hit found between the last two of them, in place of one offset by the height under the pixel.
++    if b15
++      dsx r26.xy, v0.xyxy
++      dsy r22.xy, v0.xyxy
++      dp3 r27.w, v5, v5
++      rsq r27.w, r27.w
++      mul r27.z, v5.z, r27.w
++      mad r27.z, -r27_abs.z, c170.y, c170.y
++      add r27.z, r27.z, c170.x
++      rcp r27.z, r27.z // the step
++      mul r21.xy, -r1, c170.z
++      mov r21.zw, v0.xyxy
++      mov r28.x, c187.x
++      mov r28.y, c187.y
++      rep i1
++        mov r28.zw, r28.xxxy
++        add r28.x, r28.x, r27.z
++        min r28.x, r28.x, c187.y
++        mad r23.xy, r28.x, -r21, r21.zwzw
++        texldd r29, r23, s1, r26, r22
++        add r29.x, c187.y, -r28.x
++        add r28.y, r29.x, -r29.w // how far above the height map the ray still is
++        break_le r28.y, c187.x
++      endrep
++      add r29.x, r28.w, -r28.y
++      rcp r29.x, r29.x
++      mul r29.x, r28.w, r29.x
++      add r29.y, r28.x, -r28.z
++      mad r29.y, r29.x, r29.y, r28.z
++      mad r1.zw, r29.y, -r21, r21.zwzw
++      texld r29, r1.zwzw, s1
++      mov r2.yzw, r29.xxyw
++    endif
+     texld r0, r1.zwzw, s0
+     // --- FusionFix bicubic: where a texel covers more than a pixel, the diffuse texture is
+     // --- read with a Catmull-Rom filter, sharper than bilinear and without its diamonds (b13).
+@@ -162,6 +202,14 @@
      rsq r1.w, r1.w
      dp2add r2.x, r2.yzzw, r2.yzzw, c1.w
      cmp r2.x, r2.x, -c1.x, -c1.y
@@ -1676,7 +1678,7 @@ index 7d9644a..22ff627 100644
      mul oC2.z, r2.x, v4.x
      mul r0.x, r2.x, c73.x
 diff --git a/win32_30_nv8/gta_spec/gta_specPS3.asm b/win32_30_nv8/gta_spec/gta_specPS3.asm
-index d721e6d..c70b59b 100644
+index 97e4029..2997def 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS3.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS3.asm
 @@ -27,6 +27,16 @@
@@ -1696,7 +1698,7 @@ index d721e6d..c70b59b 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -38,24 +48,192 @@
+@@ -38,25 +48,193 @@
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
@@ -1705,6 +1707,7 @@ index d721e6d..c70b59b 100644
      dcl vPos.xy
      dcl_2d s0
      dcl_2d s1
+     dcl_texcoord8 v3
      dcl_2d s12 // FusionFix detail texture
 -    texld r0, v0, s0
 +    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping on natural ground facing up
@@ -1893,7 +1896,7 @@ index d721e6d..c70b59b 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -109,10 +287,94 @@
+@@ -110,10 +288,94 @@
          mov r0.xyz, r25
        endif
      endif
@@ -1989,7 +1992,7 @@ index d721e6d..c70b59b 100644
        texld r24, r24, s12
        mad r25.x, r24.z, c190.y, c190.z
        mul r0.xyz, r0, r25.x
-@@ -128,10 +390,48 @@
+@@ -129,10 +391,48 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -2040,7 +2043,7 @@ index d721e6d..c70b59b 100644
      mul r2.x, r3.w, c66.x
      dp3 r2.w, r3, c73
      mul r2.w, r2.w, c72.x
-@@ -144,7 +444,7 @@
+@@ -145,7 +445,7 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -2050,7 +2053,7 @@ index d721e6d..c70b59b 100644
      add r20.x, -c152.w, r1.x
      cmp oC2.w, r20.x, c0.z, -c0.y
 diff --git a/win32_30_nv8/gta_spec/gta_specPS4.asm b/win32_30_nv8/gta_spec/gta_specPS4.asm
-index 3067a70..9dc9731 100644
+index c2ca346..3b04370 100644
 --- a/win32_30_nv8/gta_spec/gta_specPS4.asm
 +++ b/win32_30_nv8/gta_spec/gta_specPS4.asm
 @@ -29,6 +29,16 @@
@@ -2070,7 +2073,7 @@ index 3067a70..9dc9731 100644
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      def c2, 0.5, 0.001953125, 0, 0
-@@ -39,24 +49,192 @@
+@@ -39,25 +49,193 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -2079,6 +2082,7 @@ index 3067a70..9dc9731 100644
      dcl_2d s0
      dcl_2d s1
      dcl_2d s10
+     dcl_texcoord8 v3
      dcl_2d s12 // FusionFix detail texture
 -    texld r0, v0, s0
 +    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping on natural ground facing up
@@ -2267,7 +2271,7 @@ index 3067a70..9dc9731 100644
          add r24.zw, r24.xyxy, c196.x
          frc r25.xy, r24.zwzw
          add r24.zw, r24, -r25.xyxy
-@@ -110,18 +288,140 @@
+@@ -111,18 +289,140 @@
          mov r0.xyz, r25
        endif
      endif
@@ -2411,7 +2415,7 @@ index 3067a70..9dc9731 100644
      mul r2.w, r2.w, c66.x
      dp3 r2.x, r2, c73
      mul r2.x, r2.x, c72.x
-@@ -135,7 +435,7 @@
+@@ -136,7 +436,7 @@
      mul r0.w, r0.w, c39.x
      mov oC0, r0
      mov oC1.w, r0.w
@@ -2419,9 +2423,9 @@ index 3067a70..9dc9731 100644
 +    mul oC2.z, v2.x, r21.x // FusionFix ground surfaces: and the hollows' occlusion
      mov oC2.w, r0.w
      mov r0.yz, c0
-     mul oC3, -r0.yzzz, c52.x
+     mul r29, -r0.yzzz, c52.x
 diff --git a/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm b/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
-index 5882ea1..9d0522b 100644
+index 6f89146..d67d5e7 100644
 --- a/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
 +++ b/win32_30_nv8/gta_terrain_va_2lyr/gta_terrain_va_2lyrPS3.asm
 @@ -21,6 +21,10 @@
@@ -2443,7 +2447,7 @@ index 5882ea1..9d0522b 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -47,10 +52,79 @@
+@@ -48,10 +53,79 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, c39.x
      texkill r20
@@ -2527,7 +2531,7 @@ index 5882ea1..9d0522b 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -61,7 +135,36 @@
+@@ -62,7 +136,36 @@
      endif
      mul oC0.xyz, r2, v2
      mov oC0.w, c39.x
@@ -2566,7 +2570,7 @@ index 5882ea1..9d0522b 100644
      mad oC2.xz, v2.w, c0.yyzw, c0.ywyw
      mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
 diff --git a/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm b/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
-index b1190ce..46e5f34 100644
+index 00dfe76..6009ed4 100644
 --- a/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
 +++ b/win32_30_nv8/gta_terrain_va_3lyr/gta_terrain_va_3lyrPS4.asm
 @@ -23,6 +23,10 @@
@@ -2588,7 +2592,7 @@ index b1190ce..46e5f34 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -51,13 +56,111 @@
+@@ -52,13 +57,111 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, c39.x
      texkill r20
@@ -2707,7 +2711,7 @@ index b1190ce..46e5f34 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -68,7 +171,36 @@
+@@ -69,7 +172,36 @@
      endif
      mul oC0.xyz, r1, v3
      mov oC0.w, c39.x
@@ -2746,7 +2750,7 @@ index b1190ce..46e5f34 100644
      mad oC2.xz, v3.w, c0.yyzw, c0.ywyw
      mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
 diff --git a/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm b/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
-index 10dd3b6..9ba3dfc 100644
+index 114c8e8..b3c94c5 100644
 --- a/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
 +++ b/win32_30_nv8/gta_terrain_va_4lyr/gta_terrain_va_4lyrPS5.asm
 @@ -25,6 +25,10 @@
@@ -2768,7 +2772,7 @@ index 10dd3b6..9ba3dfc 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
-@@ -55,16 +60,143 @@
+@@ -56,16 +61,143 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, c39.x
      texkill r20
@@ -2922,7 +2926,7 @@ index 10dd3b6..9ba3dfc 100644
      // --- FusionFix detail texture: a fine grain the diffuse texture lacks up close (b12);
      // --- its mip maps fade to flat grey, so it leaves distant surfaces alone.
      if b12
-@@ -75,7 +207,36 @@
+@@ -76,7 +208,36 @@
      endif
      mul oC0.xyz, r2, v4
      mov oC0.w, c39.x
@@ -2961,7 +2965,7 @@ index 10dd3b6..9ba3dfc 100644
      mad oC2.xz, v4.w, c0.yyzw, c0.ywyw
      mov oC2.y, c189.x // FusionFix: gloss 258 / 1023 marks a material with no specular map for the sun's sheen
 diff --git a/win32_30_nv8/rage_default/rage_defaultPS3.asm b/win32_30_nv8/rage_default/rage_defaultPS3.asm
-index 3a528b5..1668b82 100644
+index c4a9ce9..f714772 100644
 --- a/win32_30_nv8/rage_default/rage_defaultPS3.asm
 +++ b/win32_30_nv8/rage_default/rage_defaultPS3.asm
 @@ -23,6 +23,16 @@
@@ -2981,7 +2985,7 @@ index 3a528b5..1668b82 100644
      def c152, 0.2, 0.4, 0.6, 0.8 // c152-c154 = new stipple constants
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
-@@ -32,10 +42,263 @@
+@@ -32,11 +42,264 @@
      dcl_texcoord v0.xy
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
@@ -2989,6 +2993,7 @@ index 3a528b5..1668b82 100644
      dcl_texcoord9 v9
      dcl vPos.xy
      dcl_2d s0
+     dcl_texcoord8 v3
 -    texld r0, v0, s0
 +    dcl_2d s12 // FusionFix ground surfaces: noise
 +    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping on natural ground facing up
@@ -3246,7 +3251,7 @@ index 3a528b5..1668b82 100644
      mul_sat r0.w, r0.w, c154.x
      // mul r0.w, r0.w, v2.w disabled vertex alpha
      mul r1.x, r0.w, c39.x
-@@ -47,7 +310,41 @@
+@@ -48,7 +311,41 @@
      dp4 r20.x, r20_abs, c152.xzwy
      add r20, -r20.x, r1.x
      texkill r20
@@ -3289,7 +3294,7 @@ index 3a528b5..1668b82 100644
      dp3 r0.w, r1.yzww, r1.yzww
      rsq r0.w, r0.w
      mad r1.yzw, r1, r0.w, -c0.y
-@@ -55,7 +352,9 @@
+@@ -56,7 +353,9 @@
      mov oC0.xyz, r0
      mov oC0.w, r1.x
      mov oC1.w, r1.x
@@ -3301,7 +3306,7 @@ index 3a528b5..1668b82 100644
      // mov oC2.w, r1.x
      add r20.x, -c152.w, r1.x
 diff --git a/win32_30_nv8/rage_default/rage_defaultPS4.asm b/win32_30_nv8/rage_default/rage_defaultPS4.asm
-index 657ce1d..57354fc 100644
+index 12df6a5..1baa543 100644
 --- a/win32_30_nv8/rage_default/rage_defaultPS4.asm
 +++ b/win32_30_nv8/rage_default/rage_defaultPS4.asm
 @@ -25,6 +25,16 @@
@@ -3321,7 +3326,7 @@ index 657ce1d..57354fc 100644
      def c0, 0, -1, -0, 9.99999975e-006
      def c1, 3.99600005, 4, 0.125, 0.25
      // def c2, 0.5, 0.001953125, 0, 0
-@@ -34,11 +44,298 @@
+@@ -34,12 +44,299 @@
      dcl_texcoord1 v1.xyz
      dcl_color v2.xw
      dcl vPos.xy
@@ -3330,6 +3335,7 @@ index 657ce1d..57354fc 100644
      dcl_2d s0
 +    dcl_2d s12 // FusionFix ground surfaces: noise
      dcl_2d s10
+     dcl_texcoord8 v3
 -    texld r0, v0, s0
 -    add r1.xyz, c0.w, v1
 +    // --- FusionFix ground surfaces (b15, texturequality.ixx): parallax occlusion mapping on natural ground facing up
@@ -3622,7 +3628,7 @@ index 657ce1d..57354fc 100644
      dp3 r1.w, r1, r1
      rsq r1.w, r1.w
      mul r0.w, r0.w, v2.w
-@@ -53,7 +350,9 @@
+@@ -54,7 +351,9 @@
      mov oC1.w, r0.w
      // mul oC2.x, r1.x, c72.x
      // mov oC2.z, v2.x

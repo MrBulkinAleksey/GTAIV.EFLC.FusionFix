@@ -1,35 +1,29 @@
 diff --git a/win32_30_nv8/gta_ped/gta_pedPS5.asm b/win32_30_nv8/gta_ped/gta_pedPS5.asm
-index af6acf8..c8c3082 100644
+index 73bfab0..97edfc3 100644
 --- a/win32_30_nv8/gta_ped/gta_pedPS5.asm
 +++ b/win32_30_nv8/gta_ped/gta_pedPS5.asm
-@@ -148,7 +148,9 @@
-     add r20.x, r20.x, c39.x
+@@ -150,6 +150,7 @@
      cmp oC2.w, r20.x, c2.x, c2.y
      mov r0.xy, c2
--    mul oC3, r0.yxxx, c52.x
-+    mul r21, r0.yxxx, c52.x
-+    add r21.x, r21.x, c150.x // FusionFix: a quarter step on the material ID for the HEAD and HAND components, set per component (postfx.ixx), marks skin
-+    mov oC3, r21
+     mul r29, r0.yxxx, c52.x
++    add r29.x, r29.x, c150.x // FusionFix: a quarter step on the material ID for the HEAD and HAND components, set per component (postfx.ixx), marks skin
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm b/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm
-index 24685ed..7c88b0f 100644
+index 444319a..8e966ee 100644
 --- a/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm
 +++ b/win32_30_nv8/gta_ped_reflect/gta_ped_reflectPS5.asm
-@@ -148,7 +148,9 @@
-     add r20.x, r20.x, c39.x
+@@ -150,6 +150,7 @@
      cmp oC2.w, r20.x, c2.x, c2.y
      mov r0.xy, c2
--    mul oC3, r0.yxxx, c52.x
-+    mul r21, r0.yxxx, c52.x
-+    add r21.x, r21.x, c150.x // FusionFix: a quarter step on the material ID for the HEAD and HAND components, set per component (postfx.ixx), marks skin
-+    mov oC3, r21
+     mul r29, r0.yxxx, c52.x
++    add r29.x, r29.x, c150.x // FusionFix: a quarter step on the material ID for the HEAD and HAND components, set per component (postfx.ixx), marks skin
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/gta_ped_skin/gta_ped_skinPS5.asm b/win32_30_nv8/gta_ped_skin/gta_ped_skinPS5.asm
-index 5999a34..985de8a 100644
+index 8651d54..b539494 100644
 --- a/win32_30_nv8/gta_ped_skin/gta_ped_skinPS5.asm
 +++ b/win32_30_nv8/gta_ped_skin/gta_ped_skinPS5.asm
 @@ -50,6 +50,7 @@
@@ -40,18 +34,16 @@ index 5999a34..985de8a 100644
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
      def c0, 4, 0.125, 0.25, -0.5
-@@ -179,7 +180,8 @@
-     mov r20.x, -c152.w
+@@ -181,6 +182,7 @@
      add r20.x, r20.x, c39.x
      cmp oC2.w, r20.x, c1.x, c1.y
--    mul oC3, r3.yxxx, c52.x
-+    mul r21, r3.yxxx, c52.x
-+    add oC3, r21, c155 // FusionFix: skin for the scattering pass (SkinScatter in SSR.fx); every other ID is a whole step
+     mul r29, r3.yxxx, c52.x
++    add r29, r29, c155 // FusionFix: skin for the scattering pass (SkinScatter in SSR.fx); every other ID is a whole step
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x
 diff --git a/win32_30_nv8/gta_ped_skin_blendshape/gta_ped_skin_blendshapePS5.asm b/win32_30_nv8/gta_ped_skin_blendshape/gta_ped_skin_blendshapePS5.asm
-index f7fc938..c43d7a4 100644
+index d8976bd..8cda1c7 100644
 --- a/win32_30_nv8/gta_ped_skin_blendshape/gta_ped_skin_blendshapePS5.asm
 +++ b/win32_30_nv8/gta_ped_skin_blendshape/gta_ped_skin_blendshapePS5.asm
 @@ -50,6 +50,7 @@
@@ -62,13 +54,11 @@ index f7fc938..c43d7a4 100644
      def c153, 0.5, 2, 1, 0
      def c154, 1.6, 0, 0, 0
      def c0, 4, 0.125, 0.25, -0.5
-@@ -179,7 +180,8 @@
-     mov r20.x, -c152.w
+@@ -181,6 +182,7 @@
      add r20.x, r20.x, c39.x
      cmp oC2.w, r20.x, c1.x, c1.y
--    mul oC3, r3.yxxx, c52.x
-+    mul r21, r3.yxxx, c52.x
-+    add oC3, r21, c155 // FusionFix: skin for the scattering pass (SkinScatter in SSR.fx); every other ID is a whole step
+     mul r29, r3.yxxx, c52.x
++    add r29, r29, c155 // FusionFix: skin for the scattering pass (SkinScatter in SSR.fx); every other ID is a whole step
      
      // LogDepth Write
      mul r19.x, v9.w, c209.x

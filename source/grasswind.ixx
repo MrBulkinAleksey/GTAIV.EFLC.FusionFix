@@ -55,8 +55,8 @@ export namespace GrassShared
 // scatters on the ground (procedural props: proc_grass*, *_proc_plant_*, *weed*, sm_plant*). They are buildings from
 // the building pool (EntityClass counts them as buildings) drawn with gta_default (gta_cutout), whose deferred vertex
 // shaders move each vertex when b12 is on (shaders/patches/world_grass_wind.patch). Around each G-buffer draw of such a
-// model (by its name's hash, model info +0x3c) b12 is set and c241 gets the model's height and its bend and flutter at
-// the tip; at the start of the pass c240 and c242 get the wind's direction and the phases of the gust wave and the
+// model (by its name's hash, model info +0x3c) b12 is set and c253 gets the model's height and its bend and flutter at
+// the tip; at the start of the pass c252 and c254 get the wind's direction and the phases of the gust wave and the
 // flutter.
 //
 // The game has no wind direction; the clouds' drift (0.93, 0.37) is taken so the grass and the clouds agree. The
@@ -78,7 +78,7 @@ export namespace GrassShared
 // world (a cell's place in it is its world position modulo 64 m, so the grid only clears the rows and columns the player
 // leaves behind), is stamped along each body's path in the last frame (a person's feet, a car's four wheels, a bike's
 // two) with the way it went, and goes to a vertex texture (vs s1, A8R8G8B8: direction, strength, the ground's height
-// modulo 64 m; from the window's corner, clamped, edge texels empty) for the G-buffer pass; c243 = 1 / 64 m, the
+// modulo 64 m; from the window's corner, clamped, edge texels empty) for the G-buffer pass; c255 = 1 / 64 m, the
 // strength (0 = off), the texture coordinate's offset. Needs vertex textures (DXVK has them).
 //
 // Bush Shake ([PROCEDURAL] BushShake): the bushes (up to 5.5 m tall) a person or a car goes through part away from them
@@ -87,7 +87,7 @@ export namespace GrassShared
 // bushes are; zz_bush_shake_default.patch, VS4/VS5) with a texture whose name holds one of the words of
 // [PROCEDURAL] BushTextures (hidden): gta_default draws benches and fences too. Each model is looked at once, the first
 // time it is drawn with a body near, from its drawable's shaders (EntityClass::ModelDrawable). Around the G-buffer draw
-// of a bush with a body reaching it b13 is set, c248-c251 get the bodies as for the grass and c241 the model's height,
+// of a bush with a body reaching it b13 is set, c248-c251 get the bodies as for the grass and c247 the model's height,
 // the push and the shake at its top and the shake's phase. Needs the same bodies as Grass Bending. GrassWindLog writes
 // each model looked at, bush or not, with its shaders and textures.
 //
@@ -95,14 +95,16 @@ export namespace GrassShared
 // writes the wind and the grass draws to GTAIV.EFLC.FusionFix.GrassWind.log every 600 G-buffer passes.
 class GrassWind
 {
-    static constexpr int kWindRegister = 240;       // c240: direction / wavelength, gust phase, flutter phase
-    static constexpr int kModelRegister = 241;      // c241: 1 / height, bend and flutter at the tip (metres)
-    static constexpr int kDirectionRegister = 242;  // c242.xy: the wind's unit direction
-    static constexpr int kTrampleRegister = 243;    // c243: 1 / the trample grid's side (m), its strength (0 = off), the texture coordinate's offset
+    // Upstream's motion vectors take c240-c246 in every deferred vertex shader (shaders/patches/aa_motion_vectors.patch)
+    static constexpr int kWindRegister = 252;       // c252: direction / wavelength, gust phase, flutter phase
+    static constexpr int kModelRegister = 253;      // c253: 1 / height, bend and flutter at the tip (metres)
+    static constexpr int kDirectionRegister = 254;  // c254.xy: the wind's unit direction
+    static constexpr int kTrampleRegister = 255;    // c255: 1 / the trample grid's side (m), its strength (0 = off), the texture coordinate's offset
+    static constexpr int kBushRegister = 247;       // c247: a bush's 1 / height, push and shake at the top (metres), the shake's phase
     static constexpr DWORD kTrampleSampler = D3DVERTEXTEXTURESAMPLER1;  // vs s1
     static constexpr int kBodyRegister = 248;       // c248-c251: two bodies (centre, forward; half length, half width, 1 / reach, strength)
     static constexpr int kSwayFlag = 12;            // b12 (vertex shader)
-    static constexpr int kBushFlag = 13;            // b13 (vertex shader): a bush with bodies in c248-c251, c241 its push and shake
+    static constexpr int kBushFlag = 13;            // b13 (vertex shader): a bush with bodies in c248-c251, c247 its push and shake
     static constexpr float kPushPerHeight = 0.75f;  // a body's push at the tip, of the plant's height
 
     static constexpr float kDirection[2] = { 0.929f, 0.370f };
@@ -804,8 +806,7 @@ class GrassWind
         const float shake = kBushShake * (rotor ? 1.0f : std::clamp(speed / kBushShakeSpeed, 0.0f, 1.0f));
         const float params[4] = { 1.0f / height, (std::min)(height * kBushPushPerHeight, kBushMaxPush), shake, static_cast<float>(bushPhase) };
         UploadBodies(pDevice, nearest, place);
-        pDevice->SetVertexShaderConstantF(kModelRegister, params, 1);
-        lastModel = -1;
+        pDevice->SetVertexShaderConstantF(kBushRegister, params, 1);
         SetBushFlag(pDevice, true);
         if (bLog)
             ++logBushDraws;

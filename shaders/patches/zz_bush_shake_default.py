@@ -5,7 +5,7 @@
 # rest of the shader, after the grass's block; source/grasswind.ixx sets b13 around the G-buffer draws of the models
 # whose textures name a plant, with a body in reach only. Not the grass's code: that one lays the blades down to half
 # their height under a body, which would sit a bush down.
-# Registers as tree_bush_shake.patch has them (b13, c241, c248-c251), its defs in c252-c254: gta_default's c245-c247
+# Registers as tree_bush_shake.patch has them (b13, c247, c248-c251), its defs in c12-c14: gta_default's c244-c246
 # are the grass's.
 #
 # Usage: zz_bush_shake_default.py <FusionShaders checkout with all the other patches applied>
@@ -20,7 +20,7 @@ from tree_bush_shake import defs, shake
 TAG = 'FusionFix zz_bush_shake_default.patch'
 AFTER = '    // --- FusionFix world_grass_wind.patch end'
 SHADERS = ['gta_defaultVS4.asm', 'gta_defaultVS5.asm']
-REGISTERS = dict(tag=TAG, e='c252', s='c253', t='c254')
+REGISTERS = dict(tag=TAG, e='c14', s='c13', t='c12')
 
 
 def patch(path):
@@ -28,9 +28,9 @@ def patch(path):
     if TAG in text:
         return
     head, body = text.split('vs_3_0\n', 1)
-    # After the grass's block only r0 and r1 hold anything; c252-c254 and b13 are not read
+    # After the grass's block only r0 and r1 hold anything; c12-c14 and b13 are not read
     assert body.count(AFTER + '\n') == 1, path
-    assert not re.search(r'\bc25[2-4]\b|\bb13\b', body), path
+    assert not re.search(r'\bc1[2-4]\b|\bc247\b|\bb13\b', body), path
     lines = body.split('\n')
     first_def = next(i for i, line in enumerate(lines) if line.strip().startswith('def '))
     out = []

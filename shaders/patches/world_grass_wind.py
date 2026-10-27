@@ -13,19 +13,19 @@
 #    blade bends rather than stretches.
 #  - bodies (cars as their footprint, people as a small square) push the blades away from them and lay them down under a
 #    car; the wind dies where they press: up to two per draw, each falling off to nothing `reach` metres past its box.
-#    The push's direction is the way out of the box rounded by c246.w, shortened to nothing at the box's middle rather
+#    The push's direction is the way out of the box rounded by c245.w, shortened to nothing at the box's middle rather
 #    than turned to unit length, so the blades under a body don't flip side as its centre passes over them; there they
 #    are pressed down instead, to half their height under the full press.
 #  - trampled ground: a grid of 0.5 m cells around the player (vs s1, 128 x 128, wrapping every 64 m of the world) holds
 #    where people walked and wheels rolled: the way the blades lie (r, g), how far down they still are (b) and the
 #    ground's height there, wrapping every 64 m (a); it counts like a body under the vertex where its height is within
 #    about 2 m of the prop's origin.
-# Registers: c240 (per frame) = wind direction over the gust's wavelength (cycles a metre), the gust's phase, the
-# flutter's phase (cycles); c241 (per model) = 1 / height, the bend and the flutter at the tip in metres, the push at the
-# tip in metres; c242.xy (per frame) = the wind's unit direction; c248/c249 and c250/c251 (per draw) = two bodies:
-# centre.xy and unit forward.xy on the ground, half length, half width, 1 / reach, strength (0 = none); c243 (per frame)
+# Registers: c252 (per frame) = wind direction over the gust's wavelength (cycles a metre), the gust's phase, the
+# flutter's phase (cycles); c253 (per model) = 1 / height, the bend and the flutter at the tip in metres, the push at the
+# tip in metres; c254.xy (per frame) = the wind's unit direction; c248/c249 and c250/c251 (per draw) = two bodies:
+# centre.xy and unit forward.xy on the ground, half length, half width, 1 / reach, strength (0 = none); c255 (per frame)
 # = 1 / the grid's side in metres, the trample's strength (0 = off), the texture coordinate's offset (the texture holds
-# the window around the player from its corner, clamped); defs c245-c247.
+# the window around the player from its corner, clamped); defs c244-c246.
 #
 # Usage: world_grass_wind.py <FusionShaders checkout with the other patches applied>
 # Commit that state first; the patch is the diff this script leaves (git diff).
@@ -38,9 +38,9 @@ TAG = 'FusionFix world_grass_wind.patch'
 SHADERS = ['gta_defaultVS4.asm', 'gta_defaultVS5.asm']
 
 DEF = f'''\
-    def c247, 0.159154937, 0.5, 6.28318548, -3.14159274 // {TAG}: 1 / 2pi, 1 / 2, 2pi, -pi
-    def c245, 0.015625, 64, 2.5, 0 // {TAG}: 1 / and the trample grid's height wrap (m), the height it takes (m)
-    def c246, 0.550000012, 0.600000024, 1.29999995, 0.300000012 // {TAG}: the gust's swing and floor, the flutter's cycles a metre, a body's rounding (m)
+    def c246, 0.159154937, 0.5, 6.28318548, -3.14159274 // {TAG}: 1 / 2pi, 1 / 2, 2pi, -pi
+    def c244, 0.015625, 64, 2.5, 0 // {TAG}: 1 / and the trample grid's height wrap (m), the height it takes (m)
+    def c245, 0.550000012, 0.600000024, 1.29999995, 0.300000012 // {TAG}: the gust's swing and floor, the flutter's cycles a metre, a body's rounding (m)
 '''
 
 SWAY = f'''\
@@ -51,25 +51,25 @@ SWAY = f'''\
       mad r3.xyz, v0.x, c0, r3
       mad r3.xyz, v0.z, c2, r3
       add r3.xyz, r3, c3
-      mul r2.x, r3.x, c240.x
-      mad r2.x, r3.y, c240.y, r2.x
-      add r2.x, r2.x, c240.z
+      mul r2.x, r3.x, c252.x
+      mad r2.x, r3.y, c252.y, r2.x
+      add r2.x, r2.x, c252.z
       add r2.y, r3.x, r3.y
-      mul r2.y, r2.y, c246.z
-      add r2.y, r2.y, c240.w
+      mul r2.y, r2.y, c245.z
+      add r2.y, r2.y, c252.w
       frc r2.xy, r2
-      mad r2.xy, r2, c247.z, c247.w
+      mad r2.xy, r2, c246.z, c246.w
       sincos r4.xy, r2.x
       sincos r5.xy, r2.y
-      mul_sat r2.z, v0.z, c241.x
+      mul_sat r2.z, v0.z, c253.x
       mul r2.z, r2.z, r2.z
-      mad r4.x, r4.y, c246.x, c246.y
-      mul r4.x, r4.x, c241.y
-      mul r4.y, r5.y, c241.z
+      mad r4.x, r4.y, c245.x, c245.y
+      mul r4.x, r4.x, c253.y
+      mul r4.y, r5.y, c253.z
       mul r4.xy, r4, r2.z
-      mul r6.xy, r4.x, c242
-      mad r6.x, -r4.y, c242.y, r6.x
-      mad r6.y, r4.y, c242.x, r6.y
+      mul r6.xy, r4.x, c254
+      mad r6.x, -r4.y, c254.y, r6.x
+      mad r6.y, r4.y, c254.x, r6.y
       // bodies: r9.xy = the push's direction times its strength, r9.w = the strongest
       mov r9, c4.z
       add r10.xy, r3, -c248
@@ -90,7 +90,7 @@ SWAY = f'''\
       mul r10.w, r10.w, r10.w
       mul r10.w, r10.w, c249.w
       mov r12.xy, c249
-      add r12.xy, r12, c246.w
+      add r12.xy, r12, c245.w
       rcp r12.x, r12.x
       rcp r12.y, r12.y
       mul r12.xy, r11, r12
@@ -123,7 +123,7 @@ SWAY = f'''\
       mul r10.w, r10.w, r10.w
       mul r10.w, r10.w, c251.w
       mov r12.xy, c251
-      add r12.xy, r12, c246.w
+      add r12.xy, r12, c245.w
       rcp r12.x, r12.x
       rcp r12.y, r12.y
       mul r12.xy, r11, r12
@@ -139,19 +139,19 @@ SWAY = f'''\
       mad r9.xy, r13, r10.w, r9
       max r9.w, r9.w, r10.w
       // trampled: the grid under the vertex, where its height is near the prop's origin
-      mad r14.xy, r3, c243.x, c243.zw
+      mad r14.xy, r3, c255.x, c255.zw
       mov r14.zw, c4.z
       texldl r14, r14, s1
       mov r15.x, c3.z
-      mad r15.x, r15.x, c245.x, -r14.w
-      add r15.x, r15.x, c247.y
+      mad r15.x, r15.x, c244.x, -r14.w
+      add r15.x, r15.x, c246.y
       frc r15.x, r15.x
-      add r15.x, r15.x, -c247.y
+      add r15.x, r15.x, -c246.y
       abs r15.x, r15.x
-      mul r15.x, r15.x, -c245.y
-      add_sat r15.x, r15.x, c245.z
+      mul r15.x, r15.x, -c244.y
+      add_sat r15.x, r15.x, c244.z
       mul r15.x, r15.x, r14.z
-      mul r15.x, r15.x, c243.y
+      mul r15.x, r15.x, c255.y
       add r14.xy, r14, r14
       add r14.xy, r14, -c4.y
       mad r9.xy, r14, r15.x, r9
@@ -164,15 +164,15 @@ SWAY = f'''\
       min r10.z, r10.z, c4.y
       mul r9.xy, r9, r10.z
       mad r6.xy, -r6, r9.w, r6
-      mul r9.xy, r9, c241.w
+      mul r9.xy, r9, c253.w
       mad r6.xy, r9, r2.z, r6
       mul r6.z, r6.x, r6.x
       mad r6.z, r6.y, r6.y, r6.z
-      mul r6.z, r6.z, c241.x
-      mul r6.z, r6.z, -c247.y
+      mul r6.z, r6.z, c253.x
+      mul r6.z, r6.z, -c246.y
       add r10.x, r3.z, -c3.z
       mul r10.x, r10.x, r9.w
-      mad r6.z, r10.x, -c247.y, r6.z
+      mad r6.z, r10.x, -c246.y, r6.z
       dp3 r7.x, c0, c0
       dp3 r7.y, c1, c1
       dp3 r7.z, c2, c2
@@ -198,6 +198,8 @@ def patch(path):
     used = set(re.findall(r'\br(\d+)', body))
     assert used == {'0'}, (path, used)
     assert not re.search(r'\bs1\b', body), path
+    # Its registers are read by nothing else (the motion vectors take c240-c246)
+    assert not re.search(r'\bc24[4-6]\b|\bc25[2-5]\b|\bb12\b', body), path
     last_dcl = max(i for i, line in enumerate(lines) if line.strip().startswith('dcl_'))
     first_def = next(i for i, line in enumerate(lines) if line.strip().startswith('def '))
     out = []

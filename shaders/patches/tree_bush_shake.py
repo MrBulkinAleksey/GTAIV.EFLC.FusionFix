@@ -7,15 +7,15 @@
 # The offset is made in the world and taken back into the model's space through gWorld's rows (c0-c2, scaled
 # rotations: each axis over its length squared), so it holds however the bush is turned:
 #  - bodies (up to two, c248-c251, as world_grass_wind.patch has them: a car's footprint, a person's small square) push
-#    the leaves away from them, up to c241.y at the top, falling off to nothing `reach` metres past the box;
-#  - while a body moves the leaves shake, c241.z at the top by its speed, times the press: two waves with phases from
-#    the vertex's world position and height, so neighbouring branches move apart; c241.w the time's phase (cycles);
+#    the leaves away from them, up to c247.y at the top, falling off to nothing `reach` metres past the box;
+#  - while a body moves the leaves shake, c247.z at the top by its speed, times the press: two waves with phases from
+#    the vertex's world position and height, so neighbouring branches move apart; c247.w the time's phase (cycles);
 #  - weighted by height / model height, so the base stays put, and the top drops by d^2 / 2h so the branches bend
 #    rather than stretch.
 # The world position (o4 / o6) stays as the game makes it, from the model's rest pose, as with the game's sway.
-# Registers: b13; c241 (per draw) = 1 / height, the push and the shake at the top in metres, the shake's phase;
+# Registers: b13; c247 (per draw) = 1 / height, the push and the shake at the top in metres, the shake's phase;
 # c248/c249 and c250/c251 (per draw) = two bodies: centre.xy and unit forward.xy on the ground, half length, half width,
-# 1 / reach, strength (0 = none); defs c245-c247.
+# 1 / reach, strength (0 = none); defs c12-c14.
 #
 # Usage: tree_bush_shake.py <FusionShaders checkout with the other patches applied>
 # Commit that state first; the patch is the diff this script leaves (git diff).
@@ -30,7 +30,7 @@ SHADERS = [
     ('gta_trees_extended/gta_trees_extendedVS0.asm', 'r3', '    mad r3.xyz, r1, r2.x, r0.xzww'),
 ]
 
-def defs(tag=TAG, e='c247', s='c246', t='c245'):
+def defs(tag=TAG, e='c14', s='c13', t='c12'):
     return f'''\
     def {e}, 9.99999975e-006, 1, 0, 0.300000012 // {tag}: epsilon, 1, 0, a body's rounding (m)
     def {s}, 0.899999976, 1.29999995, 0.699999988, 0.25 // {tag}: the shake's cycles a metre along x, y and up, the second wave's offset (cycles)
@@ -74,7 +74,7 @@ BODY = '''\
 '''
 
 
-def shake(position, tag=TAG, e='c247', s='c246', t='c245'):
+def shake(position, tag=TAG, e='c14', s='c13', t='c12'):
     return f'''\
     // --- {tag}: b13 = a bush a body is in. Moves {position}.xyz, the swayed position in the model's space.
     if b13
@@ -92,12 +92,12 @@ def shake(position, tag=TAG, e='c247', s='c246', t='c245'):
       mul r10.z, r10.z, r9.w
       min r10.z, r10.z, {e}.y
       mul r9.xy, r9, r10.z
-      mul r6.xy, r9, c241.y
+      mul r6.xy, r9, c247.y
       // the shake: two waves, the second twice as quick
       mul r7.x, r4.x, {s}.x
       mad r7.x, r4.y, {s}.y, r7.x
       mad r7.x, v0.z, {s}.z, r7.x
-      add r7.x, r7.x, c241.w
+      add r7.x, r7.x, c247.w
       add r7.y, r7.x, r7.x
       add r7.y, r7.y, {s}.w
       frc r7.xy, r7
@@ -106,14 +106,14 @@ def shake(position, tag=TAG, e='c247', s='c246', t='c245'):
       sincos r11.xy, r7.y
       mov r8.x, r8.y
       mov r8.y, r11.y
-      mul r8.xy, r8, c241.z
+      mul r8.xy, r8, c247.z
       mad r6.xy, r8, r9.w, r6
       // by the height, the top dropping as it bends
-      mul_sat r10.w, v0.z, c241.x
+      mul_sat r10.w, v0.z, c247.x
       mul r6.xy, r6, r10.w
       mul r6.z, r6.x, r6.x
       mad r6.z, r6.y, r6.y, r6.z
-      mul r6.z, r6.z, c241.x
+      mul r6.z, r6.z, c247.x
       mul r6.z, r6.z, {t}.z
       dp3 r7.x, c0, c0
       dp3 r7.y, c1, c1
@@ -135,10 +135,15 @@ def patch(path, position, after):
     if TAG in text:
         return
     head, body = text.split('vs_3_0\n', 1)
+    # Upstream's motion vectors (aa_motion_vectors.patch) sway the previous position again after this line: only the
+    # current one is moved
+    body, marker, motion = body.partition('\n    // Motion vectors\n')
     # r4-r13 must be free
     used = {int(n) for n in re.findall(r'\br(\d+)', body)}
     assert max(used) <= 3, (path, used)
     assert body.count(after + '\n') == 1, path
+    # Its registers are read by nothing else (the motion vectors take c240-c246)
+    assert not re.search(r'\bc1[2-4]\b|\bc247\b|\bb13\b', body), path
     lines = body.split('\n')
     first_def = next(i for i, line in enumerate(lines) if line.strip().startswith('def '))
     out = []
@@ -148,7 +153,7 @@ def patch(path, position, after):
         out.append(line)
         if line == after:
             out.append(shake(position).rstrip('\n'))
-    path.write_text(head + 'vs_3_0\n' + '\n'.join(out))
+    path.write_text(head + 'vs_3_0\n' + '\n'.join(out) + marker + motion)
 
 
 if __name__ == '__main__':

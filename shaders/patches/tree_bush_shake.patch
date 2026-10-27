@@ -1,18 +1,18 @@
 diff --git a/win32_30_nv8/gta_trees/gta_treesVS0.asm b/win32_30_nv8/gta_trees/gta_treesVS0.asm
-index eac6338e..29d4af3a 100644
+index dbc7ed6..f625b88 100644
 --- a/win32_30_nv8/gta_trees/gta_treesVS0.asm
 +++ b/win32_30_nv8/gta_trees/gta_treesVS0.asm
 @@ -24,6 +24,9 @@
  //
  
      vs_3_0
-+    def c247, 9.99999975e-006, 1, 0, 0.300000012 // FusionFix tree_bush_shake.patch: epsilon, 1, 0, a body's rounding (m)
-+    def c246, 0.899999976, 1.29999995, 0.699999988, 0.25 // FusionFix tree_bush_shake.patch: the shake's cycles a metre along x, y and up, the second wave's offset (cycles)
-+    def c245, 6.28318548, -3.14159274, -0.5, 0 // FusionFix tree_bush_shake.patch: 2pi, -pi, -1 / 2
++    def c14, 9.99999975e-006, 1, 0, 0.300000012 // FusionFix tree_bush_shake.patch: epsilon, 1, 0, a body's rounding (m)
++    def c13, 0.899999976, 1.29999995, 0.699999988, 0.25 // FusionFix tree_bush_shake.patch: the shake's cycles a metre along x, y and up, the second wave's offset (cycles)
++    def c12, 6.28318548, -3.14159274, -0.5, 0 // FusionFix tree_bush_shake.patch: 2pi, -pi, -1 / 2
      def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 3.6685993796e-42 // 2618
      def c4, 0.00499999989, 0.00999999978, 0, 1
      def c5, 9.99999975e-006, 0.5, 0.0318309888, 0
-@@ -64,6 +67,122 @@
+@@ -65,6 +68,122 @@
      mul r1.xyz, r0.y, r3
      mul r1.xyz, r1, c5.y
      mad r0.xyz, r1, r2.x, r0.xzww
@@ -23,7 +23,7 @@ index eac6338e..29d4af3a 100644
 +      mad r4.xyz, v0.z, c2, r4
 +      add r4.xyz, r4, c3
 +      // bodies: r9.xy = the push's direction times its strength, r9.w = the strongest
-+      mov r9, c247.z
++      mov r9, c14.z
 +      add r10.xy, r4, -c248
 +      mul r11.x, r10.x, c248.z
 +      mad r11.x, r10.y, c248.w, r11.x
@@ -31,26 +31,26 @@ index eac6338e..29d4af3a 100644
 +      mad r11.y, r10.y, -c248.z, r11.y
 +      abs r10.xy, r11
 +      add r10.xy, r10, -c249
-+      max r10.xy, r10, c247.z
++      max r10.xy, r10, c14.z
 +      mul r10.z, r10.x, r10.x
 +      mad r10.z, r10.y, r10.y, r10.z
-+      add r10.z, r10.z, c247.x
++      add r10.z, r10.z, c14.x
 +      rsq r10.z, r10.z
 +      rcp r10.z, r10.z
 +      mul r10.w, r10.z, c249.z
-+      add_sat r10.w, -r10.w, c247.y
++      add_sat r10.w, -r10.w, c14.y
 +      mul r10.w, r10.w, r10.w
 +      mul r10.w, r10.w, c249.w
 +      mov r12.xy, c249
-+      add r12.xy, r12, c247.w
++      add r12.xy, r12, c14.w
 +      rcp r12.x, r12.x
 +      rcp r12.y, r12.y
 +      mul r12.xy, r11, r12
 +      mul r12.z, r12.x, r12.x
 +      mad r12.z, r12.y, r12.y, r12.z
-+      add r12.z, r12.z, c247.x
++      add r12.z, r12.z, c14.x
 +      rsq r12.z, r12.z
-+      min r12.z, r12.z, c247.y
++      min r12.z, r12.z, c14.y
 +      mul r12.xy, r12, r12.z
 +      mul r13.xy, r12.x, c248.zwzw
 +      mad r13.x, r12.y, c248.w, r13.x
@@ -64,26 +64,26 @@ index eac6338e..29d4af3a 100644
 +      mad r11.y, r10.y, -c250.z, r11.y
 +      abs r10.xy, r11
 +      add r10.xy, r10, -c251
-+      max r10.xy, r10, c247.z
++      max r10.xy, r10, c14.z
 +      mul r10.z, r10.x, r10.x
 +      mad r10.z, r10.y, r10.y, r10.z
-+      add r10.z, r10.z, c247.x
++      add r10.z, r10.z, c14.x
 +      rsq r10.z, r10.z
 +      rcp r10.z, r10.z
 +      mul r10.w, r10.z, c251.z
-+      add_sat r10.w, -r10.w, c247.y
++      add_sat r10.w, -r10.w, c14.y
 +      mul r10.w, r10.w, r10.w
 +      mul r10.w, r10.w, c251.w
 +      mov r12.xy, c251
-+      add r12.xy, r12, c247.w
++      add r12.xy, r12, c14.w
 +      rcp r12.x, r12.x
 +      rcp r12.y, r12.y
 +      mul r12.xy, r11, r12
 +      mul r12.z, r12.x, r12.x
 +      mad r12.z, r12.y, r12.y, r12.z
-+      add r12.z, r12.z, c247.x
++      add r12.z, r12.z, c14.x
 +      rsq r12.z, r12.z
-+      min r12.z, r12.z, c247.y
++      min r12.z, r12.z, c14.y
 +      mul r12.xy, r12, r12.z
 +      mul r13.xy, r12.x, c250.zwzw
 +      mad r13.x, r12.y, c250.w, r13.x
@@ -92,34 +92,34 @@ index eac6338e..29d4af3a 100644
 +      max r9.w, r9.w, r10.w
 +      mul r10.z, r9.x, r9.x
 +      mad r10.z, r9.y, r9.y, r10.z
-+      add r10.z, r10.z, c247.x
++      add r10.z, r10.z, c14.x
 +      rsq r10.z, r10.z
 +      mul r10.z, r10.z, r9.w
-+      min r10.z, r10.z, c247.y
++      min r10.z, r10.z, c14.y
 +      mul r9.xy, r9, r10.z
-+      mul r6.xy, r9, c241.y
++      mul r6.xy, r9, c247.y
 +      // the shake: two waves, the second twice as quick
-+      mul r7.x, r4.x, c246.x
-+      mad r7.x, r4.y, c246.y, r7.x
-+      mad r7.x, v0.z, c246.z, r7.x
-+      add r7.x, r7.x, c241.w
++      mul r7.x, r4.x, c13.x
++      mad r7.x, r4.y, c13.y, r7.x
++      mad r7.x, v0.z, c13.z, r7.x
++      add r7.x, r7.x, c247.w
 +      add r7.y, r7.x, r7.x
-+      add r7.y, r7.y, c246.w
++      add r7.y, r7.y, c13.w
 +      frc r7.xy, r7
-+      mad r7.xy, r7, c245.x, c245.y
++      mad r7.xy, r7, c12.x, c12.y
 +      sincos r8.xy, r7.x
 +      sincos r11.xy, r7.y
 +      mov r8.x, r8.y
 +      mov r8.y, r11.y
-+      mul r8.xy, r8, c241.z
++      mul r8.xy, r8, c247.z
 +      mad r6.xy, r8, r9.w, r6
 +      // by the height, the top dropping as it bends
-+      mul_sat r10.w, v0.z, c241.x
++      mul_sat r10.w, v0.z, c247.x
 +      mul r6.xy, r6, r10.w
 +      mul r6.z, r6.x, r6.x
 +      mad r6.z, r6.y, r6.y, r6.z
-+      mul r6.z, r6.z, c241.x
-+      mul r6.z, r6.z, c245.z
++      mul r6.z, r6.z, c247.x
++      mul r6.z, r6.z, c12.z
 +      dp3 r7.x, c0, c0
 +      dp3 r7.y, c1, c1
 +      dp3 r7.z, c2, c2
@@ -136,20 +136,20 @@ index eac6338e..29d4af3a 100644
      mad r1, r0.x, c8, r1
      mad r0, r0.z, c10, r1
 diff --git a/win32_30_nv8/gta_trees_extended/gta_trees_extendedVS0.asm b/win32_30_nv8/gta_trees_extended/gta_trees_extendedVS0.asm
-index dab3da37..3de98690 100644
+index c8c055c..7855935 100644
 --- a/win32_30_nv8/gta_trees_extended/gta_trees_extendedVS0.asm
 +++ b/win32_30_nv8/gta_trees_extended/gta_trees_extendedVS0.asm
 @@ -24,6 +24,9 @@
  //
  
      vs_3_0
-+    def c247, 9.99999975e-006, 1, 0, 0.300000012 // FusionFix tree_bush_shake.patch: epsilon, 1, 0, a body's rounding (m)
-+    def c246, 0.899999976, 1.29999995, 0.699999988, 0.25 // FusionFix tree_bush_shake.patch: the shake's cycles a metre along x, y and up, the second wave's offset (cycles)
-+    def c245, 6.28318548, -3.14159274, -0.5, 0 // FusionFix tree_bush_shake.patch: 2pi, -pi, -1 / 2
++    def c14, 9.99999975e-006, 1, 0, 0.300000012 // FusionFix tree_bush_shake.patch: epsilon, 1, 0, a body's rounding (m)
++    def c13, 0.899999976, 1.29999995, 0.699999988, 0.25 // FusionFix tree_bush_shake.patch: the shake's cycles a metre along x, y and up, the second wave's offset (cycles)
++    def c12, 6.28318548, -3.14159274, -0.5, 0 // FusionFix tree_bush_shake.patch: 2pi, -pi, -1 / 2
      def c230, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 3.9698785494e-42 // 2833
      def c4, 9.99999975e-006, -1, 1, 0
      def c5, 0.00499999989, 0.00999999978, 0, 1
-@@ -89,6 +92,122 @@
+@@ -90,6 +93,122 @@
      mul r1.xyz, r0.y, r3
      mul r1.xyz, r1, c6.y
      mad r3.xyz, r1, r2.x, r0.xzww
@@ -160,7 +160,7 @@ index dab3da37..3de98690 100644
 +      mad r4.xyz, v0.z, c2, r4
 +      add r4.xyz, r4, c3
 +      // bodies: r9.xy = the push's direction times its strength, r9.w = the strongest
-+      mov r9, c247.z
++      mov r9, c14.z
 +      add r10.xy, r4, -c248
 +      mul r11.x, r10.x, c248.z
 +      mad r11.x, r10.y, c248.w, r11.x
@@ -168,26 +168,26 @@ index dab3da37..3de98690 100644
 +      mad r11.y, r10.y, -c248.z, r11.y
 +      abs r10.xy, r11
 +      add r10.xy, r10, -c249
-+      max r10.xy, r10, c247.z
++      max r10.xy, r10, c14.z
 +      mul r10.z, r10.x, r10.x
 +      mad r10.z, r10.y, r10.y, r10.z
-+      add r10.z, r10.z, c247.x
++      add r10.z, r10.z, c14.x
 +      rsq r10.z, r10.z
 +      rcp r10.z, r10.z
 +      mul r10.w, r10.z, c249.z
-+      add_sat r10.w, -r10.w, c247.y
++      add_sat r10.w, -r10.w, c14.y
 +      mul r10.w, r10.w, r10.w
 +      mul r10.w, r10.w, c249.w
 +      mov r12.xy, c249
-+      add r12.xy, r12, c247.w
++      add r12.xy, r12, c14.w
 +      rcp r12.x, r12.x
 +      rcp r12.y, r12.y
 +      mul r12.xy, r11, r12
 +      mul r12.z, r12.x, r12.x
 +      mad r12.z, r12.y, r12.y, r12.z
-+      add r12.z, r12.z, c247.x
++      add r12.z, r12.z, c14.x
 +      rsq r12.z, r12.z
-+      min r12.z, r12.z, c247.y
++      min r12.z, r12.z, c14.y
 +      mul r12.xy, r12, r12.z
 +      mul r13.xy, r12.x, c248.zwzw
 +      mad r13.x, r12.y, c248.w, r13.x
@@ -201,26 +201,26 @@ index dab3da37..3de98690 100644
 +      mad r11.y, r10.y, -c250.z, r11.y
 +      abs r10.xy, r11
 +      add r10.xy, r10, -c251
-+      max r10.xy, r10, c247.z
++      max r10.xy, r10, c14.z
 +      mul r10.z, r10.x, r10.x
 +      mad r10.z, r10.y, r10.y, r10.z
-+      add r10.z, r10.z, c247.x
++      add r10.z, r10.z, c14.x
 +      rsq r10.z, r10.z
 +      rcp r10.z, r10.z
 +      mul r10.w, r10.z, c251.z
-+      add_sat r10.w, -r10.w, c247.y
++      add_sat r10.w, -r10.w, c14.y
 +      mul r10.w, r10.w, r10.w
 +      mul r10.w, r10.w, c251.w
 +      mov r12.xy, c251
-+      add r12.xy, r12, c247.w
++      add r12.xy, r12, c14.w
 +      rcp r12.x, r12.x
 +      rcp r12.y, r12.y
 +      mul r12.xy, r11, r12
 +      mul r12.z, r12.x, r12.x
 +      mad r12.z, r12.y, r12.y, r12.z
-+      add r12.z, r12.z, c247.x
++      add r12.z, r12.z, c14.x
 +      rsq r12.z, r12.z
-+      min r12.z, r12.z, c247.y
++      min r12.z, r12.z, c14.y
 +      mul r12.xy, r12, r12.z
 +      mul r13.xy, r12.x, c250.zwzw
 +      mad r13.x, r12.y, c250.w, r13.x
@@ -229,34 +229,34 @@ index dab3da37..3de98690 100644
 +      max r9.w, r9.w, r10.w
 +      mul r10.z, r9.x, r9.x
 +      mad r10.z, r9.y, r9.y, r10.z
-+      add r10.z, r10.z, c247.x
++      add r10.z, r10.z, c14.x
 +      rsq r10.z, r10.z
 +      mul r10.z, r10.z, r9.w
-+      min r10.z, r10.z, c247.y
++      min r10.z, r10.z, c14.y
 +      mul r9.xy, r9, r10.z
-+      mul r6.xy, r9, c241.y
++      mul r6.xy, r9, c247.y
 +      // the shake: two waves, the second twice as quick
-+      mul r7.x, r4.x, c246.x
-+      mad r7.x, r4.y, c246.y, r7.x
-+      mad r7.x, v0.z, c246.z, r7.x
-+      add r7.x, r7.x, c241.w
++      mul r7.x, r4.x, c13.x
++      mad r7.x, r4.y, c13.y, r7.x
++      mad r7.x, v0.z, c13.z, r7.x
++      add r7.x, r7.x, c247.w
 +      add r7.y, r7.x, r7.x
-+      add r7.y, r7.y, c246.w
++      add r7.y, r7.y, c13.w
 +      frc r7.xy, r7
-+      mad r7.xy, r7, c245.x, c245.y
++      mad r7.xy, r7, c12.x, c12.y
 +      sincos r8.xy, r7.x
 +      sincos r11.xy, r7.y
 +      mov r8.x, r8.y
 +      mov r8.y, r11.y
-+      mul r8.xy, r8, c241.z
++      mul r8.xy, r8, c247.z
 +      mad r6.xy, r8, r9.w, r6
 +      // by the height, the top dropping as it bends
-+      mul_sat r10.w, v0.z, c241.x
++      mul_sat r10.w, v0.z, c247.x
 +      mul r6.xy, r6, r10.w
 +      mul r6.z, r6.x, r6.x
 +      mad r6.z, r6.y, r6.y, r6.z
-+      mul r6.z, r6.z, c241.x
-+      mul r6.z, r6.z, c245.z
++      mul r6.z, r6.z, c247.x
++      mul r6.z, r6.z, c12.z
 +      dp3 r7.x, c0, c0
 +      dp3 r7.y, c1, c1
 +      dp3 r7.z, c2, c2
