@@ -725,8 +725,9 @@ namespace GpuGrass
     // and fine, sparser and longer), one of weeds and broad leaves, one of grass with a few flowers. Not colours: each
     // texel holds its blade's shade (r: 0..0.9, flower heads 1), how far up the blade (g), where across it (b, 0..1),
     // coverage (a). The mips are averaged, then their coverage scaled so as many texels pass the shader's clip at a
-    // half as at the full size: averaged alone, thin blades faded away with distance.
-    constexpr int kCardColumn = 256, kCardHeight = 512, kCardColumns = 4, kCardMips = 7;
+    // half as at the full size: averaged alone, thin blades faded away with distance. 512 × 1024 a clump: a card near the
+    // camera covers hundreds of pixels, and at 256 × 512 its blades were wide straight-sided triangles there.
+    constexpr int kCardColumn = 512, kCardHeight = 1024, kCardColumns = 4, kCardMips = 8;
 
     bool MakeCardTexture(IDirect3DDevice9* real)
     {
@@ -735,7 +736,9 @@ namespace GpuGrass
         uint32_t state = 0x2545F491u;
         const auto next = [&]() { state ^= state << 13; state ^= state >> 17; state ^= state << 5; return (state & 0xFFFFFF) / float(0x1000000); };
         // One blade: its root across the column (0..1), height (0..1 of the card), how far its tip goes across, its
-        // width at the root (texels), its shade; leaves widest in the middle
+        // width at the root (texels), its shade; leaves widest in the middle. A blade of grass keeps nearly its width
+        // most of the way up, then narrows to its point along curved sides, as a real one does (a straight taper from
+        // the root made each blade a long triangle)
         const auto blade = [&](int column, float root, float height, float lean, float rootWidth, float shade, bool leaf)
         {
             const int rows = (std::max)(int(height * kCardHeight), 2);
@@ -743,13 +746,14 @@ namespace GpuGrass
             {
                 const float t = float(row) / float(rows - 1);
                 const float centre = (root + lean * std::pow(t, 1.6f)) * kCardColumn;
+                const float point = t < 0.55f ? 1.0f : 1.0f - std::pow((t - 0.55f) / 0.45f, 1.6f);
                 const float half = 0.5f * (leaf ? rootWidth * (0.25f + std::sin(t * 3.1415927f) * 0.9f) * (1.0f - t * 0.5f)
-                                                : rootWidth * std::pow(1.0f - t, 0.7f) + 0.35f);
+                                                : rootWidth * (1.0f - 0.2f * t) * point + 0.3f);
                 const int y = kCardHeight - 1 - row;
                 for (int x = int(std::floor(centre - half - 1.0f)); x <= int(std::ceil(centre + half + 1.0f)); ++x)
                 {
-                    // Blades stay three texels clear of the column's sides, which the filter would carry over
-                    if (x < 3 || x >= kCardColumn - 3)
+                    // Blades stay six texels clear of the column's sides, which the filter would carry over
+                    if (x < 6 || x >= kCardColumn - 6)
                         continue;
                     const float offset = float(x) + 0.5f - centre;
                     const float cover = std::clamp(half + 0.5f - std::abs(offset), 0.0f, 1.0f);
@@ -779,21 +783,22 @@ namespace GpuGrass
                 blade(column, root, height, tipAt - root, rootWidth * (0.75f + 0.5f * next()), next() * 0.9f, leaves);
             }
         };
-        clump(0, 46, 0.45f, 0.9f, 5.0f, false);
-        clump(1, 30, 0.6f, 1.3f, 6.0f, false);
-        clump(2, 9, 0.5f, 1.4f, 26.0f, true);
-        clump(2, 10, 0.4f, 1.0f, 6.0f, false);
-        clump(3, 32, 0.4f, 0.9f, 5.0f, false);
+        // Widths in texels of the 512 column: blades about a third thinner than at 256 and more of them
+        clump(0, 70, 0.45f, 0.9f, 7.0f, false);
+        clump(1, 46, 0.6f, 1.3f, 8.0f, false);
+        clump(2, 9, 0.5f, 1.4f, 52.0f, true);
+        clump(2, 15, 0.4f, 1.0f, 8.0f, false);
+        clump(3, 48, 0.4f, 0.9f, 7.0f, false);
         // Flowers: a thin stalk, its head a disc at the top (shade 1)
         for (int i = 0; i < 4; ++i)
         {
             const float root = 0.15f + 0.7f * next(), height = 0.82f + 0.15f * next(), lean = (next() - 0.5f) * 0.2f;
-            blade(3, root, height, lean, 2.5f, 0.5f, false);
-            const float cx = (root + lean) * kCardColumn, cy = float(kCardHeight) * (1.0f - height), radius = 6.0f + 3.0f * next();
+            blade(3, root, height, lean, 4.0f, 0.5f, false);
+            const float cx = (root + lean) * kCardColumn, cy = float(kCardHeight) * (1.0f - height), radius = 12.0f + 6.0f * next();
             for (int y = int(cy - radius - 1.0f); y <= int(cy + radius + 1.0f); ++y)
                 for (int x = int(cx - radius - 1.0f); x <= int(cx + radius + 1.0f); ++x)
                 {
-                    if (x < 3 || x >= kCardColumn - 3 || y < 1 || y >= kCardHeight)
+                    if (x < 6 || x >= kCardColumn - 6 || y < 1 || y >= kCardHeight)
                         continue;
                     const float d = std::sqrt((float(x) + 0.5f - cx) * (float(x) + 0.5f - cx) + (float(y) + 0.5f - cy) * (float(y) + 0.5f - cy) * 1.6f);
                     const float cover = std::clamp(radius + 0.5f - d, 0.0f, 1.0f);
