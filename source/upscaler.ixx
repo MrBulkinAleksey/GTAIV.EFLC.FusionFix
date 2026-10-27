@@ -1698,6 +1698,8 @@ export namespace Upscaler
         float CameraFovY = 1.0f;
         float FrameTimeMs = 16.6f;
         float Sharpness = 0.0f;
+        bool GameExposure = false;    // FSR: Exposure instead of its automatic exposure
+        float Exposure = 0.0f;        // what the game's tone mapping multiplies the scene by, 0 keeps the last
         uint32_t DLSSPreset = 0;
         bool Reset = false;
         // Frame generation: prepared with this frame's depth and motion vectors, Generate follows
@@ -1813,7 +1815,8 @@ export namespace Upscaler
             return false;
 
         auto backendId = static_cast<uint32_t>(backend);
-        auto flags = frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u;
+        auto flags = (frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u) |
+            (frame.GameExposure ? Protocol::ConfigureFlags::GameExposure : 0u);
         if (bridge->wine)
             flags |= Protocol::ConfigureFlags::Wine;
         // Without HDR the frames are the 8-bit back buffer's: 8-bit textures halve what the frame generation's copies move
@@ -1947,6 +1950,7 @@ export namespace Upscaler
         shared.CameraFovY = frame.CameraFovY;
         shared.FrameTimeMs = frame.FrameTimeMs;
         shared.Sharpness = frame.Sharpness;
+        shared.Exposure = frame.Exposure;
         shared.Reset = frame.Reset ? 1 : 0;
         for (int i = 0; i < 3; ++i)
         {

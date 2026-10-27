@@ -2,6 +2,7 @@ module;
 
 #include <common.hxx>
 #include "FusionLog.hpp"
+#include <bit>
 
 export module temporal;
 
@@ -212,6 +213,7 @@ public:
     static inline float fCameraCutDistance = 25.0f;
     static inline int32_t nDLSSPreset = 0;
     static inline float fFSRSharpness = 0.0f;
+    static inline bool bFSRGameExposure = true;
     static inline bool bReactiveMask = true;
     static inline float fReactiveScale = 2.0f;
     static inline float fReactiveMax = 0.75f;
@@ -1973,6 +1975,111 @@ public:
         }
     }
 
+    // The game's exposure for FSR, in place of the one FSR works out itself, which lagged behind the game's when the
+    // light changed and so ghosted: what rage_postfx's tone mapping multiplies the scene by, Exposure * ToneMapParams.y
+    // / the adapted luminance. That luminance is on the GPU, a 1x1 target ("Adapted Lum 0", which the game alternates
+    // with "Adapted Lum 1", a frame of adaptation apart); it comes back through a ring of system memory copies, read
+    // two frames late without waiting for the GPU. 0 while nothing has come back yet.
+    struct GameExposure
+    {
+        static constexpr uint32_t Slots = 3;
+        static inline IDirect3DSurface9* copies[Slots]{};
+        static inline uint32_t written[Slots]{};      // the frame each copy was asked for in, 0 for none
+        static inline uint32_t frame = 0;
+        static inline D3DFORMAT format = D3DFMT_UNKNOWN;
+        static inline float luminance = 0.0f;         // the last one read back
+        static inline size_t exposureIdx = 0, toneMapIdx = 0;
+        static inline bool registered = false;
+
+        static void Register()
+        {
+            exposureIdx = rage::grmShaderInfo::registerShaderParam("rage_postfx.fxc", "Exposure");
+            toneMapIdx = rage::grmShaderInfo::registerShaderParam("rage_postfx.fxc", "ToneMapParams");
+            registered = true;
+        }
+
+        static void Release()
+        {
+            for (auto& copy : copies)
+                SAFE_RELEASE(copy);
+            std::fill(std::begin(written), std::end(written), 0u);
+            format = D3DFMT_UNKNOWN;
+        }
+
+        static float Half(uint16_t h)
+        {
+            uint32_t sign = (h & 0x8000u) << 16, exponent = (h >> 10) & 0x1Fu, mantissa = h & 0x3FFu;
+            if (exponent == 0)
+                return (sign ? -1.0f : 1.0f) * std::ldexp(static_cast<float>(mantissa), -24);
+            if (exponent == 31)
+                return 0.0f;
+            return std::bit_cast<float>(sign | ((exponent + 112) << 23) | (mantissa << 13));
+        }
+
+        // The first channel of the copy, or false when the GPU has not written it yet or its format is not a float one
+        static bool Read(IDirect3DSurface9* copy, float& value)
+        {
+            D3DLOCKED_RECT locked{};
+            if (FAILED(copy->LockRect(&locked, nullptr, D3DLOCK_READONLY | D3DLOCK_DONOTWAIT)))
+                return false;
+            bool ok = true;
+            switch (format)
+            {
+            case D3DFMT_R32F: case D3DFMT_G32R32F: case D3DFMT_A32B32G32R32F:
+                value = *static_cast<const float*>(locked.pBits);
+                break;
+            case D3DFMT_R16F: case D3DFMT_G16R16F: case D3DFMT_A16B16G16R16F:
+                value = Half(*static_cast<const uint16_t*>(locked.pBits));
+                break;
+            default:
+                ok = false;
+            }
+            copy->UnlockRect();
+            return ok;
+        }
+
+        static float Get(IDirect3DDevice9* device)
+        {
+            if (!registered)
+                return 0.0f;
+            ++frame;
+            auto target = rage::grcTextureFactoryPC::GetRTByName("Adapted Lum 0");
+            IDirect3DSurface9* surface = nullptr;
+            if (target && target->mD3DTexture && SUCCEEDED(target->mD3DTexture->GetSurfaceLevel(0, &surface)))
+            {
+                D3DSURFACE_DESC desc{};
+                surface->GetDesc(&desc);
+                if (desc.Format != format)
+                {
+                    Release();
+                    format = desc.Format;
+                    FusionLog::Write("Upscaler", "Exposure", "the adapted luminance is %ux%u, format %u", desc.Width, desc.Height,
+                        static_cast<uint32_t>(desc.Format));
+                }
+                auto slot = frame % Slots;
+                // The copy asked for two frames ago, then this frame's into its place
+                if (written[slot])
+                {
+                    float value = 0.0f;
+                    if (Read(copies[slot], value) && std::isfinite(value) && value > 0.0f)
+                        luminance = value;
+                    written[slot] = 0;
+                }
+                if (!copies[slot])
+                    device->CreateOffscreenPlainSurface(1, 1, desc.Format, D3DPOOL_SYSTEMMEM, &copies[slot], nullptr);
+                // Only the texel at the top left: a larger target would need a copy as large
+                if (copies[slot] && desc.Width == 1 && desc.Height == 1 && SUCCEEDED(device->GetRenderTargetData(surface, copies[slot])))
+                    written[slot] = frame;
+                surface->Release();
+            }
+            auto exposure = rage::grmShaderInfo::getShaderParamData(exposureIdx)[0];
+            auto toneMap = rage::grmShaderInfo::getShaderParamData(toneMapIdx)[1];
+            if (luminance <= 0.0f || exposure <= 0.0f || toneMap <= 0.0f)
+                return 0.0f;
+            return exposure * toneMap / luminance;
+        }
+    };
+
     static bool Upscale(IDirect3DDevice9* device, Upscaler::Backend backend, IDirect3DTexture9* scene, IDirect3DTexture9* output)
     {
         using namespace TemporalAA;
@@ -2005,6 +2112,10 @@ public:
         frame.CameraFovY = CurrentCamera.FovY;
         frame.FrameTimeMs = std::clamp(frameTime, 1.0f, 200.0f);
         frame.Sharpness = backend == Upscaler::Backend::FSR ? fFSRSharpness : 0.0f;
+        // Once the game's luminance has come back: FSR without its own exposure and no value would take 1 (configured
+        // again once, at the start)
+        frame.Exposure = backend == Upscaler::Backend::FSR && bFSRGameExposure ? GameExposure::Get(device) : 0.0f;
+        frame.GameExposure = backend == Upscaler::Backend::FSR && bFSRGameExposure && GameExposure::luminance > 0.0f;
         frame.DLSSPreset = static_cast<uint32_t>(nDLSSPreset);
         frame.Reset = !(UpscalerFrame != 0 && UpscalerFrame + 1 == SceneFrame && PreviousCamera.Valid && !IsCameraCut());
 
@@ -2247,6 +2358,7 @@ public:
         fCameraCutDistance = std::max(iniReader.ReadFloat("ANTIALIASING", "CameraCutDistance", 25.0f), 1.0f);
         nDLSSPreset = std::clamp(iniReader.ReadInteger("ANTIALIASING", "DLSSPreset", 0), 0, 15);
         fFSRSharpness = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FSRSharpness", 0.0f), 0.0f, 1.0f);
+        bFSRGameExposure = iniReader.ReadInteger("ANTIALIASING", "FSRGameExposure", 1) != 0;
         fReactiveScale = std::clamp(iniReader.ReadFloat("ANTIALIASING", "ReactiveMaskScale", 2.0f), 0.0f, 64.0f);
         fReactiveMax = std::clamp(iniReader.ReadFloat("ANTIALIASING", "ReactiveMaskMaximum", 0.75f), 0.0f, 1.0f);
         bRainLayer = iniReader.ReadInteger("ANTIALIASING", "RainAfterAntialiasing", 1) != 0;
@@ -2254,6 +2366,9 @@ public:
 
     Temporal()
     {
+        // Not with the async initialisation: the registrations of the other modules would race it
+        FusionFix::onGameInitEvent() += []() { GameExposure::Register(); };
+
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
@@ -2364,6 +2479,7 @@ public:
             FusionFix::onBeforeReset() += []()
             {
                 ReleaseSceneTargets();
+                GameExposure::Release();
             };
 
             CRenderPhaseDeferredLighting_SceneToGBuffer::OnBuildRenderList() += []()
