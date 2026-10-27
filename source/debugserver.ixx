@@ -733,6 +733,35 @@ namespace DebugServer
         });
     }
 
+    // How fast the clock runs: real milliseconds a game minute (CE 0x1295830, the game's 2000), "ms_per_minute"
+    // 1..600000 or "reset"; without either only reads it. CClock::Update (CE 0x9CB791) adds minutes until it has caught
+    // up with the time (0x1173608), however many a frame, so a small value runs a day in seconds. The minute's start
+    // (0x129583C) is moved to now, or the minutes since the last one would be run at the new rate at once. Saves keep
+    // the rate (CE 0x8C7CB6): reset before saving.
+    std::string ClockRate(const Request& request)
+    {
+        const bool reset = request.Get("reset", "false") != "false";
+        const bool set = reset || request.Has("ms_per_minute");
+        const uint32_t rate = reset ? 2000u : uint32_t(request.Number("ms_per_minute", 2000));
+        if (set && (rate < 1 || rate > 600000))
+            throw std::runtime_error("ms_per_minute is 1..600000");
+        return OnMainThread([=]
+        {
+            auto& perMinute = *reinterpret_cast<uint32_t*>(GameBase() + 0xE95830);
+            if (set)
+            {
+                *reinterpret_cast<uint32_t*>(GameBase() + 0xE9583C) = *reinterpret_cast<const uint32_t*>(GameBase() + 0xD73608);
+                perMinute = rate;
+                FusionLog::Write("DebugServer", "Scene", "clock %u ms a game minute\n", rate);
+            }
+            uint32_t hour = 0, minute = 0;
+            Natives::GetTimeOfDay(&hour, &minute);
+            return Object({{"ms_per_minute", std::to_string(perMinute)},
+                {"time", Quote(std::to_string(hour) + ":" + (minute < 10 ? "0" : "") + std::to_string(minute))},
+                {"clock_stopped", clockStopped ? "true" : "false"}});
+        });
+    }
+
     // A weather id (the game's eWeather: 0 extra sunny .. 9 sunny windy), or "release" for the game's own.
     std::string SetWeather(const Request& request)
     {
@@ -2396,6 +2425,7 @@ namespace DebugServer
         if (command == "teleport") return Teleport(request);
         if (command == "set_time") return SetTime(request);
         if (command == "set_weather") return SetWeather(request);
+        if (command == "clock_rate") return ClockRate(request);
         if (command == "freeze") return Freeze(request);
         if (command == "watch_start") return WatchStart(request);
         if (command == "trace_start") return TraceStart(request);
