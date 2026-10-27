@@ -519,6 +519,8 @@ public:
     // ---------------------------------------------------------------------------------------------
     // Render thread: device state of our passes
 
+    static constexpr uint32_t MaxStreams = 4;
+
     struct StateBackup
     {
         IDirect3DDevice9* device = nullptr;
