@@ -77,7 +77,12 @@ namespace
         HANDLE request = nullptr;
         HANDLE response = nullptr;
         HANDLE game = nullptr;
+        HANDLE extensionMapping = nullptr;
         Protocol::Shared* shared = nullptr;
+        // The game's extension, or for a plain bridge client one of zeros that nobody else reads
+        Protocol::Extension* extension = &noExtension;
+        Protocol::Extension noExtension{};
+        bool extended = false;
 
         bool Open(const std::wstring& name)
         {
@@ -91,7 +96,23 @@ namespace
             if (!shared || shared->Version != Protocol::Version)
                 return false;
 
-            game = OpenProcess(SYNCHRONIZE | PROCESS_DUP_HANDLE, FALSE, shared->GameProcessId);
+            // Ours speaks the version of this helper: a plugin and a helper of different builds don't talk
+            if ((extensionMapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, (name + Protocol::ExtensionSuffix).c_str())))
+            {
+                auto mapped = static_cast<Protocol::Extension*>(MapViewOfFile(extensionMapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(Protocol::Extension)));
+                if (!mapped || mapped->Version != Protocol::ExtensionVersion)
+                    return false;
+                extension = mapped;
+                extended = true;
+            }
+
+            // The strings come from the client: always terminated
+            shared->LogPath[Protocol::PathLength - 1] = 0;
+            shared->GameDirectory[Protocol::PathLength - 1] = 0;
+            shared->ClientName[sizeof(shared->ClientName) - 1] = 0;
+            extension->PluginsDirectory[Protocol::PathLength - 1] = 0;
+
+            game = OpenProcess(SYNCHRONIZE | PROCESS_DUP_HANDLE, FALSE, shared->ClientProcessId);
             return game != nullptr;
         }
 
@@ -488,7 +509,7 @@ namespace
                 (support.Support1 & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW) && (support.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE);
         }
 
-        bool CreateTexture(Protocol::Texture index, uint32_t width, uint32_t height, DXGI_FORMAT format, bool unorderedAccess)
+        bool CreateTexture(Protocol::Texture index, uint32_t width, uint32_t height, DXGI_FORMAT format, bool unorderedAccess, bool d3d11 = false)
         {
             D3D12_HEAP_PROPERTIES heap{};
             heap.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -503,6 +524,10 @@ namespace
             desc.SampleDesc.Count = 1;
             desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
             desc.Flags = unorderedAccess && !wine ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
+            // ConfigureFlags::SharedWithD3D11: OpenSharedResource1 of Direct3D 11 refuses anything else (E_INVALIDARG). Not
+            // for DXVK: its Vulkan import expects the layout of the plain texture.
+            if (d3d11)
+                desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
 
             auto& texture = textures[static_cast<size_t>(index)];
             if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_SHARED, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&texture.resource))))
@@ -737,7 +762,8 @@ namespace
             return NVSDK_NGX_PerfQuality_Value_UltraPerformance;
         }
 
-        bool Create(ID3D12GraphicsCommandList* cmd, uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, uint32_t preset)
+        bool Create(ID3D12GraphicsCommandList* cmd, uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, uint32_t preset,
+            uint32_t bridgeFlags)
         {
             Release();
 
@@ -753,8 +779,14 @@ namespace
             create.Feature.InTargetWidth = outputWidth;
             create.Feature.InTargetHeight = outputHeight;
             create.Feature.InPerfQualityValue = PerfQuality(width, outputWidth);
-            // HDR scene color, motion vectors at render resolution without jitter, standard depth
-            create.InFeatureCreateFlags = NVSDK_NGX_DLSS_Feature_Flags_IsHDR | NVSDK_NGX_DLSS_Feature_Flags_MVLowRes | NVSDK_NGX_DLSS_Feature_Flags_AutoExposure;
+            // Motion vectors at render resolution without jitter; HDR scene color and standard depth unless the bridge's
+            // flags say otherwise
+            int flags = NVSDK_NGX_DLSS_Feature_Flags_MVLowRes | NVSDK_NGX_DLSS_Feature_Flags_AutoExposure;
+            if (!(bridgeFlags & Protocol::ConfigureFlags::LowDynamicRange))
+                flags |= NVSDK_NGX_DLSS_Feature_Flags_IsHDR;
+            if (bridgeFlags & Protocol::ConfigureFlags::DepthInverted)
+                flags |= NVSDK_NGX_DLSS_Feature_Flags_DepthInverted;
+            create.InFeatureCreateFlags = flags;
             create.InEnableOutputSubrects = false;
 
             auto result = NGX_D3D12_CREATE_DLSS_EXT(cmd, 1, 1, &feature, parameters, &create);
@@ -831,7 +863,7 @@ namespace
         uint32_t displayWidth = 0;
         uint32_t displayHeight = 0;
 
-        // AMD's frame generation swap chain (ConfigureFlags::AmdPacing), while it exists, and what its callback needs
+        // AMD's frame generation swap chain (ExtensionFlags::AmdPacing), while it exists, and what its callback needs
         ffxContext swapChainContext = nullptr;
         IDXGISwapChain4* amdSwapChain = nullptr;    // the reference is the Display's
         ID3D12Resource* swapChainHudLess = nullptr; // configured for the frame it generates, moved into the read state there
@@ -920,7 +952,7 @@ namespace
             return true;
         }
 
-        bool Create(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight)
+        bool Create(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, uint32_t bridgeFlags)
         {
             Release();
 
@@ -931,7 +963,11 @@ namespace
             ffxCreateContextDescUpscale create{};
             create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
             create.header.pNext = &backend.header;
-            create.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+            create.flags = FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+            if (!(bridgeFlags & Protocol::ConfigureFlags::LowDynamicRange))
+                create.flags |= FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE;
+            if (bridgeFlags & Protocol::ConfigureFlags::DepthInverted)
+                create.flags |= FFX_UPSCALE_ENABLE_DEPTH_INVERTED;
             create.maxRenderSize = { width, height };
             create.maxUpscaleSize = { outputWidth, outputHeight };
 
@@ -1290,7 +1326,7 @@ namespace
     };
 
     // -----------------------------------------------------------------------------------------------
-    // Presentation (ConfigureFlags::HelperPresent)
+    // Presentation (ExtensionFlags::HelperPresent)
     //
     // A child window of this process over the game's window, made on a thread of its own that pumps its messages: a
     // window in another process's window tree that leaves them unanswered holds that process up. It takes no input:
@@ -1872,7 +1908,8 @@ namespace
         uint32_t height = 0;
         uint32_t outputWidth = 0;
         uint32_t outputHeight = 0;
-        uint32_t flags = 0;
+        uint32_t flags = 0;         // ExtensionFlags
+        uint32_t bridgeFlags = 0;   // ConfigureFlags
 
         bool Duplicate(HANDLE source, uint64_t& target)
         {
@@ -1891,18 +1928,19 @@ namespace
         void OpenGameFence()
         {
             auto& shared = *connection.shared;
-            HANDLE handles[] = { reinterpret_cast<HANDLE>(shared.InputFenceHandle), reinterpret_cast<HANDLE>(shared.OutputFenceHandle) };
-            shared.InputFenceHandle = shared.OutputFenceHandle = 0;
+            auto& extension = *connection.extension;
+            HANDLE handles[] = { reinterpret_cast<HANDLE>(extension.InputFenceHandle), reinterpret_cast<HANDLE>(shared.FenceHandle) };
+            extension.InputFenceHandle = shared.FenceHandle = 0;
             ComPtr<ID3D12Fence> fences[2];
             HRESULT hr = S_OK;
             for (int i = 0; i < 2; ++i)
             {
-                if ((flags & Protocol::ConfigureFlags::GameFence) && SUCCEEDED(hr))
+                if ((flags & Protocol::ExtensionFlags::GameFence) && SUCCEEDED(hr))
                     hr = handles[i] ? device.device->OpenSharedHandle(handles[i], IID_PPV_ARGS(&fences[i])) : E_INVALIDARG;
                 if (handles[i])
                     CloseHandle(handles[i]);
             }
-            if (!(flags & Protocol::ConfigureFlags::GameFence))
+            if (!(flags & Protocol::ExtensionFlags::GameFence))
                 return;
 
             if (SUCCEEDED(hr) && fences[0] && fences[1])
@@ -1913,15 +1951,16 @@ namespace
             }
             else
             {
-                flags &= ~Protocol::ConfigureFlags::GameFence;
+                flags &= ~Protocol::ExtensionFlags::GameFence;
                 Log("The game's semaphores could not be opened (0x%08X): waiting on the CPU", static_cast<uint32_t>(hr));
             }
-            shared.Flags = flags;
+            extension.Flags = flags;
         }
 
         bool Configure()
         {
             auto& shared = *connection.shared;
+            auto& extension = *connection.extension;
 
             // The GPU first: the contexts go before the textures, and nothing may still run with them, the frames waiting to
             // be presented included. AMD's swap chain is told first to generate nothing: it keeps the context.
@@ -1937,24 +1976,39 @@ namespace
 
             width = shared.Width;
             height = shared.Height;
-            flags = shared.Flags;
+            flags = connection.extended ? extension.Flags : 0;
+            bridgeFlags = shared.Flags;
             outputWidth = shared.OutputWidth ? shared.OutputWidth : width;
             outputHeight = shared.OutputHeight ? shared.OutputHeight : height;
-            Log("Configure %s at %ux%u -> %ux%u%s", shared.ConfigureBackend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height,
-                outputWidth, outputHeight, (flags & Protocol::ConfigureFlags::Wine) ? ", Wine" : "");
+            Log("Configure %s at %ux%u -> %ux%u%s%s%s%s", shared.ConfigureBackend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height,
+                outputWidth, outputHeight, (flags & Protocol::ExtensionFlags::Wine) ? ", Wine" : "",
+                (bridgeFlags & Protocol::ConfigureFlags::DepthInverted) ? ", inverted depth" : "",
+                (bridgeFlags & Protocol::ConfigureFlags::LowDynamicRange) ? ", low dynamic range" : "",
+                (bridgeFlags & Protocol::ConfigureFlags::SharedWithD3D11) ? ", shared with Direct3D 11" : "");
             if (width == 0 || height == 0 || outputWidth > 16384 || outputHeight > 16384 || outputWidth < width || outputHeight < height)
                 return false;
-            device.wine = (flags & Protocol::ConfigureFlags::Wine) != 0;
+            device.wine = (flags & Protocol::ExtensionFlags::Wine) != 0;
             OpenGameFence();
-            device.cpuSync = device.wine && !(flags & Protocol::ConfigureFlags::GameFence);
+            device.cpuSync = device.wine && !(flags & Protocol::ExtensionFlags::GameFence);
 
+            // A plain bridge client signals and waits on one fence; ours has one each way
+            auto fences = [&]()
+            {
+                if (connection.extended)
+                    return device.CreateSharedFences();
+                if (!device.CreateSharedFence(device.outputFence, device.outputFenceHandle))
+                    return false;
+                device.inputFence = device.outputFence;
+                return true;
+            };
             using T = Protocol::Texture;
-            if (!device.CreateTexture(T::Color, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, false) ||
-                !device.CreateTexture(T::Depth, width, height, DXGI_FORMAT_R32_FLOAT, false) ||
-                !device.CreateTexture(T::Motion, width, height, DXGI_FORMAT_R16G16_FLOAT, false) ||
-                !device.CreateTexture(T::Reactive, width, height, DXGI_FORMAT_R16_FLOAT, false) ||
-                !device.CreateTexture(T::Output, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, true) ||
-                (!device.wine && !device.CreateSharedFences()))
+            bool d3d11 = (bridgeFlags & Protocol::ConfigureFlags::SharedWithD3D11) != 0;
+            if (!device.CreateTexture(T::Color, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, false, d3d11) ||
+                !device.CreateTexture(T::Depth, width, height, DXGI_FORMAT_R32_FLOAT, false, d3d11) ||
+                !device.CreateTexture(T::Motion, width, height, DXGI_FORMAT_R16G16_FLOAT, false, d3d11) ||
+                !device.CreateTexture(T::Reactive, width, height, DXGI_FORMAT_R16_FLOAT, false, d3d11) ||
+                !device.CreateTexture(T::Output, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, true, d3d11) ||
+                (!device.wine && !fences()))
             {
                 connection.Message("Shared textures could not be created");
                 return false;
@@ -1964,12 +2018,12 @@ namespace
             if (shared.ConfigureBackend == Protocol::Backend::DLSS && dlss.available)
             {
                 auto cmd = device.BeginImmediate();
-                created = dlss.Create(cmd, width, height, outputWidth, outputHeight, shared.DLSSPreset);
+                created = dlss.Create(cmd, width, height, outputWidth, outputHeight, shared.DLSSPreset, bridgeFlags);
                 created = device.SubmitImmediate() && created;
             }
             else if (shared.ConfigureBackend == Protocol::Backend::FSR && fsr.available)
             {
-                created = fsr.Create(width, height, outputWidth, outputHeight);
+                created = fsr.Create(width, height, outputWidth, outputHeight, bridgeFlags);
             }
 
             if (!created)
@@ -1979,21 +2033,21 @@ namespace
             }
 
             // Frame generation, with either upscaler. Without it the upscaler works on, and the flag is cleared.
-            if (flags & Protocol::ConfigureFlags::FrameGeneration)
+            if (flags & Protocol::ExtensionFlags::FrameGeneration)
             {
-                bool hdr = (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0;
+                bool hdr = (flags & Protocol::ExtensionFlags::HighDynamicRange) != 0;
                 // The frames as the back buffer has them, 8 bits without HDR, if the frame generation can write them
-                if ((flags & Protocol::ConfigureFlags::EightBitFrames) && (hdr || !device.CanWrite(DXGI_FORMAT_B8G8R8A8_UNORM)))
+                if ((flags & Protocol::ExtensionFlags::EightBitFrames) && (hdr || !device.CanWrite(DXGI_FORMAT_B8G8R8A8_UNORM)))
                 {
                     Log("B8G8R8A8_UNORM can't be written by a shader on this GPU: the frame generation's textures stay 16-bit float");
-                    flags &= ~Protocol::ConfigureFlags::EightBitFrames;
-                    shared.Flags = flags;
+                    flags &= ~Protocol::ExtensionFlags::EightBitFrames;
+                    extension.Flags = flags;
                 }
-                bool eightBit = (flags & Protocol::ConfigureFlags::EightBitFrames) != 0;
-                if ((flags & Protocol::ConfigureFlags::AsyncGeneration) && !device.compute.queue)
+                bool eightBit = (flags & Protocol::ExtensionFlags::EightBitFrames) != 0;
+                if ((flags & Protocol::ExtensionFlags::AsyncGeneration) && !device.compute.queue)
                 {
-                    flags &= ~Protocol::ConfigureFlags::AsyncGeneration;
-                    shared.Flags = flags;
+                    flags &= ~Protocol::ExtensionFlags::AsyncGeneration;
+                    extension.Flags = flags;
                 }
                 auto format = eightBit ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R16G16B16A16_FLOAT;
                 bool generation = fsr.CreateFrameGeneration(width, height, outputWidth, outputHeight, hdr, eightBit) &&
@@ -2007,23 +2061,23 @@ namespace
                     device.ReleaseTexture(T::Present);
                     device.ReleaseTexture(T::Generated);
                     device.ReleaseTexture(T::HudLess);
-                    flags &= ~(Protocol::ConfigureFlags::FrameGeneration | Protocol::ConfigureFlags::EightBitFrames | Protocol::ConfigureFlags::AsyncGeneration);
-                    shared.Flags = flags;
+                    flags &= ~(Protocol::ExtensionFlags::FrameGeneration | Protocol::ExtensionFlags::EightBitFrames | Protocol::ExtensionFlags::AsyncGeneration);
+                    extension.Flags = flags;
                 }
             }
 
             // Presentation by the helper, the frame generation's frames too, whose Present it shares. Not under Wine, nor with
             // 16-bit frames without HDR (the frame generation could not write 8 bits): sRGB encoded, a 16-bit swap chain would
             // show them as linear.
-            if (flags & Protocol::ConfigureFlags::HelperPresent)
+            if (flags & Protocol::ExtensionFlags::HelperPresent)
             {
-                bool hdr = (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0;
+                bool hdr = (flags & Protocol::ExtensionFlags::HighDynamicRange) != 0;
                 bool generation = fsr.HasFrameGeneration();
-                bool eightBit = generation ? (flags & Protocol::ConfigureFlags::EightBitFrames) != 0 : !hdr;
+                bool eightBit = generation ? (flags & Protocol::ExtensionFlags::EightBitFrames) != 0 : !hdr;
                 auto format = eightBit ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R16G16B16A16_FLOAT;
                 // AMD's swap chain only with its frame generation; ours where it can't be made
-                bool amd = generation && (flags & Protocol::ConfigureFlags::AmdPacing);
-                auto window = reinterpret_cast<HWND>(shared.PresentWindow);
+                bool amd = generation && (flags & Protocol::ExtensionFlags::AmdPacing);
+                auto window = reinterpret_cast<HWND>(extension.PresentWindow);
                 bool presenting = !device.wine && (hdr || eightBit) &&
                     (generation || device.CreateTexture(T::Present, outputWidth, outputHeight, format, false)) &&
                     device.CreateSharedFence(device.presentFence, device.presentFenceHandle);
@@ -2036,14 +2090,14 @@ namespace
                 if (presenting && !amd)
                     presenting = display.Configure(device.factory, device.device.Get(), window, outputWidth, outputHeight, format, hdr);
                 if (!amd)
-                    flags &= ~Protocol::ConfigureFlags::AmdPacing;
+                    flags &= ~Protocol::ExtensionFlags::AmdPacing;
                 if (presenting)
                 {
                     display.Bind(device.Texture(T::Present), generation ? device.Texture(T::Generated) : nullptr, device.inputFence.Get(),
                         device.presentFence.Get(), device.generatedFence.Get());
                     // The game's textures for Present are the back buffer's A8R8G8B8 without HDR
                     if (eightBit)
-                        flags |= Protocol::ConfigureFlags::EightBitFrames;
+                        flags |= Protocol::ExtensionFlags::EightBitFrames;
                 }
                 else
                 {
@@ -2055,44 +2109,48 @@ namespace
                         CloseHandle(device.presentFenceHandle);
                     device.presentFenceHandle = nullptr;
                     display.Stop();
-                    flags &= ~(Protocol::ConfigureFlags::HelperPresent | Protocol::ConfigureFlags::AmdPacing);
+                    flags &= ~(Protocol::ExtensionFlags::HelperPresent | Protocol::ExtensionFlags::AmdPacing);
                 }
-                shared.Flags = flags;
+                extension.Flags = flags;
             }
             else
             {
                 display.Stop();
-                flags &= ~Protocol::ConfigureFlags::AmdPacing;
-                shared.Flags = flags;
+                flags &= ~Protocol::ExtensionFlags::AmdPacing;
+                extension.Flags = flags;
             }
-            shared.ChildWindow = (flags & Protocol::ConfigureFlags::HelperPresent) ? reinterpret_cast<uint64_t>(display.window) : 0;
+            extension.ChildWindow = (flags & Protocol::ExtensionFlags::HelperPresent) ? reinterpret_cast<uint64_t>(display.window) : 0;
 
             for (size_t i = 0; i < static_cast<size_t>(T::Count); ++i)
             {
-                shared.TextureSizes[i] = device.AllocationSize(static_cast<T>(i));
-                shared.TextureHandles[i] = 0;
+                auto& handle = Protocol::TextureHandle(shared, extension, static_cast<T>(i));
+                Protocol::TextureSize(shared, extension, static_cast<T>(i)) = device.AllocationSize(static_cast<T>(i));
+                handle = 0;
                 if (!device.textures[i].handle)
                     continue;
-                if (!Duplicate(device.textures[i].handle, shared.TextureHandles[i]))
+                if (!Duplicate(device.textures[i].handle, handle))
                     return false;
             }
-            shared.InputFenceHandle = shared.OutputFenceHandle = shared.PresentFenceHandle = 0;
-            if (!device.wine && (!Duplicate(device.inputFenceHandle, shared.InputFenceHandle) || !Duplicate(device.outputFenceHandle, shared.OutputFenceHandle)))
+            extension.InputFenceHandle = shared.FenceHandle = extension.PresentFenceHandle = 0;
+            if (!device.wine && !Duplicate(device.outputFenceHandle, shared.FenceHandle))
                 return false;
-            if ((flags & Protocol::ConfigureFlags::HelperPresent) && !Duplicate(device.presentFenceHandle, shared.PresentFenceHandle))
+            if (!device.wine && connection.extended && !Duplicate(device.inputFenceHandle, extension.InputFenceHandle))
+                return false;
+            if ((flags & Protocol::ExtensionFlags::HelperPresent) && !Duplicate(device.presentFenceHandle, extension.PresentFenceHandle))
                 return false;
 
             backend = shared.ConfigureBackend;
-            device.asyncGeneration = fsr.HasFrameGeneration() && (flags & Protocol::ConfigureFlags::AsyncGeneration) != 0;
+            device.asyncGeneration = fsr.HasFrameGeneration() && (flags & Protocol::ExtensionFlags::AsyncGeneration) != 0;
             connection.Message("%s ready at %ux%u -> %ux%u%s%s", backend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height, outputWidth, outputHeight,
-                !fsr.HasFrameGeneration() ? "" : (flags & Protocol::ConfigureFlags::EightBitFrames) ? ", with frame generation (8-bit frames" : ", with frame generation (16-bit frames",
-                (flags & Protocol::ConfigureFlags::AsyncGeneration) ? ", on the compute queue)" : fsr.HasFrameGeneration() ? ")" : "");
+                !fsr.HasFrameGeneration() ? "" : (flags & Protocol::ExtensionFlags::EightBitFrames) ? ", with frame generation (8-bit frames" : ", with frame generation (16-bit frames",
+                (flags & Protocol::ExtensionFlags::AsyncGeneration) ? ", on the compute queue)" : fsr.HasFrameGeneration() ? ")" : "");
             return true;
         }
 
         bool Evaluate()
         {
             auto& shared = *connection.shared;
+            auto& extension = *connection.extension;
             if (backend == Protocol::Backend::None || (!device.cpuSync && (!device.inputFence || !device.outputFence)))
                 return false;
 
@@ -2111,16 +2169,16 @@ namespace
             frame.frameTimeMs = shared.FrameTimeMs;
             frame.sharpness = shared.Sharpness;
             frame.reset = shared.Reset != 0;
-            frame.reactive = (flags & Protocol::ConfigureFlags::ReactiveMask) != 0;
+            frame.reactive = (bridgeFlags & Protocol::ConfigureFlags::ReactiveMask) != 0;
             for (int i = 0; i < 3; ++i)
             {
-                frame.cameraPosition[i] = shared.CameraPosition[i];
-                frame.cameraUp[i] = shared.CameraUp[i];
-                frame.cameraRight[i] = shared.CameraRight[i];
-                frame.cameraForward[i] = shared.CameraForward[i];
+                frame.cameraPosition[i] = extension.CameraPosition[i];
+                frame.cameraUp[i] = extension.CameraUp[i];
+                frame.cameraRight[i] = extension.CameraRight[i];
+                frame.cameraForward[i] = extension.CameraForward[i];
             }
-            frame.frameId = shared.FrameId;
-            frame.hudLess = shared.HudLess != 0;
+            frame.frameId = extension.FrameId;
+            frame.hudLess = extension.HudLess != 0;
 
             using T = Protocol::Texture;
             auto cmd = device.BeginFrame(Device::Work::Evaluate);
@@ -2172,19 +2230,20 @@ namespace
         bool Generate()
         {
             auto& shared = *connection.shared;
+            auto& extension = *connection.extension;
             if (!fsr.HasFrameGeneration() || (!device.cpuSync && (!device.inputFence || !device.outputFence)))
                 return false;
 
             // Only after the preparation of the same frame
-            bool prepared = preparedFrame && preparedFrameId == shared.FrameId;
+            bool prepared = preparedFrame && preparedFrameId == extension.FrameId;
             preparedFrame = false;
 
             auto& g = generationStats;
             ++g.generates;
             g.unprepared += !prepared;
-            g.resets += shared.GenerateReset != 0;
-            g.gaps += g.lastId != 0 && shared.FrameId != g.lastId + 1;
-            g.lastId = shared.FrameId;
+            g.resets += extension.GenerateReset != 0;
+            g.gaps += g.lastId != 0 && extension.FrameId != g.lastId + 1;
+            g.lastId = extension.FrameId;
 
             using T = Protocol::Texture;
             auto cmd = device.BeginFrame(Device::Work::Generate);
@@ -2193,8 +2252,8 @@ namespace
             {
                 device.Transition(cmd, true, { T::Present, T::Generated, T::HudLess });
                 device.Stamp(cmd);
-                generated = fsr.GenerateFrame(cmd, device, shared.FrameId, shared.GenerateReset != 0,
-                    (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0, shared.MaxLuminance);
+                generated = fsr.GenerateFrame(cmd, device, extension.FrameId, extension.GenerateReset != 0,
+                    (flags & Protocol::ExtensionFlags::HighDynamicRange) != 0, extension.MaxLuminance);
                 device.Stamp(cmd);
                 g.failed += !generated;
                 device.Transition(cmd, false, { T::Present, T::Generated, T::HudLess });
@@ -2226,28 +2285,29 @@ namespace
         bool Present()
         {
             auto& shared = *connection.shared;
+            auto& extension = *connection.extension;
             if (!display.Ready())
                 return false;
 
             Display::Job job;
             job.inputValue = shared.WaitValue;
             job.presentValue = shared.SignalValue;
-            job.syncInterval = std::min(shared.SyncInterval, 4u);
-            job.delay = std::clamp(shared.PresentDelay, 0.0f, 1.0f);
+            job.syncInterval = std::min(extension.SyncInterval, 4u);
+            job.delay = std::clamp(extension.PresentDelay, 0.0f, 1.0f);
             if (display.AmdPacing())
                 return PresentAmd(job);
             bool ok = true;
-            if (shared.PresentGenerate && fsr.HasFrameGeneration())
+            if (extension.PresentGenerate && fsr.HasFrameGeneration())
             {
                 // Only after the preparation of the same frame
-                bool prepared = preparedFrame && preparedFrameId == shared.FrameId;
+                bool prepared = preparedFrame && preparedFrameId == extension.FrameId;
                 preparedFrame = false;
                 auto& g = generationStats;
                 ++g.generates;
                 g.unprepared += !prepared;
-                g.resets += shared.GenerateReset != 0;
-                g.gaps += g.lastId != 0 && shared.FrameId != g.lastId + 1;
-                g.lastId = shared.FrameId;
+                g.resets += extension.GenerateReset != 0;
+                g.gaps += g.lastId != 0 && extension.FrameId != g.lastId + 1;
+                g.lastId = extension.FrameId;
 
                 if (prepared)
                 {
@@ -2255,15 +2315,15 @@ namespace
                     auto cmd = device.BeginFrame(Device::Work::Generate);
                     device.Transition(cmd, true, { T::Present, T::Generated, T::HudLess });
                     device.Stamp(cmd);
-                    bool generated = fsr.GenerateFrame(cmd, device, shared.FrameId, shared.GenerateReset != 0,
-                        (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0, shared.MaxLuminance);
+                    bool generated = fsr.GenerateFrame(cmd, device, extension.FrameId, extension.GenerateReset != 0,
+                        (flags & Protocol::ExtensionFlags::HighDynamicRange) != 0, extension.MaxLuminance);
                     device.Stamp(cmd);
                     device.Transition(cmd, false, { T::Present, T::Generated, T::HudLess });
                     g.failed += !generated;
                     ok = generated;
                     job.generatedValue = device.SubmitGenerated(shared.WaitValue, generated);
                     // Nothing to interpolate from after a reset: the rendered frame alone
-                    job.showGenerated = generated && shared.GenerateReset == 0;
+                    job.showGenerated = generated && extension.GenerateReset == 0;
                 }
 
                 if (g.generates >= 300)
@@ -2290,17 +2350,18 @@ namespace
         bool PresentAmd(const Display::Job& job)
         {
             auto& shared = *connection.shared;
-            bool prepared = preparedFrame && preparedFrameId == shared.FrameId;
+            auto& extension = *connection.extension;
+            bool prepared = preparedFrame && preparedFrameId == extension.FrameId;
             preparedFrame = false;
-            bool generate = shared.PresentGenerate && prepared;
-            if (shared.PresentGenerate)
+            bool generate = extension.PresentGenerate && prepared;
+            if (extension.PresentGenerate)
             {
                 auto& g = generationStats;
                 ++g.generates;
                 g.unprepared += !prepared;
-                g.resets += shared.GenerateReset != 0;
-                g.gaps += g.lastId != 0 && shared.FrameId != g.lastId + 1;
-                g.lastId = shared.FrameId;
+                g.resets += extension.GenerateReset != 0;
+                g.gaps += g.lastId != 0 && extension.FrameId != g.lastId + 1;
+                g.lastId = extension.FrameId;
                 if (g.generates >= 300)
                 {
                     if (g.unprepared || g.gaps || g.prepareFailed || g.prepareGaps || g.resets > 2)
@@ -2312,12 +2373,12 @@ namespace
                     g.lastId = lastId;
                 }
             }
-            fsr.SetSwapChainReset(shared.GenerateReset != 0);
+            fsr.SetSwapChainReset(extension.GenerateReset != 0);
             using T = Protocol::Texture;
-            if (!fsr.ConfigureGeneration(generate, shared.FrameId, generate && preparedHudLess ? device.Texture(T::HudLess) : nullptr) && generate)
+            if (!fsr.ConfigureGeneration(generate, extension.FrameId, generate && preparedHudLess ? device.Texture(T::HudLess) : nullptr) && generate)
             {
                 generate = false;
-                fsr.ConfigureGeneration(false, shared.FrameId, nullptr);
+                fsr.ConfigureGeneration(false, extension.FrameId, nullptr);
             }
             display.ShowAmd(job, generate);
             return true;
@@ -2331,7 +2392,9 @@ namespace
 
             auto& shared = *connection.shared;
             gLog = _wfopen(shared.LogPath, L"w");
-            Log("GTAIV.EFLC.FusionFix upscaler helper started for process %u", shared.GameProcessId);
+            auto& extension = *connection.extension;
+            Log("GTAIV.EFLC.FusionFix upscaler helper started for process %u (%s)%s", shared.ClientProcessId, shared.ClientName,
+                connection.extended ? "" : ", a plain bridge client: no frame generation nor presentation");
 
             // The game's GPU work waits for what this submits: a helper that gets the CPU late, behind the game's own
             // busy threads, holds up the frame and the game's next request alike. Its work is short and it sleeps between.
@@ -2351,20 +2414,21 @@ namespace
             Log("Adapter: %ls", adapterDesc.Description);
 
             // The runtimes are shipped in the game folder, next to vulkan.dll
-            std::vector<std::wstring> searchPaths = { shared.GameDirectory, shared.PluginsDirectory };
+            std::wstring pluginsDirectory = connection.extended && extension.PluginsDirectory[0] ? extension.PluginsDirectory : shared.GameDirectory;
+            std::vector<std::wstring> searchPaths = { shared.GameDirectory, pluginsDirectory };
             std::string dlssMessage;
             std::string fsrMessage;
             if (adapterDesc.VendorId == 0x10DE)
-                dlss.Init(device.device.Get(), searchPaths, shared.PluginsDirectory, dlssMessage);
+                dlss.Init(device.device.Get(), searchPaths, pluginsDirectory, dlssMessage);
             else
                 dlssMessage = "DLSS is not available: not an NVIDIA GPU";
             fsr.Init(device.device.Get(), searchPaths, fsrMessage);
 
             Log("%s", dlssMessage.c_str());
             Log("%s", fsrMessage.c_str());
-            shared.DLSSAvailable = dlss.available;
-            shared.FSRAvailable = fsr.available;
-            shared.FrameGenerationAvailable = fsr.available && fsr.frameGenerationAvailable;
+            shared.AvailableBackends = (dlss.available ? Protocol::BackendBit(Protocol::Backend::DLSS) : 0) |
+                (fsr.available ? Protocol::BackendBit(Protocol::Backend::FSR) : 0);
+            extension.FrameGenerationAvailable = fsr.available && fsr.frameGenerationAvailable;
             connection.Message("%s; %s", dlssMessage.c_str(), fsrMessage.c_str());
             connection.Respond(Protocol::Status::Ok, shared.RequestSerial);
 
@@ -2378,7 +2442,7 @@ namespace
                 MemoryBarrier();
                 auto serial = shared.RequestSerial;
                 MemoryBarrier();
-                auto command = shared.RequestCommand;
+                auto command = static_cast<Protocol::Command>(shared.RequestCommand);
                 if (command == Protocol::Command::Shutdown)
                 {
                     connection.Respond(Protocol::Status::Ok, serial);
@@ -2386,6 +2450,9 @@ namespace
                 }
 
                 bool ok = false;
+                // The extension's commands only for a client that has it
+                if (!connection.extended && (command == Protocol::Command::Generate || command == Protocol::Command::Present || command == Protocol::Command::Hide))
+                    command = Protocol::Command::None;
                 switch (command)
                 {
                 case Protocol::Command::Configure:

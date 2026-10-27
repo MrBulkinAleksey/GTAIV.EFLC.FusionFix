@@ -340,6 +340,8 @@ project "GTAIV.EFLC.FusionFix.Helper"
    files { "source/resources/Versioninfo.rc" }
 
    includedirs { "source/includes" }
+   -- The upscaler bridge's protocol, the base of the helper's (upscaler_protocol.hpp)
+   includedirs { "external/FusionFixUtils" }
    includedirs { "external/dlss/include" }
    includedirs { "external/fidelityfx/api/include" }
    includedirs { "external/fidelityfx/upscalers/include" }

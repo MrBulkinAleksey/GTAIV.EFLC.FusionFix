@@ -2,82 +2,81 @@
 
 // Shared between the game plugin (x86) and GTAIV.EFLC.FusionFix.exe (x64), which runs DLSS and FSR.
 //
-// The game creates a file mapping holding UpscalerProtocol::Shared and two auto-reset events, and starts
-// the helper with their base name. Every request is: the game writes the parameters and the command,
-// signals <name>.Request and waits for <name>.Response. The helper answers each request exactly once.
+// The base is the upscaler bridge protocol of the fixes (UpscalerBridge, <upscaler/upscaler_bridge_protocol.h>): the game
+// creates its file mapping (Shared) and two auto-reset events and starts the helper with their base name; every request is
+// the parameters and the command written, <name>.Request signalled, <name>.Response waited for, and the helper answers each
+// exactly once. The helper serves a plain bridge client too, as FusionFixHub.exe would: Configure, Evaluate and Shutdown
+// on one fence (Shared::FenceHandle), which the client signals WaitValue on and the helper SignalValue.
 //
-// GPU synchronization uses two D3D12 fences created by the helper, which the game opens on its own queue:
-// imported as Vulkan timeline semaphores with DXVK, or opened on the D3D12 device of D3D9on12. The game
-// signals WaitValue on the input fence once the inputs are copied into the shared textures, the helper waits
-// for it on its queue, runs the upscaler and signals SignalValue on the output fence, which the game waits for
-// before copying the output back. One writer each, so each fence only goes up: with a single fence the game's
-// next inputs could signal it past a Generate still running on the helper's compute queue, which let the copy
-// of the generated frame through early and then took the fence back down. The helper answers Evaluate after
-// its GPU work is submitted, so the game never waits on the GPU for a value that nobody will signal.
+// What the bridge has no room for is in a second mapping, <name>.FusionFix (Extension), made by the game next to the
+// first; the helper opens it when it is there. Its commands (Generate, Present, Hide) take numbers the bridge leaves free.
 //
-// Under Wine (ConfigureFlags::Wine) the shared textures have no UAV flag, and the game imports them as opaque
-// Win32 handles, which every Wine supports. Only textures can be shared: vkd3d-proton gives a buffer an empty
-// handle. Wine can't import a D3D12 fence of another process (it crashes the importer), so the game shares two
-// Vulkan timeline semaphores of its own instead (ConfigureFlags::GameFence), which the helper opens as its fences.
-// Where the helper can't open them (older Proton), it clears GameFence in Flags, and then both sides wait for their
-// GPU work on the CPU: the game for its copies before Evaluate, the helper before it answers Evaluate.
+// GPU synchronization with the extension uses two D3D12 fences created by the helper, which the game opens on its own
+// queue: imported as Vulkan timeline semaphores with DXVK, or opened on the D3D12 device of D3D9on12. The game signals
+// WaitValue on the input fence (Extension::InputFenceHandle) once the inputs are copied into the shared textures, the
+// helper waits for it on its queue, runs the upscaler and signals SignalValue on the output fence (Shared::FenceHandle),
+// which the game waits for before copying the output back. One writer each, so each fence only goes up: with a single
+// fence the game's next inputs could signal it past a Generate still running on the helper's compute queue, which let the
+// copy of the generated frame through early and then took the fence back down. The helper answers Evaluate after its GPU
+// work is submitted, so the game never waits on the GPU for a value that nobody will signal.
 //
-// Presentation by the helper (ConfigureFlags::HelperPresent, not under Wine): the helper puts a child window of its own over
-// the game's window (PresentWindow) and a flip model swap chain on it. Present takes the finished frame (Present, as for
-// the frame generation) and shows it from a thread of its own; the game leaves its own Present out and asks for Hide
-// when it presents a frame itself: the helper hides its window (ChildWindow), and a Present still queued then does not show it again. With PresentGenerate the helper also generates the frame between the one
-// before and this one (HudLess too, FrameId, MaxLuminance and GenerateReset as for Generate) and shows it first, the
-// rendered frame PresentDelay of the frame time after it. The helper signals SignalValue on its present fence
-// (PresentFenceHandle) once it is done with Present and HudLess, which the game's next copy into them waits for. With
-// AmdPacing, AMD's frame generation swap chain generates the frame in its Present and paces both (PresentDelay unused).
+// Under Wine (ExtensionFlags::Wine) the shared textures have no UAV flag, and the game imports them as opaque Win32
+// handles, which every Wine supports. Only textures can be shared: vkd3d-proton gives a buffer an empty handle. Wine can't
+// import a D3D12 fence of another process (it crashes the importer), so the game shares two Vulkan timeline semaphores of
+// its own instead (ExtensionFlags::GameFence: the input one in InputFenceHandle, the output one in Shared::FenceHandle),
+// which the helper opens as its fences. Where the helper can't open them (older Proton), it clears GameFence, and then both
+// sides wait for their GPU work on the CPU: the game for its copies before Evaluate, the helper before it answers Evaluate.
 //
-// Frame generation (ConfigureFlags::FrameGeneration, FSR only): Evaluate also prepares the frame generation with
-// the depth and motion vectors of the frame. Generate then takes the finished frame (Present, the size of the
-// output) and writes the frame between it and the previous one into Generated, synchronized like Evaluate.
+// Presentation by the helper (ExtensionFlags::HelperPresent, not under Wine): the helper puts a child window of its own
+// over the game's window (PresentWindow) and a flip model swap chain on it. Present takes the finished frame (Present, as
+// for the frame generation) and shows it from a thread of its own; the game leaves its own Present out and asks for Hide
+// when it presents a frame itself: the helper hides its window (ChildWindow), and a Present still queued then does not
+// show it again. With PresentGenerate the helper also generates the frame between the one before and this one (HudLess
+// too, FrameId, MaxLuminance and GenerateReset as for Generate) and shows it first, the rendered frame PresentDelay of the
+// frame time after it. The helper signals SignalValue on its present fence (PresentFenceHandle) once it is done with
+// Present and HudLess, which the game's next copy into them waits for. With AmdPacing, AMD's frame generation swap chain
+// generates the frame in its Present and paces both (PresentDelay unused).
+//
+// Frame generation (ExtensionFlags::FrameGeneration, FSR only): Evaluate also prepares the frame generation with the depth
+// and motion vectors of the frame. Generate then takes the finished frame (Present, the size of the output) and writes the
+// frame between it and the previous one into Generated, synchronized like Evaluate.
 
 #include <cstdint>
 #include <cstddef>
+#include <upscaler/upscaler_bridge_protocol.h>
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 17;
-    constexpr uint32_t PathLength = 520;
+    using UpscalerBridge::Shared;
+    using UpscalerBridge::Backend;
+    using UpscalerBridge::Status;
+    using UpscalerBridge::BackendBit;
+    using UpscalerBridge::PathLength;
+    using UpscalerBridge::ArgumentName;
+    using UpscalerBridge::MappingSuffix;
+    using UpscalerBridge::RequestSuffix;
+    using UpscalerBridge::ResponseSuffix;
+    namespace ConfigureFlags = UpscalerBridge::ConfigureFlags;
 
-    constexpr const wchar_t* ArgumentName = L"--upscaler";
+    constexpr uint32_t Version = UpscalerBridge::Version;
+    constexpr uint32_t ExtensionVersion = 1;
+    inline const wchar_t* ExtensionSuffix = L".FusionFix";
 
+    // The bridge's commands with their numbers, then the extension's
     enum class Command : uint32_t
     {
-        None,
-        Configure,      // (re)create the shared textures and the upscaler for Backend, Width x Height to OutputWidth x OutputHeight
-        Evaluate,       // upscale one frame
-        Generate,       // the frame between the last Present and the one before, after an Evaluate of the same frame
-        Shutdown,
-        Present,        // ConfigureFlags::HelperPresent: Present to the screen, through the helper's swap chain
-        Hide,           // ConfigureFlags::HelperPresent: the game presents itself, the helper's window hidden until the next Present
+        None = static_cast<uint32_t>(UpscalerBridge::Command::None),
+        Configure = static_cast<uint32_t>(UpscalerBridge::Command::Configure),
+        Evaluate = static_cast<uint32_t>(UpscalerBridge::Command::Evaluate),
+        Shutdown = static_cast<uint32_t>(UpscalerBridge::Command::Shutdown),
+        Generate = 0x100,   // the frame between the last Present and the one before, after an Evaluate of the same frame
+        Present,            // ExtensionFlags::HelperPresent: Present to the screen, through the helper's swap chain
+        Hide,               // ExtensionFlags::HelperPresent: the game presents itself, the helper's window hidden until the next Present
     };
 
-    enum class Backend : uint32_t
-    {
-        None,
-        DLSS,
-        FSR,
-    };
-
-    enum class Status : uint32_t
-    {
-        Pending,
-        Ok,
-        Failed,
-    };
-
-    // Shared textures, the inputs at the render size (Width x Height), the output at OutputWidth x OutputHeight:
-    // Color     DXGI_FORMAT_R16G16B16A16_FLOAT  HDR scene
-    // Depth     DXGI_FORMAT_R32_FLOAT           standard [0, 1] depth
-    // Motion    DXGI_FORMAT_R16G16_FLOAT        previous - current position in texture coordinates, no jitter
-    // Reactive  DXGI_FORMAT_R16_FLOAT           0 to 1, how much a pixel should follow the current frame
-    // Output    DXGI_FORMAT_R16G16B16A16_FLOAT  written by the upscaler
-    // Frame generation or presentation by the helper (Present only) only, at the output size, otherwise their handles are 0; DXGI_FORMAT_B8G8R8A8_UNORM instead with
-    // ConfigureFlags::EightBitFrames:
+    // The bridge's textures (their handles in Shared), then the extension's, at the output size, in Extension; their
+    // handles are 0 without the frame generation or presentation by the helper (Present only). DXGI_FORMAT_B8G8R8A8_UNORM
+    // instead of the float format with ExtensionFlags::EightBitFrames:
     // Present   DXGI_FORMAT_R16G16B16A16_FLOAT  the finished frame, sRGB encoded or scRGB with HDR output
     // Generated DXGI_FORMAT_R16G16B16A16_FLOAT  written by the frame generation
     // HudLess   DXGI_FORMAT_R16G16B16A16_FLOAT  Present before the HUD was drawn, which tells the HUD apart
@@ -86,8 +85,12 @@ namespace UpscalerProtocol
         Color, Depth, Motion, Reactive, Output, Present, Generated, HudLess, Count
     };
 
+    constexpr uint32_t BridgeTextureCount = static_cast<uint32_t>(UpscalerBridge::Texture::Count);
+    constexpr uint32_t ExtensionTextureCount = static_cast<uint32_t>(Texture::Count) - BridgeTextureCount;
+    static_assert(static_cast<uint32_t>(Texture::Output) == static_cast<uint32_t>(UpscalerBridge::Texture::Output));
+
     // The inputs the game copies every frame
-    constexpr uint32_t InputCount = static_cast<uint32_t>(Texture::Output);
+    constexpr uint32_t InputCount = UpscalerBridge::InputCount;
 
     // The textures of the frame generation, the last ones
     constexpr bool IsFrameGenerationTexture(Texture texture)
@@ -101,67 +104,32 @@ namespace UpscalerProtocol
         return texture == Texture::Output || IsFrameGenerationTexture(texture);
     }
 
-    namespace ConfigureFlags
+    namespace ExtensionFlags
     {
-        constexpr uint32_t ReactiveMask = 1 << 0;   // Reactive is written every frame and used by FSR
-        constexpr uint32_t Wine = 1 << 1;           // textures without the UAV flag, for opaque handles
-        constexpr uint32_t GameFence = 1 << 2;      // the fence handles are the game's semaphores; cleared by the helper if it can't open them
-        constexpr uint32_t FrameGeneration = 1 << 3; // FSR frame generation; cleared by the helper if it can't create it
-        constexpr uint32_t HighDynamicRange = 1 << 4; // Present is scRGB
-        constexpr uint32_t EightBitFrames = 1 << 5;   // the frame generation's textures are B8G8R8A8_UNORM; cleared by the helper if the GPU can't write them
-        constexpr uint32_t AsyncGeneration = 1 << 6;  // Generate runs on a compute queue of the helper; cleared if it has none
-        constexpr uint32_t HelperPresent = 1 << 7;    // the helper presents the frames, with the frame generation too; cleared if it can't
-        constexpr uint32_t AmdPacing = 1 << 8;        // with HelperPresent and the frame generation, AMD's swap chain generates and paces the frames; cleared if it can't
+        constexpr uint32_t Wine = 1 << 0;             // textures without the UAV flag, for opaque handles
+        constexpr uint32_t GameFence = 1 << 1;        // the fence handles are the game's semaphores; cleared by the helper if it can't open them
+        constexpr uint32_t FrameGeneration = 1 << 2;  // FSR frame generation; cleared by the helper if it can't create it
+        constexpr uint32_t HighDynamicRange = 1 << 3; // Present is scRGB
+        constexpr uint32_t EightBitFrames = 1 << 4;   // the frame generation's textures are B8G8R8A8_UNORM; cleared by the helper if the GPU can't write them
+        constexpr uint32_t AsyncGeneration = 1 << 5;  // Generate runs on a compute queue of the helper; cleared if it has none
+        constexpr uint32_t HelperPresent = 1 << 6;    // the helper presents the frames, with the frame generation too; cleared if it can't
+        constexpr uint32_t AmdPacing = 1 << 7;        // with HelperPresent and the frame generation, AMD's swap chain generates and paces the frames; cleared if it can't
     }
 
 #pragma pack(push, 8)
-    struct Shared
+    struct Extension
     {
-        uint32_t Version;
-        uint32_t GameProcessId;
+        uint32_t Version;             // ExtensionVersion, written by the game
+        uint32_t Flags;               // ExtensionFlags, Configure; cleared by the helper as above
 
-        // Written by the game before starting the helper
-        uint32_t AdapterLuidLow;
-        int32_t AdapterLuidHigh;
-        wchar_t GameDirectory[PathLength];
+        // Written by the game before starting the helper: the vendor runtimes are looked for here too
         wchar_t PluginsDirectory[PathLength];
-        wchar_t LogPath[PathLength];
 
         // Written by the helper, answering the implicit start request
-        uint32_t DLSSAvailable;
-        uint32_t FSRAvailable;
         uint32_t FrameGenerationAvailable;
         uint32_t Reserved0;
-        char Message[512];
 
-        // Request
-        Command RequestCommand;
-        uint32_t RequestSerial;
-
-        // Configure
-        Backend ConfigureBackend;
-        uint32_t Width;
-        uint32_t Height;
-        uint32_t DLSSPreset;          // NVSDK_NGX_DLSS_Hint_Render_Preset, 0 is the default
-        uint32_t Flags;               // ConfigureFlags, GameFence cleared by the helper when it falls back to the CPU
-        uint32_t OutputWidth;         // upscaled size, Width x Height or larger
-        uint32_t OutputHeight;
-        uint32_t Reserved;
-
-        // Evaluate
-        uint64_t WaitValue;           // signalled by the game when the inputs are ready
-        uint64_t SignalValue;         // signalled by the helper when the output is ready
-        float JitterX;                // pixels, direction the rendered content moved (y down)
-        float JitterY;
-        float MotionScaleX;           // converts motion vectors to pixels
-        float MotionScaleY;
-        float CameraNear;
-        float CameraFar;
-        float CameraFovY;             // radians
-        float FrameTimeMs;
-        float Sharpness;
-        uint32_t Reset;
-        // World space, for the frame generation
+        // Evaluate, world space, for the frame generation
         float CameraPosition[3];
         float CameraUp[3];
         float CameraRight[3];
@@ -170,7 +138,7 @@ namespace UpscalerProtocol
         uint32_t HudLess;             // Generate of this frame comes with HudLess
         uint32_t Reserved1;
 
-        // Generate (WaitValue and SignalValue as for Evaluate)
+        // Generate (WaitValue and SignalValue of Shared as for Evaluate)
         float MaxLuminance;           // nits, HDR output
         uint32_t GenerateReset;
 
@@ -185,25 +153,30 @@ namespace UpscalerProtocol
         float PresentDelay;           // of the frame time, from the generated frame to the rendered one
         uint32_t Reserved2;
 
-        // Response
-        uint32_t ResponseSerial;
-        Status ResponseStatus;
-
-        // Configure results, handles already duplicated into the game process
-        uint64_t TextureHandles[static_cast<size_t>(Texture::Count)];
-        uint64_t TextureSizes[static_cast<size_t>(Texture::Count)];
-        // The helper's fences; with GameFence, the game's semaphores duplicated into the helper
-        uint64_t InputFenceHandle;    // signalled by the game: WaitValue
-        uint64_t OutputFenceHandle;   // signalled by the helper: SignalValue
+        // Configure results, handles already duplicated into the game process: Present, Generated, HudLess
+        uint64_t TextureHandles[ExtensionTextureCount];
+        uint64_t TextureSizes[ExtensionTextureCount];
+        // Signalled by the game (WaitValue): the helper's input fence, or with GameFence the game's semaphore duplicated
+        // into the helper. The output fence is Shared::FenceHandle.
+        uint64_t InputFenceHandle;
     };
 #pragma pack(pop)
 
     static_assert(sizeof(wchar_t) == 2);
-    static_assert(offsetof(Shared, WaitValue) % 8 == 0);
-    static_assert(offsetof(Shared, TextureHandles) % 8 == 0);
-    static_assert(sizeof(Shared) == 4024, "The layout must be identical in the x86 and x64 builds");
+    static_assert(offsetof(Extension, FrameId) % 8 == 0);
+    static_assert(offsetof(Extension, TextureHandles) % 8 == 0);
+    static_assert(sizeof(Extension) == 1224, "The layout must be identical in the x86 and x64 builds");
 
-    inline const wchar_t* MappingSuffix = L".Mapping";
-    inline const wchar_t* RequestSuffix = L".Request";
-    inline const wchar_t* ResponseSuffix = L".Response";
+    // A texture's handle and size, in Shared or Extension by its number
+    inline uint64_t& TextureHandle(Shared& shared, Extension& extension, Texture texture)
+    {
+        auto i = static_cast<uint32_t>(texture);
+        return i < BridgeTextureCount ? shared.TextureHandles[i] : extension.TextureHandles[i - BridgeTextureCount];
+    }
+
+    inline uint64_t& TextureSize(Shared& shared, Extension& extension, Texture texture)
+    {
+        auto i = static_cast<uint32_t>(texture);
+        return i < BridgeTextureCount ? shared.TextureSizes[i] : extension.TextureSizes[i - BridgeTextureCount];
+    }
 }

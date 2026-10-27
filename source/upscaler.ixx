@@ -181,15 +181,16 @@ namespace
     using Textures = std::array<IDirect3DTexture9*, TextureCount>;
 
     // The helper duplicated its handles into this process, they are closed once imported or not
-    void CloseSharedHandles(Protocol::Shared& shared)
+    void CloseSharedHandles(Protocol::Shared& shared, Protocol::Extension& extension)
     {
-        for (auto& handle : shared.TextureHandles)
+        for (size_t i = 0; i < TextureCount; ++i)
         {
+            auto& handle = Protocol::TextureHandle(shared, extension, static_cast<Protocol::Texture>(i));
             if (handle)
                 CloseHandle(reinterpret_cast<HANDLE>(handle));
             handle = 0;
         }
-        for (auto handle : { &shared.InputFenceHandle, &shared.OutputFenceHandle, &shared.PresentFenceHandle })
+        for (auto handle : { &extension.InputFenceHandle, &shared.FenceHandle, &extension.PresentFenceHandle })
         {
             if (*handle)
                 CloseHandle(reinterpret_cast<HANDLE>(*handle));
@@ -246,15 +247,15 @@ namespace
         uint32_t outputWidth = 0;
         uint32_t outputHeight = 0;
         bool frameGeneration = false; // Present and Generated were imported
-        bool eightBitFrames = false;  // ConfigureFlags::EightBitFrames: the frame generation's textures are B8G8R8A8
-        bool wine = false;            // ConfigureFlags::Wine
+        bool eightBitFrames = false;  // ExtensionFlags::EightBitFrames: the frame generation's textures are B8G8R8A8
+        bool wine = false;            // ExtensionFlags::Wine
         bool gameFence = false;       // Wine: the helper opened the game's semaphores, else both sides wait on the CPU
 
         virtual ~Bridge() = default;
         // Wine: semaphores of the game for the helper's fences, their handles duplicated into the helper. Before Configure.
-        virtual bool PrepareGameFence(Protocol::Shared& shared, HANDLE helperProcess) { return false; }
+        virtual bool PrepareGameFence(Protocol::Shared& shared, Protocol::Extension& extension, HANDLE helperProcess) { return false; }
         // Opens the shared textures and the fence of a configuration, and closes their handles
-        virtual bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) = 0;
+        virtual bool Import(Protocol::Shared& shared, Protocol::Extension& extension, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) = 0;
         bool WaitOnCpu() const { return wine && !gameFence; }
         virtual void ReleaseImports() = 0;
         // Game textures -> shared textures, then the input fence reaches signalValue. Null inputs are skipped, a texture
@@ -658,14 +659,14 @@ namespace
             return true;
         }
 
-        bool PrepareGameFence(Protocol::Shared& shared, HANDLE helperProcess) override
+        bool PrepareGameFence(Protocol::Shared& shared, Protocol::Extension& extension, HANDLE helperProcess) override
         {
             if (!wine || !vk.vkGetSemaphoreWin32HandleKHR || !helperProcess)
                 return false;
-            if (ExportSemaphore(inputSemaphore, helperProcess, shared.InputFenceHandle) &&
-                ExportSemaphore(outputSemaphore, helperProcess, shared.OutputFenceHandle))
+            if (ExportSemaphore(inputSemaphore, helperProcess, extension.InputFenceHandle) &&
+                ExportSemaphore(outputSemaphore, helperProcess, shared.FenceHandle))
                 return true;
-            // A handle already duplicated into the helper stays in shared: the helper closes it, without GameFence
+            // A handle already duplicated into the helper stays in the shared memory: the helper closes it, without GameFence
             DestroySemaphores();
             return false;
         }
@@ -692,13 +693,13 @@ namespace
         }
 
         // Evaluate released the previous imports before the helper's Configure
-        bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
+        bool Import(Protocol::Shared& shared, Protocol::Extension& extension, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
         {
             bool ok = true;
-            eightBitFrames = (shared.Flags & Protocol::ConfigureFlags::EightBitFrames) != 0;
+            eightBitFrames = (extension.Flags & Protocol::ExtensionFlags::EightBitFrames) != 0;
             for (size_t i = 0; i < images.size(); ++i)
             {
-                auto handle = reinterpret_cast<HANDLE>(shared.TextureHandles[i]);
+                auto handle = reinterpret_cast<HANDLE>(Protocol::TextureHandle(shared, extension, static_cast<Protocol::Texture>(i)));
                 // Without frame generation its textures don't exist
                 if (!handle && Protocol::IsFrameGenerationTexture(static_cast<Protocol::Texture>(i)))
                     continue;
@@ -720,13 +721,13 @@ namespace
             }
             else if (ok)
             {
-                ok = ImportFence(inputSemaphore, reinterpret_cast<HANDLE>(shared.InputFenceHandle)) &&
-                    ImportFence(outputSemaphore, reinterpret_cast<HANDLE>(shared.OutputFenceHandle)) &&
-                    (!shared.PresentFenceHandle || ImportFence(presentSemaphore, reinterpret_cast<HANDLE>(shared.PresentFenceHandle)));
+                ok = ImportFence(inputSemaphore, reinterpret_cast<HANDLE>(extension.InputFenceHandle)) &&
+                    ImportFence(outputSemaphore, reinterpret_cast<HANDLE>(shared.FenceHandle)) &&
+                    (!extension.PresentFenceHandle || ImportFence(presentSemaphore, reinterpret_cast<HANDLE>(extension.PresentFenceHandle)));
                 if (!ok)
                     Log("import: the helper's fences could not be imported");
             }
-            CloseSharedHandles(shared);
+            CloseSharedHandles(shared, extension);
 
             if (!ok)
             {
@@ -1125,24 +1126,24 @@ namespace
             eightBitFrames = false;
         }
 
-        bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
+        bool Import(Protocol::Shared& shared, Protocol::Extension& extension, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) override
         {
             bool ok = true;
             for (size_t i = 0; i < images.size(); ++i)
             {
-                auto handle = reinterpret_cast<HANDLE>(shared.TextureHandles[i]);
+                auto handle = reinterpret_cast<HANDLE>(Protocol::TextureHandle(shared, extension, static_cast<Protocol::Texture>(i)));
                 // Without frame generation its textures don't exist
                 if (!handle && Protocol::IsFrameGenerationTexture(static_cast<Protocol::Texture>(i)))
                     continue;
                 ok = ok && handle && SUCCEEDED(device->OpenSharedHandle(handle, IID_PPV_ARGS(&images[i])));
             }
-            auto inputHandle = reinterpret_cast<HANDLE>(shared.InputFenceHandle);
-            auto outputHandle = reinterpret_cast<HANDLE>(shared.OutputFenceHandle);
+            auto inputHandle = reinterpret_cast<HANDLE>(extension.InputFenceHandle);
+            auto outputHandle = reinterpret_cast<HANDLE>(shared.FenceHandle);
             ok = ok && inputHandle && SUCCEEDED(device->OpenSharedHandle(inputHandle, IID_PPV_ARGS(&inputFence)));
             ok = ok && outputHandle && SUCCEEDED(device->OpenSharedHandle(outputHandle, IID_PPV_ARGS(&outputFence)));
-            if (auto presentHandle = reinterpret_cast<HANDLE>(shared.PresentFenceHandle))
+            if (auto presentHandle = reinterpret_cast<HANDLE>(extension.PresentFenceHandle))
                 ok = ok && SUCCEEDED(device->OpenSharedHandle(presentHandle, IID_PPV_ARGS(&presentFence)));
-            CloseSharedHandles(shared);
+            CloseSharedHandles(shared, extension);
 
             if (!ok)
             {
@@ -1155,7 +1156,7 @@ namespace
             outputWidth = ow;
             outputHeight = oh;
             frameGeneration = images[static_cast<size_t>(Protocol::Texture::Present)] && images[static_cast<size_t>(Protocol::Texture::Generated)];
-            eightBitFrames = (shared.Flags & Protocol::ConfigureFlags::EightBitFrames) != 0;
+            eightBitFrames = (extension.Flags & Protocol::ExtensionFlags::EightBitFrames) != 0;
             return true;
         }
 
@@ -1297,9 +1298,11 @@ namespace
         HANDLE process = nullptr;
         HANDLE job = nullptr;
         HANDLE mapping = nullptr;
+        HANDLE extensionMapping = nullptr;
         HANDLE request = nullptr;
         HANDLE response = nullptr;
         Protocol::Shared* shared = nullptr;
+        Protocol::Extension* extension = nullptr;
         uint32_t serial = 0;
 
         bool Start(const std::filesystem::path& exe, const LUID& luid)
@@ -1309,21 +1312,27 @@ namespace
             mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(Protocol::Shared), (name + Protocol::MappingSuffix).c_str());
             request = CreateEventW(nullptr, FALSE, FALSE, (name + Protocol::RequestSuffix).c_str());
             response = CreateEventW(nullptr, FALSE, FALSE, (name + Protocol::ResponseSuffix).c_str());
-            if (!mapping || !request || !response)
+            // The helper's own part next to the bridge's: frame generation, presentation, Wine
+            extensionMapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(Protocol::Extension), (name + Protocol::ExtensionSuffix).c_str());
+            if (!mapping || !extensionMapping || !request || !response)
                 return false;
 
             shared = static_cast<Protocol::Shared*>(MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(Protocol::Shared)));
-            if (!shared)
+            extension = static_cast<Protocol::Extension*>(MapViewOfFile(extensionMapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(Protocol::Extension)));
+            if (!shared || !extension)
                 return false;
 
             std::memset(shared, 0, sizeof(Protocol::Shared));
             shared->Version = Protocol::Version;
-            shared->GameProcessId = GetCurrentProcessId();
+            shared->ClientProcessId = GetCurrentProcessId();
             shared->AdapterLuidLow = luid.LowPart;
             shared->AdapterLuidHigh = luid.HighPart;
             wcsncpy_s(shared->GameDirectory, GetExeModulePath().wstring().c_str(), _TRUNCATE);
-            wcsncpy_s(shared->PluginsDirectory, exe.parent_path().wstring().c_str(), _TRUNCATE);
             wcsncpy_s(shared->LogPath, FusionLog::PathFor("UpscalerHelper").wstring().c_str(), _TRUNCATE);
+            strncpy_s(shared->ClientName, "GTAIV.EFLC.FusionFix", _TRUNCATE);
+            std::memset(extension, 0, sizeof(Protocol::Extension));
+            extension->Version = Protocol::ExtensionVersion;
+            wcsncpy_s(extension->PluginsDirectory, exe.parent_path().wstring().c_str(), _TRUNCATE);
 
             // The helper ends with the game
             job = CreateJobObjectW(nullptr, nullptr);
@@ -1371,7 +1380,7 @@ namespace
 
         void Post(Protocol::Command command)
         {
-            shared->RequestCommand = command;
+            shared->RequestCommand = static_cast<UpscalerBridge::Command>(command);
             shared->RequestSerial = ++serial;
             MemoryBarrier();
             SetEvent(request);
@@ -1429,11 +1438,14 @@ namespace
         {
             if (shared)
                 UnmapViewOfFile(shared);
-            for (auto handle : { mapping, request, response })
+            if (extension)
+                UnmapViewOfFile(extension);
+            for (auto handle : { mapping, extensionMapping, request, response })
                 if (handle)
                     CloseHandle(handle);
             shared = nullptr;
-            mapping = request = response = nullptr;
+            extension = nullptr;
+            mapping = extensionMapping = request = response = nullptr;
             pending = false;
         }
     };
@@ -1463,7 +1475,8 @@ namespace
     uint32_t configuredOutputWidth = 0;
     uint32_t configuredOutputHeight = 0;
     uint32_t configuredPreset = 0;
-    uint32_t configuredFlags = 0;
+    uint32_t configuredFlags = 0;          // ExtensionFlags
+    uint32_t configuredBridgeFlags = 0;    // ConfigureFlags
     bool configureFailed = false;
     // A request the helper did not answer in time, the helper still running: configured again once this tick count is
     // reached, a few times, rather than left to temporal AA until the mode or the size changes. The new configuration
@@ -1486,7 +1499,7 @@ namespace
     bool generatedReset = false;       // the last Generate had nothing to interpolate from
     uint64_t generatedValue = 0;       // the helper signals it once the frame posted by PostGenerate is generated; 0 when none waits
 
-    // Presentation by the helper (ConfigureFlags::HelperPresent): its child window over the game's window, until the next
+    // Presentation by the helper (ExtensionFlags::HelperPresent): its child window over the game's window, until the next
     // configuration; presentFailed until then once a Present failed
     HWND presentWindow = nullptr;
     bool presentFailed = false;
@@ -1739,9 +1752,9 @@ export namespace Upscaler
                 return;
             }
             Log("Helper started in %llu ms: %s", GetTickCount64() - startedAt, helper.shared->Message);
-            dlssAvailable = helper.shared->DLSSAvailable != 0;
-            fsrAvailable = helper.shared->FSRAvailable != 0;
-            frameGenerationAvailable = helper.shared->FrameGenerationAvailable != 0;
+            dlssAvailable = (helper.shared->AvailableBackends & Protocol::BackendBit(Protocol::Backend::DLSS)) != 0;
+            fsrAvailable = (helper.shared->AvailableBackends & Protocol::BackendBit(Protocol::Backend::FSR)) != 0;
+            frameGenerationAvailable = helper.extension->FrameGenerationAvailable != 0;
             state = State::Ready;
             ++generation;
         }
@@ -1760,18 +1773,19 @@ export namespace Upscaler
             return false;
 
         auto backendId = static_cast<uint32_t>(backend);
-        auto flags = frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u;
+        auto bridgeFlags = frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u;
+        auto flags = 0u;
         if (bridge->wine)
-            flags |= Protocol::ConfigureFlags::Wine;
+            flags |= Protocol::ExtensionFlags::Wine;
         // Without HDR the frames are the 8-bit back buffer's: 8-bit textures halve what the frame generation's copies move
         if (frame.FrameGeneration && frameGenerationAvailable)
-            flags |= Protocol::ConfigureFlags::FrameGeneration |
-                (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : Protocol::ConfigureFlags::EightBitFrames) |
-                (frame.AsyncGeneration ? Protocol::ConfigureFlags::AsyncGeneration : 0u);
+            flags |= Protocol::ExtensionFlags::FrameGeneration |
+                (frame.HighDynamicRange ? Protocol::ExtensionFlags::HighDynamicRange : Protocol::ExtensionFlags::EightBitFrames) |
+                (frame.AsyncGeneration ? Protocol::ExtensionFlags::AsyncGeneration : 0u);
         // Not under Wine: the game's own semaphores would be three, and Wine's child windows of another process are unknown
         if (frame.HelperPresent && frame.PresentWindow && !bridge->wine)
-            flags |= Protocol::ConfigureFlags::HelperPresent | (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : 0u) |
-                (frame.AmdPacing && (flags & Protocol::ConfigureFlags::FrameGeneration) ? Protocol::ConfigureFlags::AmdPacing : 0u);
+            flags |= Protocol::ExtensionFlags::HelperPresent | (frame.HighDynamicRange ? Protocol::ExtensionFlags::HighDynamicRange : 0u) |
+                (frame.AmdPacing && (flags & Protocol::ExtensionFlags::FrameGeneration) ? Protocol::ExtensionFlags::AmdPacing : 0u);
         auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
         auto outputHeight = frame.OutputHeight ? frame.OutputHeight : frame.Height;
         if (retryConfigureAt && GetTickCount64() >= retryConfigureAt)
@@ -1781,7 +1795,7 @@ export namespace Upscaler
         }
         bool reconfigure = configuredBackend != backendId || configuredWidth != frame.Width || configuredHeight != frame.Height ||
             configuredOutputWidth != outputWidth || configuredOutputHeight != outputHeight ||
-            configuredPreset != frame.DLSSPreset || configuredFlags != flags;
+            configuredPreset != frame.DLSSPreset || configuredFlags != flags || configuredBridgeFlags != bridgeFlags;
         if (reconfigure)
         {
             bridge->ReleaseImports();
@@ -1799,22 +1813,25 @@ export namespace Upscaler
             configuredOutputHeight = outputHeight;
             configuredPreset = frame.DLSSPreset;
             configuredFlags = flags;
+            configuredBridgeFlags = bridgeFlags;
             configureFailed = true;
 
             auto& shared = *helper.shared;
+            auto& extension = *helper.extension;
             shared.ConfigureBackend = static_cast<Protocol::Backend>(backendId);
             shared.Width = frame.Width;
             shared.Height = frame.Height;
             shared.OutputWidth = outputWidth;
             shared.OutputHeight = outputHeight;
             shared.DLSSPreset = frame.DLSSPreset;
-            shared.Flags = flags;
-            shared.InputFenceHandle = shared.OutputFenceHandle = 0;
-            shared.PresentWindow = reinterpret_cast<uint64_t>(frame.PresentWindow);
-            shared.ChildWindow = 0;
-            shared.PresentFenceHandle = 0;
-            if (bridge->PrepareGameFence(shared, helper.process))
-                shared.Flags |= Protocol::ConfigureFlags::GameFence;
+            shared.Flags = bridgeFlags;
+            extension.Flags = flags;
+            extension.InputFenceHandle = shared.FenceHandle = 0;
+            extension.PresentWindow = reinterpret_cast<uint64_t>(frame.PresentWindow);
+            extension.ChildWindow = 0;
+            extension.PresentFenceHandle = 0;
+            if (bridge->PrepareGameFence(shared, extension, helper.process))
+                extension.Flags |= Protocol::ExtensionFlags::GameFence;
             const auto configureStart = GetTickCount64();
             if (!helper.Request(Protocol::Command::Configure, 15000))
             {
@@ -1825,22 +1842,22 @@ export namespace Upscaler
                     Lost();
                 return false;
             }
-            bridge->gameFence = (shared.Flags & Protocol::ConfigureFlags::GameFence) != 0;
+            bridge->gameFence = (extension.Flags & Protocol::ExtensionFlags::GameFence) != 0;
             if (bridge->wine)
                 Log("Synchronization: %s", bridge->gameFence ? "the game's semaphore, on the GPU" : "on the CPU");
-            if ((flags & Protocol::ConfigureFlags::FrameGeneration) && !(shared.Flags & Protocol::ConfigureFlags::FrameGeneration))
+            if ((flags & Protocol::ExtensionFlags::FrameGeneration) && !(extension.Flags & Protocol::ExtensionFlags::FrameGeneration))
                 Log("Frame generation could not be set up, the upscaler works without it");
-            if ((flags & Protocol::ConfigureFlags::HelperPresent) && !(shared.Flags & Protocol::ConfigureFlags::HelperPresent))
+            if ((flags & Protocol::ExtensionFlags::HelperPresent) && !(extension.Flags & Protocol::ExtensionFlags::HelperPresent))
                 Log("The helper could not set up its presentation, the game presents");
-            else if ((flags & Protocol::ConfigureFlags::AmdPacing) && !(shared.Flags & Protocol::ConfigureFlags::AmdPacing))
+            else if ((flags & Protocol::ExtensionFlags::AmdPacing) && !(extension.Flags & Protocol::ExtensionFlags::AmdPacing))
                 Log("AMD's frame generation swap chain could not be set up: the helper paces the frames itself");
-            if (!bridge->Import(shared, frame.Width, frame.Height, outputWidth, outputHeight))
+            if (!bridge->Import(shared, extension, frame.Width, frame.Height, outputWidth, outputHeight))
             {
                 Log("Configure %ux%u -> %ux%u: the shared resources could not be imported", frame.Width, frame.Height, outputWidth, outputHeight);
                 return false;
             }
-            if (shared.Flags & Protocol::ConfigureFlags::HelperPresent)
-                presentWindow = reinterpret_cast<HWND>(shared.ChildWindow);
+            if (extension.Flags & Protocol::ExtensionFlags::HelperPresent)
+                presentWindow = reinterpret_cast<HWND>(extension.ChildWindow);
             // The render thread waits for it: a long one holds the game, as the end of loading
             Log("Configured %ux%u -> %ux%u in %llu ms: %s", frame.Width, frame.Height, outputWidth, outputHeight,
                 GetTickCount64() - configureStart, shared.Message);
@@ -1871,6 +1888,7 @@ export namespace Upscaler
         }
 
         auto& shared = *helper.shared;
+        auto& extension = *helper.extension;
         shared.WaitValue = inputValue;
         shared.SignalValue = outputValue;
         shared.JitterX = frame.JitterX;
@@ -1885,13 +1903,13 @@ export namespace Upscaler
         shared.Reset = frame.Reset ? 1 : 0;
         for (int i = 0; i < 3; ++i)
         {
-            shared.CameraPosition[i] = frame.CameraPosition[i];
-            shared.CameraUp[i] = frame.CameraUp[i];
-            shared.CameraRight[i] = frame.CameraRight[i];
-            shared.CameraForward[i] = frame.CameraForward[i];
+            extension.CameraPosition[i] = frame.CameraPosition[i];
+            extension.CameraUp[i] = frame.CameraUp[i];
+            extension.CameraRight[i] = frame.CameraRight[i];
+            extension.CameraForward[i] = frame.CameraForward[i];
         }
-        shared.FrameId = ++frameId;
-        shared.HudLess = frame.HudLess ? 1 : 0;
+        extension.FrameId = ++frameId;
+        extension.HudLess = frame.HudLess ? 1 : 0;
 
         // The helper prepares the frame generation with this frame
         bool prepared = bridge->frameGeneration && !generationFailed;
@@ -1991,13 +2009,14 @@ export namespace Upscaler
         }
 
         auto& shared = *helper.shared;
+        auto& extension = *helper.extension;
         shared.WaitValue = inputValue;
         shared.SignalValue = outputValue;
-        shared.FrameId = id;
-        shared.MaxLuminance = maxLuminance;
+        extension.FrameId = id;
+        extension.MaxLuminance = maxLuminance;
         // The frame before this one was not generated from: there is nothing to interpolate from
-        shared.GenerateReset = preparedReset || generatedFrameId + 1 != id ? 1 : 0;
-        generatedReset = shared.GenerateReset != 0;
+        extension.GenerateReset = preparedReset || generatedFrameId + 1 != id ? 1 : 0;
+        generatedReset = extension.GenerateReset != 0;
         generatedFrameId = id;
 
         if (!bridge->WaitOnCpu())
@@ -2102,18 +2121,19 @@ export namespace Upscaler
         }
 
         auto& shared = *helper.shared;
+        auto& extension = *helper.extension;
         shared.WaitValue = inputValue;
         shared.SignalValue = presentValue;
-        shared.SyncInterval = syncInterval;
-        shared.PresentDelay = delay;
-        shared.PresentGenerate = withGeneration ? 1 : 0;
+        extension.SyncInterval = syncInterval;
+        extension.PresentDelay = delay;
+        extension.PresentGenerate = withGeneration ? 1 : 0;
         if (withGeneration)
         {
-            shared.FrameId = id;
-            shared.MaxLuminance = maxLuminance;
+            extension.FrameId = id;
+            extension.MaxLuminance = maxLuminance;
             // The frame before this one was not generated from: there is nothing to interpolate from
-            shared.GenerateReset = preparedReset || generatedFrameId + 1 != id ? 1 : 0;
-            generatedReset = shared.GenerateReset != 0;
+            extension.GenerateReset = preparedReset || generatedFrameId + 1 != id ? 1 : 0;
+            generatedReset = extension.GenerateReset != 0;
             generatedFrameId = id;
             if (generated)
                 *generated = !generatedReset;
