@@ -33,7 +33,7 @@ import settings;
 import shaders;
 import renderscale;
 import renderskip;
-import temporal;
+import temporallayer;
 import upscaler;
 import postfxprofiler;
 import postfxresources;

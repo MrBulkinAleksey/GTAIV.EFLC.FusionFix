@@ -181,18 +181,11 @@ workspace "GTAIV.EFLC.FusionFix"
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E ApplyCASMasked /Fo \"../source/resources/CASMasked_PS.pso\" \"../source/resources/CAS.hlsl\"",
 
       -- Temporal anti-aliasing
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T vs_3_0 /nologo /E VS_VelocityRigid /Fo \"../source/resources/temporal/VelocityRigid.vso\" \"../source/resources/temporal/Temporal.hlsl\"",
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T vs_3_0 /nologo /E VS_VelocitySkinned /Fo \"../source/resources/temporal/VelocitySkinned.vso\" \"../source/resources/temporal/Temporal.hlsl\"",
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_Velocity /Fo \"../source/resources/temporal/Velocity.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T vs_3_0 /nologo /E VS_BoneWrite /Fo \"../source/resources/temporal/BoneWrite.vso\" \"../source/resources/temporal/Temporal.hlsl\"",
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_BoneWrite /Fo \"../source/resources/temporal/BoneWrite.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_CameraMotion /Fo \"../source/resources/temporal/CameraMotion.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_TemporalResolve /Fo \"../source/resources/temporal/TemporalResolve.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_OpaqueLuma /Fo \"../source/resources/temporal/OpaqueLuma.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_Reactive /Fo \"../source/resources/temporal/Reactive.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_RainLayer /Fo \"../source/resources/temporal/RainLayer.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_RainComposite /Fo \"../source/resources/temporal/RainComposite.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_SteadyDepth /Fo \"../source/resources/temporal/SteadyDepth.pso\" \"../source/resources/temporal/Temporal.hlsl\"",
+      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_OpaqueLuma /Fo \"../source/resources/temporal/OpaqueLuma.pso\" \"../source/resources/temporal/TemporalLayer.hlsl\"",
+      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_Reactive /Fo \"../source/resources/temporal/Reactive.pso\" \"../source/resources/temporal/TemporalLayer.hlsl\"",
+      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_RainLayer /Fo \"../source/resources/temporal/RainLayer.pso\" \"../source/resources/temporal/TemporalLayer.hlsl\"",
+      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_RainComposite /Fo \"../source/resources/temporal/RainComposite.pso\" \"../source/resources/temporal/TemporalLayer.hlsl\"",
+      "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_SteadyDepth /Fo \"../source/resources/temporal/SteadyDepth.pso\" \"../source/resources/temporal/TemporalLayer.hlsl\"",
 
       -- HDR output
       "\"../source/dxsdk/lib/x86/fxc.exe\" /T ps_3_0 /nologo /E PS_HDROutput /Fo \"../source/resources/hdr/HDROutput.pso\" \"../source/resources/hdr/HDR.hlsl\"",

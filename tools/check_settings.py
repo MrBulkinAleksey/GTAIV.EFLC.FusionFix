@@ -41,6 +41,9 @@ for path in sorted((root / 'source').rglob('*')):
     for rx, _ in patterns:
         for m in rx.finditer(text):
             kind, sec, key, default = m.groups()
+            # upstream's temporal.ixx reads [TEMPORAL]; temporallayer.ixx sets those from our [ANTIALIASING]
+            if path.name == 'temporal.ixx' and sec == 'TEMPORAL':
+                continue
             reads.setdefault(f'{sec}.{key}', []).append((f'{rel}:{lineOf(m.start())}', kind, default))
     if path.name == 'gpugrass.ixx':
         for m in colour.finditer(text):

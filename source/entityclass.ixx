@@ -19,7 +19,7 @@ import comvars;
 import settings;
 import inireload;
 import renderskip;
-import temporal;
+import temporallayer;
 import framehistory;
 
 // What kind of entity each draw of the scene belongs to: the map's own geometry, which never moves;

@@ -1687,11 +1687,6 @@
       "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
     },
     {
-      "id": "ANTIALIASING.LumaWeight", "type": "float", "default": 1.0, "min": 0.0, "max": 16.0,
-      "label": "@ANTIALIASING.LumaWeight",
-      "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"
-    },
-    {
       "id": "ANTIALIASING.ObjectDepthBias", "type": "float", "default": 2e-05, "min": 0.0, "max": 0.01,
       "label": "@ANTIALIASING.ObjectDepthBias",
       "page": "advanced", "group": "@group.anti-aliasing", "visibility": "file"

@@ -23,7 +23,7 @@ import entityclass;
 import framehistory;
 import grasswind;
 import procedural;
-import temporal;
+import temporallayer;
 import vtablepatch;
 
 #ifndef SAFE_RELEASE

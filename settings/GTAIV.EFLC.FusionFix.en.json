@@ -684,7 +684,6 @@
   "ANTIALIASING.CurrentFrameWeightMax": "Current Frame Weight Max",
   "ANTIALIASING.CurrentFrameWeightPerPixelOfMotion": "Current Frame Weight Per Pixel Of Motion",
   "ANTIALIASING.VarianceClipGamma": "Variance Clip Gamma",
-  "ANTIALIASING.LumaWeight": "Luma Weight",
   "ANTIALIASING.ObjectDepthBias": "Object Depth Bias",
   "ANTIALIASING.ObjectMotionVectors": "Object Motion Vectors",
   "ANTIALIASING.ObjectMotionVectors.description": "Motion vectors for moving peds, vehicles and objects",

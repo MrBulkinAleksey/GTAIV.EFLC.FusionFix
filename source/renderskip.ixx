@@ -15,7 +15,7 @@ export module renderskip;
 import common;
 import comvars;
 import settings;
-import temporal;
+import temporallayer;
 import vtablepatch;
 import inireload;
 import coronas;

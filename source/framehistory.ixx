@@ -8,7 +8,7 @@ export module framehistory;
 import common;
 import comvars;
 import settings;
-import temporal;
+import temporallayer;
 import inireload;
 
 // What the effects of a frame share about the frames before it, for any effect that keeps a history (an
