@@ -167,26 +167,174 @@ index b3c94c5..5aa63cc 100644
      mad r31.xy, vPos, c200.xy, c200.zw
      add r29.yz, r31.xxy, -r30.xxy
 diff --git a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
-index 6be65ab..14c843c 100644
+index 6be65ab..2019f91 100644
 --- a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
 +++ b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1PS5.asm
-@@ -86,7 +86,7 @@
+@@ -82,11 +82,10 @@
+     dcl_texcoord9 v9
+     dcl_texcoord2 v5 // FusionFix vehicle_paint.patch: position in the car's space
+     dcl_texcoord4 v6 // FusionFix vehicle_paint.patch: normal in the car's space
+-    dcl_texcoord5 v7 // FusionFix vehicle_paint.patch: world up in the car's space (no longer read: the drops keep to the body's own axes)
      dcl_2d s0
      dcl_2d s1
      dcl_2d s2
 -    dcl_texcoord8 v5
-+    dcl_texcoord8 v8 // FusionFix zz_zz_texcoord8_inputs.patch: v5 is ours
++    dcl_texcoord8 v7 // FusionFix zz_zz_texcoord8_inputs.patch: v5 is ours
      dcl vPos.xy
      mov r21.xyz, c74
      mov r21.w, c73.x
-@@ -485,8 +485,8 @@
+@@ -485,8 +484,8 @@
  // approximately 78 instruction slots used (3 texture, 75 arithmetic)
  
      // Motion vectors next to the stencil: current minus previous position, in texture coordinates
 -    rcp r30.x, v5.w
 -    mul r30.xy, v5, r30.x
-+    rcp r30.x, v8.w
-+    mul r30.xy, v8, r30.x
++    rcp r30.x, v7.w
++    mul r30.xy, v7, r30.x
      mad r30.xy, r30, c201.xy, c201.z
      mad r31.xy, vPos, c200.xy, c200.zw
      add r29.yz, r31.xxy, -r30.xxy
+diff --git a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS3.asm b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS3.asm
+index 4885e1c..3db5d01 100644
+--- a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS3.asm
++++ b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS3.asm
+@@ -40,7 +40,6 @@
+     dcl_texcoord9 o10 // LogDepth Interpolator
+     dcl_texcoord2 o7.xyz // FusionFix vehicle_paint.patch: position in the car's space
+     dcl_texcoord4 o8.xyz // FusionFix vehicle_paint.patch: normal in the car's space
+-    dcl_texcoord5 o9.xyz // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_texcoord o1.xy
+     dcl_texcoord1 o2
+     dcl_texcoord3 o3.xyz
+@@ -291,7 +290,6 @@
+     mov r8.y, c1.z
+     mov r8.z, c2.z
+     nrm r7.xyz, r8
+-    mov o9.xyz, r7
+     dp3 o10.xy, c10.xyw, c10.xyw
+ 
+ // approximately 246 instruction slots used (8 texture, 238 arithmetic)
+diff --git a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS4.asm b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS4.asm
+index feed2d1..60d589a 100644
+--- a/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS4.asm
++++ b/win32_30_nv8/gta_vehicle_paint1/gta_vehicle_paint1VS4.asm
+@@ -43,7 +43,6 @@
+     dcl_texcoord9 o10 // LogDepth Interpolator
+     dcl_texcoord2 o7.xyz // FusionFix vehicle_paint.patch: position in the car's space
+     dcl_texcoord4 o8.xyz // FusionFix vehicle_paint.patch: normal in the car's space
+-    dcl_texcoord5 o9.xyz // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_texcoord o1.xy
+     dcl_texcoord1 o2
+     dcl_texcoord3 o3.xyz
+@@ -285,7 +284,6 @@
+     mov o8.xyz, r4
+     mov r8.xyz, c66[a0.x]
+     nrm r7.xyz, r8
+-    mov o9.xyz, r7
+     dp3 o10.xy, c10.xyw, c10.xyw
+ 
+ // approximately 238 instruction slots used (8 texture, 230 arithmetic)
+diff --git a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
+index a173d32..5747489 100644
+--- a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
++++ b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2PS5.asm
+@@ -81,7 +81,6 @@
+     dcl_texcoord9 v9
+     dcl_texcoord2 v5 // FusionFix vehicle_paint.patch: position in the car's space
+     dcl_texcoord4 v6 // FusionFix vehicle_paint.patch: normal in the car's space
+-    dcl_texcoord5 v7 // FusionFix vehicle_paint.patch: world up in the car's space (no longer read: the drops keep to the body's own axes)
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
+diff --git a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS3.asm b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS3.asm
+index c4b8e75..06a0a87 100644
+--- a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS3.asm
++++ b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS3.asm
+@@ -39,7 +39,6 @@
+     dcl_texcoord9 o10 // LogDepth Interpolator
+     dcl_texcoord2 o7.xyz // FusionFix vehicle_paint.patch: position in the car's space
+     dcl_texcoord4 o8.xyz // FusionFix vehicle_paint.patch: normal in the car's space
+-    dcl_texcoord5 o9.xyz // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_texcoord o1.xy
+     dcl_texcoord1 o2
+     dcl_texcoord3 o3.xyz
+@@ -288,7 +287,6 @@
+     mov r8.y, c1.z
+     mov r8.z, c2.z
+     nrm r7.xyz, r8
+-    mov o9.xyz, r7
+     dp3 o10.xy, c10.xyw, c10.xyw
+ 
+ // approximately 245 instruction slots used (8 texture, 237 arithmetic)
+diff --git a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS4.asm b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS4.asm
+index 75b72fe..31c4530 100644
+--- a/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS4.asm
++++ b/win32_30_nv8/gta_vehicle_paint2/gta_vehicle_paint2VS4.asm
+@@ -42,7 +42,6 @@
+     dcl_texcoord9 o10 // LogDepth Interpolator
+     dcl_texcoord2 o7.xyz // FusionFix vehicle_paint.patch: position in the car's space
+     dcl_texcoord4 o8.xyz // FusionFix vehicle_paint.patch: normal in the car's space
+-    dcl_texcoord5 o9.xyz // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_texcoord o1.xy
+     dcl_texcoord1 o2
+     dcl_texcoord3 o3.xyz
+@@ -282,7 +281,6 @@
+     mov o8.xyz, r4
+     mov r8.xyz, c66[a0.x]
+     nrm r7.xyz, r8
+-    mov o9.xyz, r7
+     dp3 o10.xy, c10.xyw, c10.xyw
+ 
+ // approximately 237 instruction slots used (8 texture, 229 arithmetic)
+diff --git a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
+index aff65af..1e77ca1 100644
+--- a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
++++ b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3PS5.asm
+@@ -83,7 +83,6 @@
+     dcl_texcoord9 v9
+     dcl_texcoord2 v5 // FusionFix vehicle_paint.patch: position in the car's space
+     dcl_texcoord4 v6 // FusionFix vehicle_paint.patch: normal in the car's space
+-    dcl_texcoord5 v7 // FusionFix vehicle_paint.patch: world up in the car's space (no longer read: the drops keep to the body's own axes)
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s2
+diff --git a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS3.asm b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS3.asm
+index a0154fe..ccce037 100644
+--- a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS3.asm
++++ b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS3.asm
+@@ -40,7 +40,6 @@
+     dcl_texcoord9 o10 // LogDepth Interpolator
+     dcl_texcoord2 o7.xyz // FusionFix vehicle_paint.patch: position in the car's space
+     dcl_texcoord4 o8.xyz // FusionFix vehicle_paint.patch: normal in the car's space
+-    dcl_texcoord5 o9.xyz // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_texcoord o1
+     dcl_texcoord1 o2
+     dcl_texcoord3 o3.xyz
+@@ -290,7 +289,6 @@
+     mov r8.y, c1.z
+     mov r8.z, c2.z
+     nrm r7.xyz, r8
+-    mov o9.xyz, r7
+     dp3 o10.xy, c10.xyw, c10.xyw
+ 
+ // approximately 246 instruction slots used (8 texture, 238 arithmetic)
+diff --git a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS4.asm b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS4.asm
+index c4917fe..517bc7a 100644
+--- a/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS4.asm
++++ b/win32_30_nv8/gta_vehicle_paint3/gta_vehicle_paint3VS4.asm
+@@ -43,7 +43,6 @@
+     dcl_texcoord9 o10 // LogDepth Interpolator
+     dcl_texcoord2 o7.xyz // FusionFix vehicle_paint.patch: position in the car's space
+     dcl_texcoord4 o8.xyz // FusionFix vehicle_paint.patch: normal in the car's space
+-    dcl_texcoord5 o9.xyz // FusionFix vehicle_paint.patch: world up in the car's space
+     dcl_texcoord o1
+     dcl_texcoord1 o2
+     dcl_texcoord3 o3.xyz
+@@ -284,7 +283,6 @@
+     mov o8.xyz, r4
+     mov r8.xyz, c66[a0.x]
+     nrm r7.xyz, r8
+-    mov o9.xyz, r7
+     dp3 o10.xy, c10.xyw, c10.xyw
+ 
+ // approximately 238 instruction slots used (8 texture, 230 arithmetic)

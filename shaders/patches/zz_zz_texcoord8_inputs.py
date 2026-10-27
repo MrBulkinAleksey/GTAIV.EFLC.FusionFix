@@ -4,6 +4,9 @@
 # register for an input of its own (world_terrain_and_parallax: the world position in TEXCOORD6, texture_quality,
 # vehicle_paint), TEXCOORD8 moves to the first register free after all of them. The motion block reads it in its first
 # two lines only (rcp of .w, the mul by it).
+# A vertex shader has 11 outputs: vehicle_paint's three and upstream's TEXCOORD8 made 12 in gta_vehicle_paint1 VS3/VS4.
+# vehicle_paint's world up (TEXCOORD5) is read by no pixel shader any more: it goes from the paints' vertex shaders and
+# their PS5's declarations.
 #
 # Usage: zz_zz_texcoord8_inputs.py <FusionShaders checkout with all the other patches applied>
 # Commit that state first; the patch is the diff this script leaves (git diff). Named to sort after the patches that
@@ -35,7 +38,32 @@ def patch(path):
     return True
 
 
+WORLD_UP = [
+    '    dcl_texcoord5 o9.xyz // FusionFix vehicle_paint.patch: world up in the car\'s space\n',
+    '    mov o9.xyz, r7\n',
+    '    dcl_texcoord5 v7 // FusionFix vehicle_paint.patch: world up in the car\'s space (no longer read: the drops keep to the body\'s own axes)\n',
+]
+
+
+def drop_world_up(path):
+    text = path.read_text()
+    if '// Motion vectors' not in text:
+        return False
+    out = text
+    for line in WORLD_UP:
+        assert out.count(line) <= 1, path
+        out = out.replace(line, '')
+    if out == text:
+        return False
+    # Nothing reads or writes it any more
+    assert not re.search(r'\bo9\b' if 'VS' in path.name else r'\bv7\b', out.split('_3_0\n', 1)[1]), path
+    path.write_text(out)
+    return True
+
+
 if __name__ == '__main__':
     root = Path(sys.argv[1]) / 'win32_30_nv8'
+    paints = [p for name in ('gta_vehicle_paint1', 'gta_vehicle_paint2', 'gta_vehicle_paint3') for p in sorted((root / name).glob('*.asm'))]
+    dropped = [p for p in paints if drop_world_up(p)]
     changed = [p for p in sorted(root.rglob('*PS*.asm')) if patch(p)]
-    print(len(changed), 'shaders')
+    print(len(changed), 'inputs moved,', len(dropped), 'world up outputs or inputs gone')
