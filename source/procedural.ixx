@@ -418,9 +418,23 @@ namespace Procedural
     bool bConeRelease = true;
     constexpr float ReleaseSlack = 25.0f;
     constexpr uint32_t ReleasesPerUpdate = 256;
-    struct MadeFrom { uint8_t entry[QueueEntrySize]; };
-    std::unordered_map<uint8_t*, MadeFrom> madeFrom;
+    // Dense, so ReleaseOutsideCone's walk reads one array (it was the nodes of an unordered_map, a cache miss each);
+    // a removed one's place is taken by the last, its index kept by record in madeAt
+    struct Made
+    {
+        uint8_t* record;
+        uint8_t entry[QueueEntrySize];
+    };
+    std::vector<Made> made;
+    std::unordered_map<uint8_t*, uint32_t> madeAt;
+    size_t madeCursor = 0;                  // where ReleaseOutsideCone's next share starts
     uint32_t nConeReleased = 0;
+
+    Made* FindMade(uint8_t* record)
+    {
+        auto it = madeAt.find(record);
+        return it == madeAt.end() ? nullptr : &made[it->second];
+    }
 
     // ProceduralGroundCovers (below): on, and the covers' version; the props made from the queue by the cell of their
     // entry, so new covers find those under them without a walk of them all
@@ -434,10 +448,11 @@ namespace Procedural
 
     void ForgetMade(uint8_t* record)
     {
-        auto it = madeFrom.find(record);
-        if (it == madeFrom.end())
+        auto it = madeAt.find(record);
+        if (it == madeAt.end())
             return;
-        if (auto cell = madeCells.find(CoverCellAt((const float*)it->second.entry)); cell != madeCells.end())
+        const uint32_t index = it->second;
+        if (auto cell = madeCells.find(CoverCellAt((const float*)made[index].entry)); cell != madeCells.end())
         {
             auto& records = cell->second;
             if (auto at = std::find(records.begin(), records.end(), record); at != records.end())
@@ -448,13 +463,21 @@ namespace Procedural
             if (records.empty())
                 madeCells.erase(cell);
         }
-        madeFrom.erase(it);
+        madeAt.erase(it);
+        if (index + 1 != made.size())
+        {
+            made[index] = made.back();
+            madeAt[made[index].record] = index;
+        }
+        made.pop_back();
     }
 
     void ForgetAllMade()
     {
-        madeFrom.clear();
+        made.clear();
+        madeAt.clear();
         madeCells.clear();
+        madeCursor = 0;
     }
 
     // Statistics for the log
@@ -745,7 +768,9 @@ namespace Procedural
             if (queue && entry >= queue && entry < queue + size_t(*(uint32_t*)(pGenerator + 0x5220)) * QueueEntrySize)
             {
                 ForgetMade(record);
-                memcpy(madeFrom[record].entry, entry, QueueEntrySize);
+                madeAt[record] = uint32_t(made.size());
+                made.push_back({ record });
+                memcpy(made.back().entry, entry, QueueEntrySize);
                 madeCells[CoverCellAt((const float*)entry)].push_back(record);
             }
         }
@@ -1167,10 +1192,10 @@ namespace Procedural
                     continue;
                 for (auto record : made->second)
                 {
-                    auto from = madeFrom.find(record);
-                    if (from == madeFrom.end())
+                    auto from = FindMade(record);
+                    if (!from)
                         continue;
-                    const auto entry = from->second.entry;
+                    const auto entry = from->entry;
                     const auto provider = *(uint8_t* const*)(entry + 0x1C);
                     if (!*(uintptr_t*)(record + 8) || *(uint8_t**)(record + 0xC) != provider)
                         continue;
@@ -1193,25 +1218,40 @@ namespace Procedural
     // (CE 0xc0a920, from the list of their procedural.dat record, +0x38 of the record the entry's +0xc points to), and
     // their entries are parked
     constexpr float GrassReleaseSlack = 5.0f;
+    // A share of the made props each update, all of them over ConeWalkUpdates: one going a few frames later doesn't
+    // show (it is ReleaseSlack outside, or GrassReleaseSlack into GPU grass), and the walk over all of them every
+    // frame (tens of thousands where grass is) took a tenth of the main thread (profile at Firefly Island, 2026-10-28)
+    constexpr size_t ConeWalkUpdates = 8;
     void ReleaseOutsideCone(uint8_t* generator)
     {
-        std::vector<std::pair<uint8_t*, MadeFrom>> outside;
-        for (auto& [record, from] : madeFrom)
+        const size_t count = made.size();
+        if (!count)
+            return;
+        const size_t share = std::min(count, std::max<size_t>((count + ConeWalkUpdates - 1) / ConeWalkUpdates, 256));
+        if (madeCursor >= count)
+            madeCursor = 0;
+        std::vector<Made> outside;
+        for (size_t n = 0; n < share; ++n)
         {
             if (outside.size() >= ReleasesPerUpdate || parked.size() + (outside.size() + 1) * QueueEntrySize > ParkedLimit * QueueEntrySize)
                 break;
-            // The game's own removal clears the provider before it lets a record go
-            if (!*(uintptr_t*)(record + 8) || *(uintptr_t*)(record + 0xC) != *(uintptr_t*)(from.entry + 0x1C))
+            const Made& m = made[madeCursor];
+            madeCursor = madeCursor + 1 == count ? 0 : madeCursor + 1;
+            // Its own copy first; the game's record, another cache line, only for one going
+            if (!((bConeRelease && !InCone((const float*)m.entry, ReleaseSlack)) || GrassGivesWay(m.entry, GrassReleaseSlack)))
                 continue;
-            if ((bConeRelease && !InCone((float*)from.entry, ReleaseSlack)) || GrassGivesWay(from.entry, GrassReleaseSlack))
-                outside.emplace_back(record, from);
+            // The game's own removal clears the provider before it lets a record go
+            if (!*(uintptr_t*)(m.record + 8) || *(uintptr_t*)(m.record + 0xC) != *(uintptr_t*)(m.entry + 0x1C))
+                continue;
+            outside.push_back(m);
         }
-        for (auto& [record, from] : outside)
+        // Release takes them out of `made` (ForgetMade), so they go from the copies
+        for (auto& m : outside)
         {
             if (bTrace)
-                Trace(std::format("B {}{}", When(), Where((float*)from.entry)));
-            Release(generator, nullptr, record, *(uint8_t**)(from.entry + 0xC) + 0x38);
-            parked.insert(parked.end(), from.entry, from.entry + QueueEntrySize);
+                Trace(std::format("B {}{}", When(), Where((const float*)m.entry)));
+            Release(generator, nullptr, m.record, *(uint8_t**)(m.entry + 0xC) + 0x38);
+            parked.insert(parked.end(), m.entry, m.entry + QueueEntrySize);
             nConeReleased++;
         }
     }
