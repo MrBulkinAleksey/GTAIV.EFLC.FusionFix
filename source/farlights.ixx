@@ -151,7 +151,7 @@ public:
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
-            if (iniReader.ReadInteger("LIGHTING", "FarLights", 0) != 0)
+            if (iniReader.ReadInteger("LIGHTING", "FarLights", 1) != 0)
                 FarLights::Install(iniReader);
         };
     }
