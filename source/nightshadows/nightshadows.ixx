@@ -23,6 +23,7 @@ module;
 #include "ShadowCasterPresence.hpp"
 #include "ShadowSlotTrace.hpp"
 #include "ShadowLampSpacing.hpp"
+#include "ShadowCacheCount.hpp"
 #include "NativeCacheDependencies44.hpp"
 #include "ShadowInactiveSlots.hpp"
 #include "ShadowViewPriority.hpp"
@@ -73,6 +74,7 @@ static float fTailLightShadowDistance = 25.0f;
 #include "BeamTraceRuntime.inl"
 #include "HeadlightEnhancementRuntime.inl"
 #include "LampShadowSizeGateRuntime.inl"
+#include "LampShadowAxisRuntime.inl"
 #include "ModelReferenceQueueRuntime.inl"
 
 // Queried for every light on every frame; a lookup by name scans the whole preference table.
@@ -362,6 +364,9 @@ namespace CShadows
 }
 
 #include "ShadowAllocationRuntime.inl"
+#include "ShadowCacheLogRuntime.inl"
+#include "ShadowCache16Runtime.inl"
+#include "PropCachesRuntime.inl"
 #include "NearbyVehicleRuntime36.inl"
 #include "ShadowLookupRuntime.inl"
 #include "ShadowCasterRuntime.inl"
@@ -427,6 +432,7 @@ static void __fastcall sub_D77A00(void* _this, void* edx)
                                                 OwnHeadlightCaster::Capture(_this));
     const Lighting20::Buildings::Scope buildings(_this);
     const PostCarLightShadows::Scope posts(_this);
+    const PropCaches::OwnScope own(_this);
     return shsub_D77A00.unsafe_fastcall(_this, edx);
 }
 
@@ -469,6 +475,7 @@ class NightShadows
     static void ReadLiveSettings(CIniReader& iniReader)
     {
         bLampShadowsInDaylight = iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowsInDaylight", 0) != 0;
+        LampShadowAxis::mode.store(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowAxis", 0), 0, 2), std::memory_order_relaxed);
         if (!ceAdapter)
             return;
         bCloseHeadlightRelevance = iniReader.ReadInteger("NIGHTSHADOWS", "CloseHeadlightRelevance", 0) != 0;
@@ -531,7 +538,7 @@ public:
         }
 
         // Registered before game callbacks start, independent of async init.
-        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); PlayerShadowAllocation::CaptureCasters(); PlayerShadowAllocation::SlotTraceStatus(); PlayerShadowAllocation::FlushSlotTrace(); EmergencyTrafficShadows::Update(); Lighting20::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
+        FusionFix::onGameProcessEvent() += []() { PlayerCar::Update(); BeamTrace::Update(); NearbyVehicleLighting36::Update(); PlayerShadowAllocation::CaptureCasters(); PlayerShadowAllocation::SlotTraceStatus(); PlayerShadowAllocation::FlushSlotTrace(); PlayerShadowAllocation::CacheLog::Flush(); EmergencyTrafficShadows::Update(); Lighting20::Update(); ShadowDiagnostics::Write(); HeadlightEnhancement::WriteDiagnostics(); };
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
@@ -582,6 +589,9 @@ public:
                     PlayerShadowAllocation::cameraPriority = PlayerShadowAllocation::InstallCameraCapture();
                 PlayerShadowAllocation::slotTrace.enabled = iniReader.ReadInteger("DEBUG", "NightShadowsSlotLog", 0) != 0;
                 PlayerShadowAllocation::slotTrace.describeOwner = PlayerShadowAllocation::DescribeKeyOwner;
+                PlayerShadowAllocation::CacheLog::enabled = iniReader.ReadInteger("DEBUG", "NightShadowsCacheLog", 0) != 0;
+                if (PlayerShadowAllocation::CacheLog::enabled)
+                    PlayerShadowAllocation::observeCaches = PlayerShadowAllocation::CacheLog::Observe;
                 PlayerShadowAllocation::lampSpacing.spacing = PlayerShadowAllocation::lampSpacing.base;
                 PlayerShadowAllocation::InstallLampSight(iniReader.ReadInteger("NIGHTSHADOWS", "LampsBehindWalls", 1) != 0,
                     static_cast<uint32_t>(iniReader.ReadInteger("NIGHTSHADOWS", "LampsBehindWallsFlags", 6)));
@@ -610,6 +620,7 @@ public:
                     iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowRetention", 0) != 0,
                     iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowFade", 0) != 0,
                     iniReader.ReadInteger("NIGHTSHADOWS", "IndoorShadowBubble", 0) != 0);
+                LampShadowAxis::Install();
                 // Liberty's Shadows 2.0: dual headlights, tail lights, world lights, buildings in dynamic maps.
                 // Each family is switched in the graphics menu; its hooks stay in place.
                 Lighting20::Install(iniReader);
@@ -617,6 +628,20 @@ public:
                 PlayerShadowAllocation::stableOrdinals = iniReader.ReadInteger("NIGHTSHADOWS", "StableMapSlots", 1) != 0;
                 if (!PlayerShadowAllocation::InstallPreCache() && (PlayerShadowAllocation::stableOrdinals || PlayerShadowAllocation::preCacheVacancy))
                     PlayerShadowAllocation::installStatus += " pre_cache_hook_failed";
+                // Last, after every check of the selection's bytes; its tile layout is kept after each selection run.
+                if (PlayerShadowAllocation::ready.load(std::memory_order_acquire))
+                {
+                    ShadowCache16::Install(iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowCaches", 32),
+                        iniReader.ReadFloat("NIGHTSHADOWS", "CacheWholeTileDistance", 25.0f),
+                        iniReader.ReadFloat("NIGHTSHADOWS", "CacheEvictMargin", 1.25f));
+                    if (ShadowCache16::enabled)
+                        PlayerShadowAllocation::layOutCaches = ShadowCache16::LayOut;
+                    if (ShadowCache16::moved)
+                        PlayerShadowAllocation::cacheChoice = ShadowCache16::CacheChoice;
+                }
+                else ShadowCache16::status = "allocation_unavailable";
+                PropCaches::Install(iniReader.ReadInteger("NIGHTSHADOWS", "PropsInLampCaches", 1) != 0,
+                    iniReader.ReadInteger("NIGHTSHADOWS", "LampsSkipOwnObject", 1) != 0);
             }
             else
             {
@@ -714,6 +739,9 @@ public:
                             const bool artificial = !*reinterpret_cast<const uint8_t*>(regs.esp + 0x0B);
                             if (bCEAdapter)
                             {
+                                // A light's own object (LampsSkipOwnObject)
+                                if (PropCaches::OwnObject(regs.esi, regs.eax))
+                                    return_to(loc_AE3867);
                                 // Exclude the occupied car/occupants only in their own
                                 // immediate headlight pass; retain their lamp shadows.
                                 if (OwnHeadlightCaster::Exclude(regs.esi, regs.eax, artificial))

@@ -6,13 +6,16 @@
 namespace ShadowLookupGuard {
     static bool ready = false;
     static uintptr_t base = 0;
-    static std::atomic<uint32_t> rejectedDynamic{0}, rejectedStatic{0}, changedBuffer{0};
+    static std::atomic<uint32_t> rejectedDynamic{0}, rejectedStatic{0}, changedBuffer{0}, notBaked{0};
     static int ReadBuffer() noexcept {
         return ready ? *reinterpret_cast<const int*>(base + shadow_lookup_layout::ReadBufferRva) : -1;
     }
     static void Initialize() noexcept {
         base = GameBase();
-        ready = shadow_lookup_layout::Validate(base);
+        ready = fusionfix::shadows::cacheRecordsAt
+            ? shadow_lookup_layout::Validate(base, static_cast<uint32_t>(fusionfix::shadows::CacheRecord(base, 0) + 0xDC),
+                static_cast<uint32_t>(fusionfix::shadows::CacheCopy(base, 0, 0) + 0xE0))
+            : shadow_lookup_layout::Validate(base);
     }
     static int Filter(int nativeResult, uint32_t key, int cache, int before) noexcept {
         const auto traceResult=[&](int result,int buffer) noexcept {
@@ -28,20 +31,39 @@ namespace ShadowLookupGuard {
             ++changedBuffer;
             return traceResult(-1,current);
         }
+        // A cache's tile only once baked for this lamp where it now lies: the lamp's own (8 + cache) and the one its
+        // slot copies its static world from (the slot's +0xF0); else no map this frame rather than another lamp's
+        const auto bakedHere = [&](int i) noexcept
+        {
+            const auto copy = fusionfix::shadows::CacheCopy(base, current, unsigned(i));
+            return fusionfix::shadows::BakedFor(unsigned(i), key, reinterpret_cast<const float*>(copy + 0xC0));
+        };
+        if (nativeResult >= 8 && nativeResult < 8 + static_cast<int>(fusionfix::shadows::cacheEntries) && !bakedHere(nativeResult - 8)) {
+            ++notBaked;
+            return traceResult(-1,current);
+        }
+        if (nativeResult < 8) {
+            const int dependency = *reinterpret_cast<const int*>(base + shadow_lookup_layout::DynamicKey0Rva + current * 0x880 + nativeResult * 0x110 - 8);
+            if (dependency >= 0 && dependency < static_cast<int>(fusionfix::shadows::cacheEntries) && !bakedHere(dependency)) {
+                ++notBaked;
+                return traceResult(-1,current);
+            }
+        }
         fusionfix::shadows::ShadowLookupSnapshot s{};
         const auto dynamic = base + shadow_lookup_layout::DynamicKey0Rva + current * 0x880;
-        const auto cached = base + shadow_lookup_layout::StaticKey0Rva + current * 0x1000;
+        // The key (+0xE0) of the buffer's copy of cache record k
+        const auto cached = fusionfix::shadows::CacheCopy(base, current, 0) + 0xE0;
         if (nativeResult < 8) {
             const auto address = dynamic + nativeResult * 0x110;
             s.dynamicKeys[nativeResult] = *reinterpret_cast<const uint32_t*>(address);
             s.dynamicActive[nativeResult] = *reinterpret_cast<const uint8_t*>(address - 0xB);
             const int dependency=*reinterpret_cast<const int*>(address - 8);
             s.dynamicCache[nativeResult]=dependency;
-            if(dependency>=0 && dependency<8)
+            if(dependency>=0 && dependency<static_cast<int>(fusionfix::shadows::cacheEntries))
                 s.staticKeys[dependency]=*reinterpret_cast<const uint32_t*>(cached+dependency*0x100);
-            if (cache >= 0 && cache < 8)
+            if (cache >= 0 && cache < static_cast<int>(fusionfix::shadows::cacheEntries))
                 s.staticKeys[cache] = *reinterpret_cast<const uint32_t*>(cached + cache * 0x100);
-        } else if (nativeResult < 16) {
+        } else if (nativeResult < 8 + static_cast<int>(fusionfix::shadows::cacheEntries)) {
             s.staticKeys[nativeResult - 8] = *reinterpret_cast<const uint32_t*>(cached + (nativeResult - 8) * 0x100);
         }
         const int result = fusionfix::shadows::ValidateShadowLookup(nativeResult,key,cache,s);

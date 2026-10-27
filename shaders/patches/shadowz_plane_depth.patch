@@ -1,0 +1,95 @@
+diff --git a/win32_30_nv8/shadowZ/shadowZPS1.asm b/win32_30_nv8/shadowZ/shadowZPS1.asm
+index e15faf0..0ce3030 100644
+--- a/win32_30_nv8/shadowZ/shadowZPS1.asm
++++ b/win32_30_nv8/shadowZ/shadowZPS1.asm
+@@ -11,16 +11,69 @@
+ //   Name                 Reg   Size
+ //   -------------------- ----- ----
+ //   gShadowParam14151617 c56      1
++//
++// FusionFix: shadowz_plane_depth.patch: c48 the lamp (position, 1 / radius), c49 its halves' axis (w: 1234.5 on), c50 the viewport (x, y, 2 / width,
++// 2 / height), c55 its x axis, set by EntityClass for each half of a lamp's map
+ //
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.1925049931e-42 // 851
+     def c0, 0.00999999978, 0, 0, 0
+-    dcl_texcoord1 v0.zw
++    def c1, 1, -1, 2, 0.0799999982 // FusionFix: shadowz_plane_depth.patch: 1, -1, 2, the least cosine of the texel's ray against the surface
++    def c2, 0.5, 1.5, -1234.5, 0.5 // FusionFix: shadowz_plane_depth.patch: how far the plane's depth may be from the interpolated one; c49.w's key for on
++    dcl_texcoord1 v0
++    dcl_texcoord2 v1.x // FusionFix: shadowz_plane_depth.patch: world z
++    dcl vPos.xy
+     add r0.x, c0.x, -v0.z
+     abs r0.y, c56.x
+     cmp r0, -r0.y, r0.x, c0.y
+     texkill r0
+-    mov oC0, v0.w
++    // FusionFix: shadowz_plane_depth.patch: the map draws a triangle straight in paraboloid space while its true image is curved, so the depth
++    // interpolated inside a big one lies on the chord, off the surface (a shop front's awning bent around the lamp, a
++    // wall shadowing itself but for round patches). The interpolated point still lies in the triangle's plane: the
++    // depth written is the distance along the texel's own ray to that plane, in the lamp's x, y and half axis over
++    // its radius. World x and y come in v0.xy, world z in v1.x (shadowZ VS0 writes it to texcoord2), the half's axis in v0.z
++    add r2.xy, v0, -c48
++    mul r2.xy, r2, c48.w
++    add r2.z, v1.x, -c48.z
++    mul r2.z, r2.z, c48.w
++    mov r4.xyz, c55
++    crs r3.xyz, r4, c49
++    dp3 r5.x, r2, r4
++    dp3 r5.y, r2, r3
++    mov r5.z, v0.z
++    dsx r6.xyz, r5
++    dsy r7.xyz, r5
++    crs r8.xyz, r6, r7
++    nrm r6.xyz, r8
++    add r7.xy, vPos, -c50
++    mul r7.xy, r7, c50.zwzw
++    add r7.x, r7.x, c1.y
++    add r7.y, -r7.y, c1.x
++    dp2add r7.z, r7, r7, c0.y
++    add r7.w, r7.z, c1.x
++    rcp r7.w, r7.w
++    mul r8.xy, r7, c1.z
++    add r8.z, r7.z, c1.y
++    mul r8.xyz, r8, r7.w
++    dp3 r9.x, r8, r6
++    dp3 r9.y, r5, r6
++    rcp r9.z, r9.x
++    mul r9.z, r9.y, r9.z
++    abs r9.w, r9.x
++    add r9.w, r9.w, -c1.w
++    mul r10.xy, v0.w, c2
++    add r10.x, r9.z, -r10.x
++    add r10.y, r10.y, -r9.z
++    min r10.x, r10.x, r10.y
++    min r10.x, r10.x, r9.w
++    cmp r10.x, r10.x, r9.z, v0.w
++    abs r11.x, c56.x
++    cmp r10.x, -r11.x, r10.x, v0.w // only the paraboloid halves (c56.x 0), not the cube faces a cached map is baked from (3)
++    mov r11.y, c49.w
++    add r11.y, r11.y, c2.z // on only with c49.w the key: c49 is other shaders' too, and this shader draws outside a marked half
++    add r11.y, r11_abs.y, -c2.w
++    cmp r10.x, r11.y, v0.w, r10.x
++    mov oC0, r10.x
+ 
+ // approximately 5 instruction slots used
+diff --git a/win32_30_nv8/shadowZ/shadowZVS0.asm b/win32_30_nv8/shadowZ/shadowZVS0.asm
+index b016145..a88cce1 100644
+--- a/win32_30_nv8/shadowZ/shadowZVS0.asm
++++ b/win32_30_nv8/shadowZ/shadowZVS0.asm
+@@ -30,6 +30,7 @@
+     dcl_position v0
+     dcl_position o0
+     dcl_texcoord1 o1
++    dcl_texcoord2 o2 // FusionFix: shadowz_plane_depth.patch: world z for the plane depth in PS1
+     mul r0.xyz, c1, v0.y
+     mad r0.xyz, v0.x, c0, r0
+     mad r0.xyz, v0.z, c2, r0
+@@ -103,5 +104,6 @@
+     mov o0.w, r4.x
+     mov o1.xy, r0
+     mov o1.zw, r4.xyyz
++    mov o2, r0.z // FusionFix: shadowz_plane_depth.patch
+ 
+ // approximately 77 instruction slots used

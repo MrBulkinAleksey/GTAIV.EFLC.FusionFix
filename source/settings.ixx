@@ -2423,7 +2423,6 @@ public:
             AddRow(category, "WetWeather", "PREF_WET_WEATHER", 2, toggle);
             AddRow(category, "CarRaindrops", "PREF_CAR_RAINDROPS", 2, toggle);
             AddRow(category, "VehBoxShadows", "PREF_VEHICLE_BOX_SHADOWS", 2, toggle);
-            AddRow(category, "WorldLightShad", "PREF_WORLD_LIGHT_SHADOWS", 2, toggle);
             AddRow(category, "ImprovedGrass", "PREF_GPU_GRASS", 2, toggle);
             AddEmptyLine(category);
             // The number next to the slider is the reach in feet, 0 keeps the game's own
