@@ -4,6 +4,8 @@ module;
 #include "FusionLog.hpp"
 #include <psapi.h>
 #include <tlhelp32.h>
+#include <DbgHelp.h>
+#include "inflate.hpp"
 #include <mmsystem.h>
 #include <algorithm>
 #include <atomic>
@@ -14,7 +16,9 @@ module;
 #include <stdexcept>
 #include <thread>
 #include <cstring>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -31,7 +35,7 @@ import common;
 // on its stack) and lets it go, and every ProfilerInterval seconds writes GTAIV.EFLC.FusionFix.Profiler.log: every
 // thread's CPU time, and for the sampled ones the functions they were in (self) and the ones on their stack (total).
 // Game functions are named by their address in the Complete Edition exe (base 0x400000), whatever base it got;
-// others by their module and the nearest export.
+// FusionFix's by their names in its PDB (Symbols); others by their module and the nearest export.
 //
 // Two more things are kept over the whole session:
 //  - every call stack sampled, with its count, written with each report to GTAIV.EFLC.FusionFix.Profiler.folded
@@ -350,6 +354,189 @@ namespace Profiler
         return FunctionStart(target);
     }
 
+    // FusionFix's own functions by name, from its PDB through DbgHelp. A CI build carries the PDB inside the ASI
+    // (release.bat's EmbedPDB: zlib data, then its size unpacked and packed as two u64 and "PDB_EMBED_V1" with four
+    // zeros); it is unpacked once per build into %TEMP%\GTAIV.EFLC.FusionFix.Symbols\<the ASI's link time>, by a thread
+    // of its own when the sampler starts, so the first report may wait for it a little. A local build's PDB is found
+    // next to the ASI. Without one, the module and offset as before.
+    namespace Symbols
+    {
+        using SymSetOptions_t = DWORD(WINAPI*)(DWORD);
+        using SymGetOptions_t = DWORD(WINAPI*)();
+        using SymInitializeW_t = BOOL(WINAPI*)(HANDLE, PCWSTR, BOOL);
+        using SymLoadModuleExW_t = DWORD64(WINAPI*)(HANDLE, HANDLE, PCWSTR, PCWSTR, DWORD64, DWORD, PMODLOAD_DATA, DWORD);
+        using SymFromAddr_t = BOOL(WINAPI*)(HANDLE, DWORD64, PDWORD64, PSYMBOL_INFO);
+
+        // DbgHelp's handle of this session: any unique value when the process isn't invaded, kept apart from the
+        // crash log's
+        const HANDLE session = reinterpret_cast<HANDLE>(uintptr_t(0x46467379));
+        SymFromAddr_t pSymFromAddr = nullptr;
+        uintptr_t base = 0, end = 0;
+        std::atomic<int> state = 0;     // 0 not started, 1 preparing, 2 ready, 3 none
+        std::mutex mutex;               // DbgHelp is not thread-safe
+        std::string status;
+
+        constexpr char kMagic[] = "PDB_EMBED_V1";
+
+        // The embedded PDB unpacked into `pdb`, unless it is there already; false when the ASI has none
+        bool Unpack(const std::filesystem::path& asi, const std::filesystem::path& pdb)
+        {
+            std::ifstream in(asi, std::ios::binary | std::ios::ate);
+            if (!in)
+                return false;
+            const uint64_t fileSize = uint64_t(in.tellg());
+            if (fileSize < 64)
+                return false;
+            uint8_t trailer[32];
+            in.seekg(std::streamoff(fileSize - sizeof(trailer)));
+            in.read(reinterpret_cast<char*>(trailer), sizeof(trailer));
+            if (!in || std::memcmp(trailer + 16, kMagic, sizeof(kMagic) - 1) != 0)
+                return false;
+            uint64_t rawSize, packedSize;
+            std::memcpy(&rawSize, trailer, 8);
+            std::memcpy(&packedSize, trailer + 8, 8);
+            if (!packedSize || packedSize > fileSize - sizeof(trailer) || rawSize > (uint64_t(1) << 30))
+                return false;
+            std::error_code ec;
+            if (std::filesystem::exists(pdb, ec) && std::filesystem::file_size(pdb, ec) == rawSize)
+                return true;
+
+            std::vector<uint8_t> packed(static_cast<size_t>(packedSize));
+            in.seekg(std::streamoff(fileSize - sizeof(trailer) - packedSize));
+            in.read(reinterpret_cast<char*>(packed.data()), std::streamsize(packed.size()));
+            if (!in)
+                return false;
+            std::vector<uint8_t> raw;
+            raw.reserve(size_t(rawSize));
+            if (!Inflate::Zlib(packed.data(), packed.size(), raw, size_t(rawSize)) || raw.size() != rawSize)
+            {
+                status = "the PDB in the ASI could not be unpacked";
+                return false;
+            }
+            // Written aside and renamed, so a game closed meanwhile leaves no half PDB to be taken for whole
+            std::filesystem::create_directories(pdb.parent_path(), ec);
+            auto part = pdb;
+            part += L".part";
+            {
+                std::ofstream out(part, std::ios::binary | std::ios::trunc);
+                out.write(reinterpret_cast<const char*>(raw.data()), std::streamsize(raw.size()));
+                if (!out)
+                {
+                    status = "the PDB could not be written to " + pdb.parent_path().string();
+                    return false;
+                }
+            }
+            std::filesystem::rename(part, pdb, ec);
+            return !ec;
+        }
+
+        void Prepare()
+        {
+            HMODULE self = nullptr;
+            MODULEINFO info{};
+            wchar_t path[MAX_PATH] = {};
+            if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&Prepare), &self) ||
+                !GetModuleInformation(GetCurrentProcess(), self, &info, sizeof(info)) || !GetModuleFileNameW(self, path, MAX_PATH))
+            {
+                state = 3;
+                return;
+            }
+            const std::filesystem::path asi = path;
+            auto searchDir = asi.parent_path();
+            auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(self);
+            auto nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(reinterpret_cast<const uint8_t*>(self) + dos->e_lfanew);
+            wchar_t temp[MAX_PATH] = {};
+            if (GetTempPathW(MAX_PATH, temp))
+            {
+                auto dir = std::filesystem::path(temp) / L"GTAIV.EFLC.FusionFix.Symbols" / std::format(L"{:08x}", nt->FileHeader.TimeDateStamp);
+                auto pdb = dir / asi.stem();
+                pdb += L".pdb";
+                if (Unpack(asi, pdb))
+                    searchDir = dir;
+            }
+
+            auto dbghelp = LoadLibraryW(L"dbghelp.dll");
+            auto pSymGetOptions = dbghelp ? reinterpret_cast<SymGetOptions_t>(GetProcAddress(dbghelp, "SymGetOptions")) : nullptr;
+            auto pSymSetOptions = dbghelp ? reinterpret_cast<SymSetOptions_t>(GetProcAddress(dbghelp, "SymSetOptions")) : nullptr;
+            auto pSymInitializeW = dbghelp ? reinterpret_cast<SymInitializeW_t>(GetProcAddress(dbghelp, "SymInitializeW")) : nullptr;
+            auto pSymLoadModuleExW = dbghelp ? reinterpret_cast<SymLoadModuleExW_t>(GetProcAddress(dbghelp, "SymLoadModuleExW")) : nullptr;
+            auto symFromAddr = dbghelp ? reinterpret_cast<SymFromAddr_t>(GetProcAddress(dbghelp, "SymFromAddr")) : nullptr;
+            if (!pSymGetOptions || !pSymSetOptions || !pSymInitializeW || !pSymLoadModuleExW || !symFromAddr)
+            {
+                status = "dbghelp.dll is missing";
+                state = 3;
+                return;
+            }
+            std::lock_guard lock(mutex);
+            pSymSetOptions(pSymGetOptions() | SYMOPT_UNDNAME | SYMOPT_FAIL_CRITICAL_ERRORS | SYMOPT_NO_PROMPTS);
+            if (!pSymInitializeW(session, searchDir.c_str(), FALSE) ||
+                !pSymLoadModuleExW(session, nullptr, asi.c_str(), nullptr, uintptr_t(self), info.SizeOfImage, nullptr, 0))
+            {
+                status = std::format("DbgHelp could not load the module (error {})", GetLastError());
+                state = 3;
+                return;
+            }
+            // Loaded from its own exports alone without the PDB: a name of one of ours that isn't exported tells
+            alignas(SYMBOL_INFO) uint8_t buffer[sizeof(SYMBOL_INFO) + 256] = {};
+            auto symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+            symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+            symbol->MaxNameLen = 255;
+            DWORD64 displacement = 0;
+            if (!symFromAddr(session, uintptr_t(&Unpack), &displacement, symbol) || displacement != 0)
+            {
+                status = "no PDB of this build was found";
+                state = 3;
+                return;
+            }
+            base = uintptr_t(self);
+            end = base + info.SizeOfImage;
+            pSymFromAddr = symFromAddr;
+            status = "from " + searchDir.string();
+            state = 2;
+        }
+
+        // Once, on a thread of its own
+        void Start()
+        {
+            int expected = 0;
+            if (state.compare_exchange_strong(expected, 1))
+                std::thread([]()
+                {
+                    Prepare();
+                    FusionLog::Write("Profiler", "Symbols", "FusionFix's functions %s: %s\n", state == 2 ? "named" : "not named", status.c_str());
+                }).detach();
+        }
+
+        // Before a report: the names are being got ready, for at most `ms`
+        void Wait(DWORD ms)
+        {
+            for (DWORD waited = 0; state == 1 && waited < ms; waited += 50)
+                Sleep(50);
+        }
+
+        // FusionFix's function at `address`, empty when unknown
+        std::string Find(uintptr_t address)
+        {
+            if (state != 2 || address < base || address >= end)
+                return {};
+            alignas(SYMBOL_INFO) uint8_t buffer[sizeof(SYMBOL_INFO) + 512] = {};
+            auto symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+            symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+            symbol->MaxNameLen = 511;
+            DWORD64 displacement = 0;
+            {
+                std::lock_guard lock(mutex);
+                if (!pSymFromAddr(session, address, &displacement, symbol))
+                    return {};
+            }
+            // Templates and lambdas can run to hundreds of characters
+            std::string name(symbol->Name, std::min<size_t>(symbol->NameLen, 160));
+            if (symbol->NameLen > 160)
+                name += "...";
+            return displacement ? std::format("FusionFix!{}+{:#x}", name, displacement) : "FusionFix!" + name;
+        }
+    }
+
     std::string Name(uintptr_t function)
     {
         auto module = FindModule(function);
@@ -357,6 +544,8 @@ namespace Profiler
             return std::format("{:#x}", function);
         if (module->game)
             return std::format("GTAIV {:#x}", function - module->base + 0x400000);
+        if (auto named = Symbols::Find(function); !named.empty())
+            return named;
         auto it = std::upper_bound(module->exports.begin(), module->exports.end(), function,
             [](uintptr_t a, const std::pair<uintptr_t, std::string>& e) { return a < e.first; });
         if (it != module->exports.begin())
@@ -695,6 +884,7 @@ namespace Profiler
     // The session's stacks to the .folded file, outermost first; the file is written whole each time
     void WriteFolded()
     {
+        Symbols::Wait(30000);
         auto path = FusionLog::PathFor("Profiler", L".folded");
         FILE* file = nullptr;
         if (_wfopen_s(&file, path.c_str(), L"wb") || !file)
@@ -839,6 +1029,8 @@ namespace Profiler
     // start over
     std::string ReportText(double seconds, size_t functions)
     {
+        // The PDB unpacked at the sampler's start is usually ready long before
+        Symbols::Wait(30000);
         auto selfCpu = CpuTime(GetCurrentThread());
         LARGE_INTEGER frequency;
         QueryPerformanceFrequency(&frequency);
@@ -977,6 +1169,7 @@ namespace Profiler
     void Loop()
     {
         LoadModules();
+        Symbols::Start();
         auto ntdll = GetModuleHandleW(L"ntdll.dll");
         pNtQueryInformationThread = ntdll ? (NtQueryInformationThread_t)GetProcAddress(ntdll, "NtQueryInformationThread") : nullptr;
         auto kernelBase = GetModuleHandleW(L"KernelBase.dll");
