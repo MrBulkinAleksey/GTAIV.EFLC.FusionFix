@@ -1987,7 +1987,9 @@ export struct VehicleBoxShadows
         const float capsule[4] = { R.fPedCapsuleRadius, -(R.fPedCapsuleRadius + 0.3f), pedLightSize, R.fPedCapsuleBaseSoftness };
         pDevice->SetPixelShaderConstantF(150, peds[0], kPedsPerLight);
         pDevice->SetPixelShaderConstantF(154, capsule, 1);
-        const float capsuleFromDistance[4] = { R.fPedCapsuleDistanceSoftness, 0.0f, 0.0f, 0.0f };
+        // c142.y the props' shapes' light size: the lamp's own, without the pair's half spacing the boxes take in c149.x
+        // (zz_zz_shape_light_size.patch); a post's thin shadow from a lamp of a pair was lost in a 1.45 m penumbra
+        const float capsuleFromDistance[4] = { R.fPedCapsuleDistanceSoftness, R.fVehicleBoxShadowLightSize, 0.0f, 0.0f };
         pDevice->SetPixelShaderConstantF(142, capsuleFromDistance, 1);
         // The shapes' groups (zz_shape_groups.patch): c115 their count and where groups 0-2 end, c129 where groups 3-6
         // end; the groups' spheres in c125-c128, c116, c117, c119 and c120
