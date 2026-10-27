@@ -141,7 +141,7 @@ namespace GpuGrass
     bool bCrossed = false;                  // GpuGrassCrossed
     float fRange = 100.0f, fFullRange = 22.0f, fDensity = 1.0f;
     float fGroundTint = 0.5f;
-    float green[3] = { 0.30f, 0.38f, 0.11f }, tip[3] = { 0.62f, 0.60f, 0.26f }, dry[3] = { 0.46f, 0.39f, 0.20f };
+    float green[3] = { 0.25f, 0.33f, 0.14f }, tip[3] = { 0.45f, 0.50f, 0.30f }, dry[3] = { 0.38f, 0.36f, 0.25f };
     constexpr float kGroundTintColour[3] = { 0.45f, 0.55f, 0.3f };   // what the ground is multiplied towards
 
     // Render thread
@@ -242,7 +242,7 @@ namespace GpuGrass
             for (int k = 0; k < 3; ++k)
                 rgb[k] = read ? std::clamp(v[k], 0.0f, 1.0f) : fallback[k];
         };
-        static constexpr float kGreen[3] = { 0.30f, 0.38f, 0.11f }, kTip[3] = { 0.62f, 0.60f, 0.26f }, kDry[3] = { 0.46f, 0.39f, 0.20f };
+        static constexpr float kGreen[3] = { 0.25f, 0.33f, 0.14f }, kTip[3] = { 0.45f, 0.50f, 0.30f }, kDry[3] = { 0.38f, 0.36f, 0.25f };
         colour("GpuGrassGreen", green, kGreen);
         colour("GpuGrassTip", tip, kTip);
         colour("GpuGrassDry", dry, kDry);
