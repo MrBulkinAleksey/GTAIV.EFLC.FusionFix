@@ -99,6 +99,7 @@ class GrassWind
     static constexpr int kModelRegister = 241;      // c241: 1 / height, bend and flutter at the tip (metres)
     static constexpr int kDirectionRegister = 242;  // c242.xy: the wind's unit direction
     static constexpr int kTrampleRegister = 243;    // c243: 1 / the trample grid's side (m), its strength (0 = off), the texture coordinate's offset
+    static constexpr int kPreviousWindRegister = 238; // c238: c240 of the frame before, the sway's previous position (zz_zz_tree_grass_motion.patch)
     static constexpr DWORD kTrampleSampler = D3DVERTEXTEXTURESAMPLER1;  // vs s1
     static constexpr int kBodyRegister = 248;       // c248-c251: two bodies (centre, forward; half length, half width, 1 / reach, strength)
     static constexpr int kSwayFlag = 12;            // b12 (vertex shader)
@@ -582,6 +583,22 @@ class GrassWind
         GrassShared::TrampleUVOffset[0] = -float(gridOrigin[0]) / kCells;
         GrassShared::TrampleUVOffset[1] = -float(gridOrigin[1]) / kCells;
         pDevice->SetVertexShaderConstantF(kWindRegister, wind, 1);
+        // The wind of the frame before, for the motion vectors of the sway: taken when the phases moved on, so a second
+        // G-buffer pass in a frame (a mirror's) keeps the same
+        static float currentWind[4]{}, previousWind[4]{};
+        static bool haveWind = false;
+        if (!haveWind)
+        {
+            std::copy_n(wind, 4, currentWind);
+            std::copy_n(wind, 4, previousWind);
+            haveWind = true;
+        }
+        else if (!std::equal(wind, wind + 4, currentWind))
+        {
+            std::copy_n(currentWind, 4, previousWind);
+            std::copy_n(wind, 4, currentWind);
+        }
+        pDevice->SetVertexShaderConstantF(kPreviousWindRegister, previousWind, 1);
         pDevice->SetVertexShaderConstantF(kDirectionRegister, wind + 4, 1);
         const float trampleParams[4] = { 1.0f / kGridSide, trample ? 1.0f : 0.0f, GrassShared::TrampleUVOffset[0], GrassShared::TrampleUVOffset[1] };
         pDevice->SetVertexShaderConstantF(kTrampleRegister, trampleParams, 1);

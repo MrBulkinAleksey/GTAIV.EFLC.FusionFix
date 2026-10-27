@@ -635,8 +635,39 @@ public:
         camera.Valid = viewport->mIsPerspective && camera.Width > 0 && camera.Height > 0 && camera.Near > 0.0f && camera.Far > camera.Near;
         CurrentCamera = camera;
 
+        UploadSwayMotionConstants();
         Upscaler::Update();
         BeginCapture();
+    }
+
+    // The motion vectors of what sways in the vertex shaders (trees, bushes, the grass's wind): their shaders work out
+    // the previous position too and write the motion next to the material ID (shaders/patches/zz_zz_tree_grass_motion.patch,
+    // PS_CameraMotion takes it). Trees and grass stand still, so a frame's constants are all they need, set as the
+    // G-buffer pass starts: VS c252-c255 the rows of the last frame's view and projection without jitter, c244.x the
+    // trees' wind then (c233.x, read at the pass's end); PS c200 1 / the render size and the pixel's centre less
+    // the jitter in texture coordinates, c201 clip to texture coordinates. The grass's previous wind (c238) is grasswind.ixx's.
+    static inline float fPreviousTreeWind = 0.0f;
+
+    static void UploadSwayMotionConstants()
+    {
+        using namespace TemporalAA;
+        auto device = RageDirect3DDevice9::GetRuntimeDevice();
+        if (!device || !CurrentCamera.Valid)
+            return;
+        auto& previous = PreviousCamera.Valid ? PreviousCamera : CurrentCamera;
+        float rows[16];
+        previous.ViewProjectionNoJitter.To(rows);
+        device->SetVertexShaderConstantF(252, rows, 4);
+        const float wind[4] = { fPreviousTreeWind, 0.0f, 0.0f, 0.0f };
+        device->SetVertexShaderConstantF(244, wind, 1);
+        const float width = static_cast<float>(CurrentCamera.Width), height = static_cast<float>(CurrentCamera.Height);
+        // VPOS is the pixel's whole number, its centre half a pixel on in texture coordinates
+        const float pixel[8] =
+        {
+            1.0f / width, 1.0f / height, (0.5f - CurrentCamera.JitterPixels[0]) / width, (0.5f - CurrentCamera.JitterPixels[1]) / height,
+            0.5f, -0.5f, 0.5f, 0.0f,
+        };
+        device->SetPixelShaderConstantF(200, pixel, 2);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -1124,6 +1155,13 @@ public:
         bCapturing = false;
 
         auto device = RageDirect3DDevice9::GetRuntimeDevice();
+        // The trees' wind of this frame, the previous one for the next (UploadSwayMotionConstants)
+        if (device)
+        {
+            float wind[4]{};
+            if (SUCCEEDED(device->GetVertexShaderConstantF(233, wind, 1)) && wind[0] != 0.0f)
+                fPreviousTreeWind = wind[0];
+        }
         if (device && OnGBufferBeforeMotion)
         {
             bInternalDraw = true;
@@ -1233,6 +1271,11 @@ public:
         device->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
         device->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
         device->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
+
+        // The motion the G-buffer wrote itself (what sways in the vertex shaders: w below 0, current minus previous in y and z)
+        SamplerBackup stencilSampler(device, 1);
+        auto stencil = rage::grcTextureFactoryPC::GetRTByName("_STENCIL_BUFFER_");
+        BindSampler(device, 1, stencil ? stencil->mD3DTexture : nullptr, D3DTEXF_POINT);
 
         device->SetPixelShader(CameraMotionPS);
         device->SetPixelShaderConstantF(0, constants, 7);

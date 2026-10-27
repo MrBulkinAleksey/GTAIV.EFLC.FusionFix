@@ -141,6 +141,9 @@ float4 PS_BoneWrite(float4 value : TEXCOORD0) : COLOR0
 // vectors before transparent geometry is drawn
 
 sampler2D SceneDepth : register(s0);
+// _STENCIL_BUFFER_: the material ID in x; where w is below 0 the G-buffer's own motion, current minus previous position in
+// texture coordinates, in y and z (what sways in the vertex shaders, zz_zz_tree_grass_motion.patch)
+sampler2D GBufferMotion : register(s1);
 
 float4 gProjection : register(c0); // P00, P11, P20 and P21 of the (jittered) projection
 float4 gJitter     : register(c1); // xy: jitter in NDC, z: near, w: log2(far / near)
@@ -168,6 +171,9 @@ CameraMotionOut PS_CameraMotion(float2 uv : TEXCOORD0)
 
     CameraMotionOut o;
     o.Motion = float4((previous.xy / previous.w - current) * float2(0.5, -0.5), 0.0, 1.0);
+    float4 own = tex2Dlod(GBufferMotion, float4(uv, 0.0, 0.0));
+    if (own.w < 0.0)
+        o.Motion.xy = -own.yz;
     o.Depth = (far * (distance - near) / (distance * (far - near))).xxxx;
     return o;
 }
