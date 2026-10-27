@@ -431,7 +431,7 @@ namespace Lighting20
         {
             pref = FusionFixSettings.GetRef("PREF_WORLD_LIGHT_SHADOWS");
             cachedLamps = ini.ReadInteger("NIGHTSHADOWS", "CachedLampShadows", 1) != 0;
-            const int modelLightMode = std::clamp(ini.ReadInteger("NIGHTSHADOWS", "ModelLightShadows", 0), 0, 3);
+            const int modelLightMode = std::clamp(ini.ReadInteger("NIGHTSHADOWS", "ModelLightShadows", 3), 0, 3);
             modelLights = modelLightMode != 0;
             modelLightOwners = modelLightMode == 2 ? 1 : modelLightMode == 3 ? 2 : 0; // FindKeyOwner's kinds
             modelLightCacheDistance = std::clamp(ini.ReadFloat("NIGHTSHADOWS", "ModelLightCacheDistance", 15.0f), 0.0f, 60.0f);
