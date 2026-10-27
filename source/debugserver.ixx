@@ -5,6 +5,7 @@ module;
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <tlhelp32.h>
+#include <psapi.h>
 #include <d3dx9.h>
 #include <algorithm>
 #include <array>
@@ -857,6 +858,131 @@ namespace DebugServer
         }
         CloseHandle(snapshot);
         return Object({{"modules", Array(modules)}});
+    }
+
+    // The address space by allocation (VirtualAlloc/MapViewOfFile/image base): what holds it, what is free and in
+    // how large blocks; a 32-bit game runs short of addresses well before memory.
+    std::string VirtualMemoryMap(const Request& request)
+    {
+        const uint64_t minSize = request.Number("min_size", 1024 * 1024);
+        const size_t top = size_t(std::clamp<uint64_t>(request.Number("top", 60), 1, 2000));
+
+        struct Allocation
+        {
+            uintptr_t base = 0;
+            uint64_t size = 0, committed = 0;
+            DWORD type = 0, protect = 0;
+            bool guard = false;
+            int regions = 0;
+        };
+        std::vector<Allocation> allocations;
+        std::vector<std::pair<uintptr_t, uint64_t>> freeBlocks;
+
+        SYSTEM_INFO system{};
+        GetSystemInfo(&system);
+        const uintptr_t end = reinterpret_cast<uintptr_t>(system.lpMaximumApplicationAddress);
+        for (uintptr_t at = reinterpret_cast<uintptr_t>(system.lpMinimumApplicationAddress); at < end;)
+        {
+            MEMORY_BASIC_INFORMATION info{};
+            if (!VirtualQuery(reinterpret_cast<void*>(at), &info, sizeof(info)) || !info.RegionSize)
+                break;
+            const uintptr_t base = reinterpret_cast<uintptr_t>(info.BaseAddress);
+            if (info.State == MEM_FREE)
+                freeBlocks.emplace_back(base, info.RegionSize);
+            else
+            {
+                const uintptr_t owner = reinterpret_cast<uintptr_t>(info.AllocationBase);
+                if (allocations.empty() || allocations.back().base != owner)
+                    allocations.push_back({owner, 0, 0, info.Type, 0, false, 0});
+                auto& a = allocations.back();
+                a.size += info.RegionSize;
+                a.regions++;
+                if (info.State == MEM_COMMIT)
+                {
+                    a.committed += info.RegionSize;
+                    if (!a.protect)
+                        a.protect = info.Protect;
+                    if (info.Protect & PAGE_GUARD)
+                        a.guard = true;
+                }
+            }
+            if (base + info.RegionSize <= at)
+                break;
+            at = base + info.RegionSize;
+        }
+
+        std::vector<HANDLE> heaps(256);
+        heaps.resize(GetProcessHeaps(DWORD(heaps.size()), heaps.data()));
+
+        auto kind = [&](const Allocation& a) -> const char* {
+            if (a.type == MEM_IMAGE) return "image";
+            if (a.type == MEM_MAPPED) return "mapped";
+            if (std::find(heaps.begin(), heaps.end(), reinterpret_cast<HANDLE>(a.base)) != heaps.end()) return "heap";
+            if (a.guard) return "stack";
+            return "private";
+        };
+        auto owner = [&](const Allocation& a) -> std::string {
+            wchar_t path[MAX_PATH] = {};
+            if (a.type == MEM_IMAGE && GetModuleFileNameW(reinterpret_cast<HMODULE>(a.base), path, MAX_PATH))
+                return Utf8(std::filesystem::path(path).filename());
+            if (a.type == MEM_MAPPED && K32GetMappedFileNameW(GetCurrentProcess(), reinterpret_cast<void*>(a.base), path, MAX_PATH))
+                return Utf8(std::filesystem::path(path).filename());
+            return {};
+        };
+
+        struct Totals { uint64_t count = 0, reserved = 0, committed = 0, smallCount = 0, smallReserved = 0; };
+        std::map<std::string, Totals> byKind;
+        for (const auto& a : allocations)
+        {
+            auto& t = byKind[kind(a)];
+            t.count++;
+            t.reserved += a.size;
+            t.committed += a.committed;
+            if (a.size < minSize)
+            {
+                t.smallCount++;
+                t.smallReserved += a.size;
+            }
+        }
+        std::vector<std::string> kinds;
+        for (const auto& [name, t] : byKind)
+            kinds.push_back(Object({{"kind", Quote(name)}, {"count", std::to_string(t.count)},
+                {"reserved", std::to_string(t.reserved)}, {"committed", std::to_string(t.committed)},
+                {"small_count", std::to_string(t.smallCount)}, {"small_reserved", std::to_string(t.smallReserved)}}));
+
+        std::sort(allocations.begin(), allocations.end(), [](const auto& l, const auto& r) { return l.size > r.size; });
+        std::vector<std::string> listed;
+        for (const auto& a : allocations)
+        {
+            if (a.size < minSize || listed.size() >= top)
+                break;
+            char protect[16];
+            snprintf(protect, sizeof(protect), "0x%X", unsigned(a.protect));
+            listed.push_back(Object({{"base", Address(a.base)}, {"size", std::to_string(a.size)},
+                {"committed", std::to_string(a.committed)}, {"kind", Quote(kind(a))}, {"owner", Quote(owner(a))},
+                {"protect", Quote(protect)}, {"regions", std::to_string(a.regions)}}));
+        }
+
+        uint64_t freeTotal = 0, usableFree = 0; // usable: blocks of the allocation granularity (64 KB) or more
+        size_t usableBlocks = 0;
+        for (const auto& block : freeBlocks)
+        {
+            freeTotal += block.second;
+            if (block.second >= system.dwAllocationGranularity)
+            {
+                usableFree += block.second;
+                usableBlocks++;
+            }
+        }
+        std::sort(freeBlocks.begin(), freeBlocks.end(), [](const auto& l, const auto& r) { return l.second > r.second; });
+        std::vector<std::string> largestFree;
+        for (size_t i = 0; i < freeBlocks.size() && i < 16; ++i)
+            largestFree.push_back(Object({{"base", Address(freeBlocks[i].first)}, {"size", std::to_string(freeBlocks[i].second)}}));
+
+        return Object({{"max_address", Address(end)}, {"allocations", std::to_string(allocations.size())},
+            {"free_total", std::to_string(freeTotal)}, {"free_blocks", std::to_string(freeBlocks.size())},
+            {"free_usable", std::to_string(usableFree)}, {"free_usable_blocks", std::to_string(usableBlocks)},
+            {"largest_free", Array(largestFree)}, {"kinds", Array(kinds)}, {"listed", Array(listed)}});
     }
 
     std::string Read(const Request& request)
@@ -2255,6 +2381,7 @@ namespace DebugServer
         if (command == "ping") return Object({{"pong", "true"}});
         if (command == "info") return Info();
         if (command == "modules") return Modules();
+        if (command == "vmmap") return VirtualMemoryMap(request);
         if (command == "read") return Read(request);
         if (command == "write") return Write(request);
         if (command == "find") return Find(request);
