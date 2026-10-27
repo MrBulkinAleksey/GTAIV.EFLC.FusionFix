@@ -1517,6 +1517,53 @@ namespace
         helper.Stop(true);
     }
 
+    const char* CommandName(Protocol::Command command)
+    {
+        return command == Protocol::Command::Generate ? "Generate" : command == Protocol::Command::Present ? "Present" :
+            command == Protocol::Command::Hide ? "Hide" : "Evaluate";
+    }
+
+    // The GPU waits on the helper's fences, let through from a thread of their own when the helper doesn't signal them
+    // in time (it hangs, or its work waits for something that never comes). The render thread can't be the one: it may
+    // be blocked in a Present that waits for that GPU work, and never get back to CollectPending, which lets such a
+    // wait through too. Whatever replaces the bridge's fences (Import, ReleaseImports, PrepareGameFence) holds mutex.
+    namespace Watchdog
+    {
+        constexpr ULONGLONG TimeoutMs = 2000;
+        std::mutex mutex;
+        uint64_t value = 0;         // the output value the GPU waits for, 0 when none
+        ULONGLONG deadline = 0;
+
+        void Run()
+        {
+            static uint32_t reported = 0;
+            for (;;)
+            {
+                Sleep(100);
+                std::lock_guard lock(mutex);
+                if (!value || GetTickCount64() < deadline)
+                    continue;
+                if (bridge && !bridge->WaitOnCpu())
+                {
+                    if (Report(reported))
+                        Log("%s: the helper didn't signal %llu in %llu ms, the GPU's wait let through", CommandName(pendingCommand),
+                            value, TimeoutMs);
+                    bridge->SignalFromCpu(value);
+                }
+                value = 0;
+            }
+        }
+
+        void Arm(uint64_t outputValue)
+        {
+            static std::once_flag started;
+            std::call_once(started, [] { std::thread(Run).detach(); });
+            std::lock_guard lock(mutex);
+            value = outputValue;
+            deadline = GetTickCount64() + TimeoutMs;
+        }
+    }
+
     // The helper exited while it worked: it is started again, a few times, and the upscaler stays offered meanwhile.
     // Without this the choice vanished from the menu until the game was restarted.
     void Lost()
@@ -1558,12 +1605,6 @@ namespace
         startedAt = GetTickCount64();
     }
 
-    const char* CommandName(Protocol::Command command)
-    {
-        return command == Protocol::Command::Generate ? "Generate" : command == Protocol::Command::Present ? "Present" :
-            command == Protocol::Command::Hide ? "Hide" : "Evaluate";
-    }
-
     // No answer in time from a helper that still runs
     void ScheduleRetry()
     {
@@ -1573,47 +1614,6 @@ namespace
             ++configureRetries;
             retryConfigureAt = GetTickCount64() + 2000;
             Log("Configured again in 2 s (%u of 5)", configureRetries);
-        }
-    }
-
-    // The GPU waits on the helper's fences, let through from a thread of their own when the helper doesn't signal them
-    // in time (it hangs, or its work waits for something that never comes). The render thread can't be the one: it may
-    // be blocked in a Present that waits for that GPU work, and never get back to CollectPending, which lets such a
-    // wait through too. Whatever replaces the bridge's fences (Import, ReleaseImports, PrepareGameFence) holds mutex.
-    namespace Watchdog
-    {
-        constexpr ULONGLONG TimeoutMs = 2000;
-        std::mutex mutex;
-        uint64_t value = 0;         // the output value the GPU waits for, 0 when none
-        ULONGLONG deadline = 0;
-
-        void Run()
-        {
-            static uint32_t reported = 0;
-            for (;;)
-            {
-                Sleep(100);
-                std::lock_guard lock(mutex);
-                if (!value || GetTickCount64() < deadline)
-                    continue;
-                if (bridge && !bridge->WaitOnCpu())
-                {
-                    if (Report(reported))
-                        Log("%s: the helper didn't signal %llu in %llu ms, the GPU's wait let through", CommandName(pendingCommand),
-                            value, TimeoutMs);
-                    bridge->SignalFromCpu(value);
-                }
-                value = 0;
-            }
-        }
-
-        void Arm(uint64_t outputValue)
-        {
-            static std::once_flag started;
-            std::call_once(started, [] { std::thread(Run).detach(); });
-            std::lock_guard lock(mutex);
-            value = outputValue;
-            deadline = GetTickCount64() + TimeoutMs;
         }
     }
 
