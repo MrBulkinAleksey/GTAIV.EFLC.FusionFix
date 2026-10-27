@@ -129,10 +129,29 @@ namespace GpuGrass
 
     struct Instance { float corner[4]; float edge1[4]; float edge2[4]; float kinds[4]; };
 
-    // Main thread: the manager's triangles by their record
+    // The manager's triangles by their record, under groundMutex. The main thread only notes each one added or let go
+    // (groundEvents); the render thread puts them into `ground` when it makes the pieces, or the main thread itself
+    // once kGroundEventsMax wait (GPU grass off: nobody takes them). Each one into the map at once cost the main thread
+    // 3% (profile at Firefly Island, 2026-10-28)
     std::mutex groundMutex;
     std::unordered_map<const void*, ProceduralGround::Triangle> ground;
+    struct GroundEvent { const void* key; bool added; ProceduralGround::Triangle triangle; };
+    std::vector<GroundEvent> groundEvents;
+    constexpr size_t kGroundEventsMax = 32768;
     uint32_t groundVersion = 0;
+
+    // groundMutex held
+    void ApplyGroundEvents()
+    {
+        for (const auto& e : groundEvents)
+        {
+            if (e.added)
+                ground[e.key] = e.triangle;
+            else
+                ground.erase(e.key);
+        }
+        groundEvents.clear();
+    }
 
     // Settings
     bool bLog = false;
@@ -149,6 +168,12 @@ namespace GpuGrass
     struct Look { float share; float kinds[4]; float tag; };
     struct Piece { float corner[3], edge1[3], edge2[3]; float centre[3]; float radius; float share; float seed; Look look; };
     std::vector<Piece> pieces;
+    // The pieces by kCullCell cells of the world (MakePieces sorts them so): each cell's sphere round its pieces and
+    // their range, so the frame's test leaves out whole cells beyond the range or out of view before their pieces (tens
+    // of thousands, each tested every frame before)
+    constexpr float kCullCell = 16.0f;
+    struct Cell { float centre[3]; float radius; uint32_t first, count; };
+    std::vector<Cell> cells;
     uint32_t piecesVersion = ~0u;
     uint32_t piecesCoversVersion = ~0u;
     std::array<float, 256> tagShare{};
@@ -496,9 +521,43 @@ namespace GpuGrass
         std::vector<ProceduralGround::Cover> covers;
         float camera[3] = {};
         std::vector<Piece> pieces;
+        std::vector<Cell> cells;
         std::vector<float> edgeField;
         float edgeOrigin[2] = {};
     };
+
+    // build.pieces sorted by their kCullCell cell, and the cells round them
+    void MakeCells(Build& build)
+    {
+        auto& list = build.pieces;
+        const auto cellOf = [](const Piece& p)
+        {
+            return uint64_t(uint32_t(int32_t(std::floor(p.centre[0] / kCullCell)))) << 32 | uint32_t(int32_t(std::floor(p.centre[1] / kCullCell)));
+        };
+        std::sort(list.begin(), list.end(), [&](const Piece& a, const Piece& b) { return cellOf(a) < cellOf(b); });
+        build.cells.clear();
+        for (size_t first = 0; first < list.size();)
+        {
+            const uint64_t key = cellOf(list[first]);
+            size_t end = first;
+            float low[3] = { 1e30f, 1e30f, 1e30f }, high[3] = { -1e30f, -1e30f, -1e30f };
+            for (; end < list.size() && cellOf(list[end]) == key; ++end)
+                for (int k = 0; k < 3; ++k)
+                {
+                    low[k] = std::min(low[k], list[end].centre[k]);
+                    high[k] = std::max(high[k], list[end].centre[k]);
+                }
+            Cell cell{ { (low[0] + high[0]) * 0.5f, (low[1] + high[1]) * 0.5f, (low[2] + high[2]) * 0.5f }, 0.0f, uint32_t(first), uint32_t(end - first) };
+            for (size_t i = first; i < end; ++i)
+            {
+                const auto& c = list[i].centre;
+                const float dx = c[0] - cell.centre[0], dy = c[1] - cell.centre[1], dz = c[2] - cell.centre[2];
+                cell.radius = std::max(cell.radius, std::sqrt(dx * dx + dy * dy + dz * dz) + list[i].radius);
+            }
+            build.cells.push_back(cell);
+            first = end;
+        }
+    }
 
     // The pieces of `build.grassy` and the edge field round `build.camera`
     void MakePieces(Build& build)
@@ -604,6 +663,7 @@ namespace GpuGrass
             }
         build.edgeOrigin[0] = originX;
         build.edgeOrigin[1] = originY;
+        MakeCells(build);
     }
 
     // The builder's thread: one Build at a time, handed over and taken back under its mutex
@@ -638,6 +698,7 @@ namespace GpuGrass
         if (busy && done)
         {
             pieces.swap(build.pieces);
+            cells.swap(build.cells);
             edgeField.swap(build.edgeField);
             edgeOrigin[0] = build.edgeOrigin[0];
             edgeOrigin[1] = build.edgeOrigin[1];
@@ -650,6 +711,7 @@ namespace GpuGrass
             return;
         {
             std::lock_guard groundLock(groundMutex);
+            ApplyGroundEvents();
             const uint32_t coversVersion = ProceduralGround::CoversVersion();
             if (piecesVersion == groundVersion && piecesCoversVersion == coversVersion)
                 return;
@@ -1239,7 +1301,7 @@ export namespace GpuGrass
             size_t held;
             {
                 std::lock_guard lock(groundMutex);
-                held = ground.size();
+                held = ground.size() + groundEvents.size();
             }
             FusionLog::Write("GpuGrass", "Stats", "%zu triangles held, %zu grassy, %zu pieces; per frame: %.0f pieces drawn, %.0f cards, CPU %.3f ms; last: %s\n",
                 held, logGrassTriangles, pieces.size(), double(logInstances) / logFrames, double(logBlades) / logFrames, logCpuMs / logFrames, status);
@@ -1296,26 +1358,39 @@ export namespace GpuGrass
             return void(status = "instance buffer lock failed");
         int count = 0;
         double blades = 0.0;
-        for (const auto& p : pieces)
+        // Within the range and in view, a sphere round `centre`
+        const auto seen = [&](const float* centre, float radius, float& distance)
         {
-            const float dx = p.centre[0] - eye[0], dy = p.centre[1] - eye[1], dz = p.centre[2] - eye[2];
-            const float distance = std::sqrt(dx * dx + dy * dy + dz * dz) - p.radius;
+            const float dx = centre[0] - eye[0], dy = centre[1] - eye[1], dz = centre[2] - eye[2];
+            distance = std::sqrt(dx * dx + dy * dy + dz * dz) - radius;
             if (distance > fRange)
+                return false;
+            for (int i = 0; i < 5; ++i)
+                if (planes[i][0] * centre[0] + planes[i][1] * centre[1] + planes[i][2] * centre[2] + planes[i][3] < -radius * planeLength[i])
+                    return false;
+            return true;
+        };
+        for (size_t c = 0; c < cells.size() && count < kMaxInstances; ++c)
+        {
+            float cellDistance;
+            if (!seen(cells[c].centre, cells[c].radius, cellDistance))
                 continue;
-            bool inside = true;
-            for (int i = 0; i < 5 && inside; ++i)
-                inside = planes[i][0] * p.centre[0] + planes[i][1] * p.centre[1] + planes[i][2] * p.centre[2] + planes[i][3] >= -p.radius * planeLength[i];
-            if (!inside)
-                continue;
-            const float share = p.share * fDensity * BladeShare(distance);
-            if (share * meshPlaces < 0.5f)
-                continue;
-            const auto& k = p.look.kinds;
-            out[count] = { { p.corner[0], p.corner[1], p.corner[2], p.seed }, { p.edge1[0], p.edge1[1], p.edge1[2], share },
-                           { p.edge2[0], p.edge2[1], p.edge2[2], p.look.tag }, { k[0], k[1], RiseScale(distance, p.share * fDensity), k[3] } };
-            blades += share * meshQuads;
-            if (++count >= kMaxInstances)
-                break;
+            for (uint32_t i = cells[c].first, end = cells[c].first + cells[c].count; i < end; ++i)
+            {
+                const auto& p = pieces[i];
+                float distance;
+                if (!seen(p.centre, p.radius, distance))
+                    continue;
+                const float share = p.share * fDensity * BladeShare(distance);
+                if (share * meshPlaces < 0.5f)
+                    continue;
+                const auto& k = p.look.kinds;
+                out[count] = { { p.corner[0], p.corner[1], p.corner[2], p.seed }, { p.edge1[0], p.edge1[1], p.edge1[2], share },
+                               { p.edge2[0], p.edge2[1], p.edge2[2], p.look.tag }, { k[0], k[1], RiseScale(distance, p.share * fDensity), k[3] } };
+                blades += share * meshQuads;
+                if (++count >= kMaxInstances)
+                    break;
+            }
         }
         instanceVB->Unlock();
         if (bLog)
@@ -1571,8 +1646,10 @@ public:
         ProceduralGround::OnAdded = [](const void* key, const ProceduralGround::Triangle& triangle)
         {
             std::lock_guard lock(GpuGrass::groundMutex);
-            GpuGrass::ground[key] = triangle;
+            GpuGrass::groundEvents.push_back({ key, true, triangle });
             ++GpuGrass::groundVersion;
+            if (GpuGrass::groundEvents.size() >= GpuGrass::kGroundEventsMax)
+                GpuGrass::ApplyGroundEvents();
         };
         ProceduralGround::GatherGrassSurfaces = true;
         ProceduralGround::HideGrass = [](uint16_t model, float distance, float keep)
@@ -1587,8 +1664,10 @@ public:
         ProceduralGround::OnRemoved = [](const void* key)
         {
             std::lock_guard lock(GpuGrass::groundMutex);
-            if (GpuGrass::ground.erase(key))
-                ++GpuGrass::groundVersion;
+            GpuGrass::groundEvents.push_back({ key, false, {} });
+            ++GpuGrass::groundVersion;
+            if (GpuGrass::groundEvents.size() >= GpuGrass::kGroundEventsMax)
+                GpuGrass::ApplyGroundEvents();
         };
     }
 } GpuGrassInit;
