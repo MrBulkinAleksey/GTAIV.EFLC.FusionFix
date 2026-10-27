@@ -33,7 +33,9 @@ import vtablepatch;
 // ground (procedural props, GrassShared::GrassKind) further than kFromDistance from the camera are drawn in the scene's
 // G-buffer pass with one instanced draw per model instead of one draw command each. Thousands of them 50-200 m out
 // took 2.5-3.5 ms of CPU a frame, which is why ProceduralSmallFarCull thinned them past 60 m; the models drawn here are
-// left out of that thinning (ProceduralGround::DrawnInstanced).
+// left out of that thinning (ProceduralGround::DrawnInstanced). FarPropInstancing = 2 (the default) takes the rest of
+// procedural.dat's PROCOBJ models too, the litter, rocks and rubble, but not those whose record has +0x37 set (they
+// float on water); 1 the plants only, 0 none.
 //
 // The game's draw command for them, CDrawEntityDC, keeps the entity's place as a quaternion (+0x10, x y z w) and a
 // position (+0x20); its execute (CE 0x8dcbf0) makes the matrix from them (0x6708d0, rows at +0, +0x10, +0x20) and has
@@ -53,7 +55,9 @@ import vtablepatch;
 // command of 0x60 bytes holding that matrix instead (CE 0x8dae60, CEntity's add 0xa2fe70) and is drawn as before.
 // A model whose draw cannot be instanced (a shader the copy cannot be made of, more than one vertex stream, a draw that
 // is not indexed) is drawn the game's way from then on; for that frame the copies are executed one by one, as they are
-// when the sample drew nothing. The drawable draws its highest detail for the sample, as the execute always asks.
+// when the sample drew nothing. The drawable draws its highest detail for the sample, as the execute always asks: its
+// draw (the wrapper at CE 0x6a1d10 -> 0x6a4320) reads that detail's mesh list at drawable +0x40 without a check, and a
+// few props have none there (CJ_PROC_BRICK8-10), so for those the copies are executed one by one as well.
 //
 // FarPropInstancingLog = 1 ([DEBUG]): every 600 passes, the instances, groups, instanced draws and copies executed
 // one by one per pass, and the models given up on, to GTAIV.EFLC.FusionFix.FarPropInstancing.log.
@@ -72,6 +76,8 @@ class FarPropInstancing
     struct Batch { UINT count = 0; UINT offset = 0; int draws = 0; bool failed = false; };
 
     static inline bool bEnabled = true;
+    static inline bool bProps = true;
+    static inline volatile bool bStatesStale = false;  // FarPropInstancing's mode changed: models looked at again
     static inline bool bLog = false;
 
     // Render thread
@@ -89,6 +95,8 @@ class FarPropInstancing
     // By model: 0 not looked at, 1 drawn instanced, 2 not a candidate, 3 given up on. Written on the render thread, read
     // on the game thread (DrawnInstanced)
     static inline volatile uint8_t modelState[0x10000] = {};
+    static inline bool modelIsProp[0x10000] = {};       // a PROCOBJ model that is not a plant
+    static inline std::vector<bool> procObjModels;      // PROCOBJ models instanced as props, made once the records are in
     static inline uint8_t modelMisses[0x10000] = {};
     // By model, a bit per bucket (+0x35, 0-7): its commands there draw nothing, the game's own executes neither (the
     // game adds an entity to the lists of several buckets, a weed has meshes in one). Dropped then, looked at again
@@ -112,12 +120,38 @@ class FarPropInstancing
     // FarPropInstancingLog
     static inline uint32_t logPasses = 0;
     static inline uint64_t logInstances = 0, logGroups = 0, logDraws = 0, logOneByOne = 0, logCapped = 0, logEmptyDropped = 0;
+    static inline uint64_t logPropInstances = 0, logNoMeshList = 0;
     static inline uint32_t logShadersMade = 0, logShadersFailed = 0;
 
     static void ReadIni(CIniReader& iniReader)
     {
-        bEnabled = iniReader.ReadInteger("PERFORMANCE", "FarPropInstancing", 1) != 0;
+        const int mode = std::clamp(iniReader.ReadInteger("PERFORMANCE", "FarPropInstancing", 2), 0, 2);
+        if (bEnabled != (mode != 0) || bProps != (mode == 2))
+            bStatesStale = true;
+        bEnabled = mode != 0;
+        bProps = mode == 2;
         bLog = iniReader.ReadInteger("DEBUG", "FarPropInstancingLog", 0) != 0;
+    }
+
+    // The PROCOBJ models taken as props, false until procedural.dat's records are in
+    static bool ProcObjProp(uint16_t model)
+    {
+        if (procObjModels.empty())
+        {
+            const uint8_t* defs = ProceduralGround::Definitions();
+            if (!defs)
+                return false;
+            procObjModels.assign(0x10000, false);
+            const uint32_t count = *reinterpret_cast<const uint32_t*>(defs + 4);
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const uint8_t* record = defs + 8 + size_t(i) * 0x44;
+                const int32_t index = *reinterpret_cast<const int32_t*>(record + 4);
+                if (index >= 0 && index <= 0xFFFF && record[0x37] == 0)
+                    procObjModels[index] = true;
+            }
+        }
+        return procObjModels[model];
     }
 
     static bool Candidate(uint16_t model)
@@ -128,10 +162,29 @@ class FarPropInstancing
             const auto info = EntityClass::ModelInfo(model);
             if (!info)
                 return false;
-            state = GrassShared::GrassKind(*reinterpret_cast<const uint32_t*>(info + 0x3c)) != 0 ? uint8_t(1) : uint8_t(2);
+            const bool plant = GrassShared::GrassKind(*reinterpret_cast<const uint32_t*>(info + 0x3c)) != 0;
+            const bool prop = !plant && bProps && ProcObjProp(model);
+            if (!plant && !prop && bProps && procObjModels.empty())
+                return false;   // not looked at until the records are in
+            state = plant || prop ? uint8_t(1) : uint8_t(2);
+            modelIsProp[model] = prop;
             modelState[model] = state;
         }
         return state == 1;
+    }
+
+    // The sample's draw reads the highest detail's mesh list (drawable +0x40) unchecked in the game's drawable draw
+    static bool HasMeshList(uint16_t model)
+    {
+        static constexpr uint8_t kDrawWrapper[7] = { 0xFF, 0x74, 0x24, 0x10, 0x83, 0xC1, 0x10 };    // CE 0x6a1d10
+        const auto drawable = EntityClass::ModelDrawable(model);
+        if (!drawable)
+            return false;
+        const auto vtable = *reinterpret_cast<const uintptr_t*>(drawable);
+        const auto draw = vtable ? *reinterpret_cast<const uint8_t* const*>(vtable + 0x20) : nullptr;
+        if (!draw || std::memcmp(draw, kDrawWrapper, sizeof(kDrawWrapper)) != 0)
+            return true;    // another drawable class: nothing known to check
+        return *reinterpret_cast<const uintptr_t*>(drawable + 0x40) != 0;
     }
 
     static void GiveUp(uint16_t model, const char* why)
@@ -665,7 +718,15 @@ class FarPropInstancing
             const uint16_t model = uint16_t(key & 0xFFFF);
             const uint8_t bucket = uint8_t(key >> 40), bucketBit = bucket < 8 ? uint8_t(1u << bucket) : uint8_t(0);
             logInstances += items.size();
+            if (modelIsProp[model])
+                logPropInstances += items.size();
             logGroups++;
+            if (ready && modelState[model] == 1 && !HasMeshList(model))
+            {
+                logNoMeshList += items.size();
+                ExecuteOneByOne(items);
+                continue;
+            }
             if (!ready || modelState[model] != 1 || !Upload(device, items, origin))
             {
                 ExecuteOneByOne(items);
@@ -716,18 +777,25 @@ class FarPropInstancing
             for (auto state : modelState)
                 givenUp += state == 3;
             const double n = double(logPasses);
-            FusionLog::Write("FarPropInstancing", "Stats", "%u passes; per pass: %.0f instances in %.1f groups, %.1f instanced draws, %.1f "
-                "copies executed one by one, %.1f dropped (a bucket the model draws nothing in), %.1f left to the game (store full); "
-                "shader copies made %u, failed %u; models given up on %u\n",
-                logPasses, logInstances / n, logGroups / n, logDraws / n, logOneByOne / n, logEmptyDropped / n, logCapped / n,
-                logShadersMade, logShadersFailed, givenUp);
+            FusionLog::Write("FarPropInstancing", "Stats", "%u passes; per pass: %.0f instances (%.0f of them props) in %.1f groups, "
+                "%.1f instanced draws, %.1f copies executed one by one (%.1f of models without a mesh list), %.1f dropped (a bucket "
+                "the model draws nothing in), %.1f left to the game (store full); shader copies made %u, failed %u; models given up on %u\n",
+                logPasses, logInstances / n, logPropInstances / n, logGroups / n, logDraws / n, logOneByOne / n, logNoMeshList / n,
+                logEmptyDropped / n, logCapped / n, logShadersMade, logShadersFailed, givenUp);
             logPasses = 0;
-            logInstances = logGroups = logDraws = logOneByOne = logCapped = logEmptyDropped = 0;
+            logInstances = logGroups = logDraws = logOneByOne = logCapped = logEmptyDropped = logPropInstances = logNoMeshList = 0;
         }
     }
 
     static void BeginScene()
     {
+        if (bStatesStale)
+        {
+            bStatesStale = false;
+            for (auto& state : modelState)
+                if (state != 3)
+                    state = 0;
+        }
         bInScene = bEnabled;
         groups.clear();
         copies.clear();
