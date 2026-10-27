@@ -59,7 +59,7 @@ using namespace PostFxProfiler;
 // grass between them (kPlantGroundShare). Lawns of the grassy
 // materials (GRASS, SHORT_GRASS, GRASS_PATCHY, GRASS_LONG) whose tag has no props, which the manager gathers for us (GatherGrassSurfaces), grow grass of their own
 // (LookOf). The triangles are cut into pieces of at most kPieceArea square metres
-// when the set changes; each frame the pieces in view within the range take a share of the mesh's kCards cards
+// when the set changes; each frame the pieces in view within the range take a share of the mesh's clumps (GpuGrassClumps)
 // (BladeShare: all up to kDenseRange, half at GpuGrassFullRange, where far cards are fewer and wider, none at
 // GpuGrassRange), and go to the instance buffer: one instanced draw for them all.
 // The blades take a little of their colour from the ground under them: _DEFERRED_GBUFFER_0_ is copied first (into Wet Ground's
@@ -86,14 +86,15 @@ using namespace PostFxProfiler;
 // Their colours: hidden [PROCEDURAL] GpuGrassGreen, GpuGrassTip, GpuGrassDry ("r, g, b", 0..1, live): the greenest
 // patches, the tips, dry blades and patches.
 //
-// [PROCEDURAL] GpuGrassCards (live): 0 flat cards, kCards of them; 1 crossed, a card and one turned a quarter at the same
-// root, half as many (as many quads, the same cost); 2 crossed, kCards of them (twice the quads).
+// [PROCEDURAL] GpuGrassClumps (live, 8..160, kCards by default): clumps per piece of ground (a piece is up to kPieceArea
+// square metres); GpuGrassCrossed (live): 0 each clump a flat card, 1 a cross of two cards, the second turned a quarter at
+// the same root (twice the quads of flat ones: 40 crosses cost what 80 cards do).
 // [PROCEDURAL] GpuGrassRange (100 m; the manager gathers ground that far ahead, less behind: ProceduralGround::GatherAhead), GpuGrassFullRange (22 m), GpuGrassDensity (0.1..1). GpuGrassDebug (Graphics >
 // Debug) colours the blades by their surface's tag. GpuGrassLog = 1 ([DEBUG]) writes the triangles, pieces and blades
 // to GTAIV.EFLC.FusionFix.GpuGrass.log every 600 frames.
 namespace GpuGrass
 {
-    constexpr int kCards = 80;              // per piece of ground (GpuGrassCards 0 and 2; 1: half as many crosses)
+    constexpr int kCards = 80;              // clumps per piece of ground, GpuGrassClumps' default
     constexpr int kVertsPerCard = 6;        // three pairs up the card
     constexpr int kIndicesPerCard = 12;     // four triangles
     constexpr float kPieceArea = 1.5f;      // square metres: up to 53 cards, some 1300 blades a square metre
@@ -136,7 +137,8 @@ namespace GpuGrass
     // Settings
     bool bLog = false;
     bool bHideProps = true;
-    int nCards = 0;                         // GpuGrassCards
+    int nClumps = kCards;                   // GpuGrassClumps
+    bool bCrossed = false;                  // GpuGrassCrossed
     float fRange = 100.0f, fFullRange = 22.0f, fDensity = 1.0f;
     float fGroundTint = 0.5f;
     float green[3] = { 0.30f, 0.38f, 0.11f }, tip[3] = { 0.62f, 0.60f, 0.26f }, dry[3] = { 0.46f, 0.39f, 0.20f };
@@ -162,9 +164,9 @@ namespace GpuGrass
     bool effectTried = false;
     IDirect3DVertexBuffer9* meshVB = nullptr;
     IDirect3DIndexBuffer9* meshIB = nullptr;
-    int meshCards = -1;                     // the GpuGrassCards the mesh was made for
+    int meshKey = -1;                       // the GpuGrassClumps and GpuGrassCrossed the mesh was made for
     int meshQuads = kCards;                 // quads in the mesh
-    int meshPlaces = kCards;                // places on a piece, a card or a cross each: what a piece's share counts
+    int meshPlaces = kCards;                // clumps on a piece, a card or a cross each: what a piece's share counts
     IDirect3DVertexBuffer9* instanceVB = nullptr;
     IDirect3DVertexDeclaration9* declaration = nullptr;
     IDirect3DTexture9* cardTexture = nullptr;
@@ -227,7 +229,8 @@ namespace GpuGrass
         fRange = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassRange", 100.0f), 5.0f, 150.0f);
         fFullRange = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassFullRange", 22.0f), 0.0f, fRange - 1.0f);
         bHideProps = iniReader.ReadInteger("PROCEDURAL", "GpuGrassHideProps", 1) != 0;
-        nCards = std::clamp(iniReader.ReadInteger("PROCEDURAL", "GpuGrassCards", 0), 0, 2);
+        nClumps = std::clamp(iniReader.ReadInteger("PROCEDURAL", "GpuGrassClumps", kCards), 8, 160);
+        bCrossed = iniReader.ReadInteger("PROCEDURAL", "GpuGrassCrossed", 0) != 0;
         fDensity = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassDensity", 1.0f), 0.1f, 1.0f);
         fGroundTint = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassGroundTint", 0.5f), 0.0f, 1.0f);
         bLog = iniReader.ReadInteger("DEBUG", "GpuGrassLog", 0) != 0;
@@ -957,14 +960,14 @@ namespace GpuGrass
             if (FAILED(real->CreateVertexDeclaration(elements, &declaration)))
                 return false;
         }
-        // GpuGrassCards changed (live): the mesh made again
-        if (meshCards != nCards)
+        // GpuGrassClumps or GpuGrassCrossed changed (live): the mesh made again
+        if (const int key = nClumps * 2 + (bCrossed ? 1 : 0); meshKey != key)
         {
             SAFE_RELEASE(meshVB);
             SAFE_RELEASE(meshIB);
-            meshCards = nCards;
-            meshPlaces = nCards == 1 ? kCards / 2 : kCards;
-            meshQuads = nCards == 0 ? kCards : meshPlaces * 2;
+            meshKey = key;
+            meshPlaces = nClumps;
+            meshQuads = nClumps * (bCrossed ? 2 : 1);
         }
         if (!meshVB)
         {
