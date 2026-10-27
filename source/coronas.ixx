@@ -247,6 +247,52 @@ namespace CoronaRender
     // True while the pass is one RenderSkip leaves out (its target never locked, its draws dropped): the water's
     // reflection while no water is seen still called this every frame, 14000 quads built for nothing (renderskip.ixx)
     export bool (*pPassDropped)() = nullptr;
+    // The occlusion grid's first level, for the game camera's pass to test its coronas against in the same loop as the
+    // view cone (occlusion.ixx fills it at the pass's start and holds the grid until its end): a corona whose quad lies
+    // wholly behind the world gets none built, its vertex shader hid it behind the depth anyway. A second loop over the
+    // list for it cost 2.3% of the render thread against the 3.7% the quads it left out had cost
+    export struct HiZPoints
+    {
+        const float* viewProjection = nullptr; // rows, clip = [x y z 1] * M, the camera the grid was drawn with
+        const float* depth = nullptr;          // the farthest view depth (metres) of each texel, rows width apart
+        int width = 0, height = 0;
+        float scaleU = 0.0f, scaleV = 0.0f;    // texels a width / height of the screen takes
+        float texelsPerMetreU = 0.0f, texelsPerMetreV = 0.0f; // texels a metre across the view takes at w = 1
+        float wLength = 1.0f, nearPlane = 0.0f;
+        float grow = 0.0f;                     // metres the camera moved since the grid was drawn
+        bool cull = false;                     // false: counted only
+    };
+    export bool (*pHiZBegin)(HiZPoints& points) = nullptr;
+    export void (*pHiZEnd)(uint32_t tested, uint32_t hidden) = nullptr;
+
+    // A ball (the quad's, moved toward the camera by toward) of a texel or two of the grid, inside its screen, behind
+    // the farthest depth of each; larger, at the screen's edge or too near: not hidden
+    bool BehindWorld(const HiZPoints& h, const float* pos, float radius, float toward)
+    {
+        const float* m = h.viewProjection;
+        const float r = radius + h.grow;
+        const float w = pos[0] * m[3] + pos[1] * m[7] + pos[2] * m[11] + m[15];
+        const float nearest = w - (r + toward) * h.wLength;
+        if (!(nearest > h.nearPlane * 2.0f))
+            return false;
+        const float inverse = 1.0f / w;
+        const float x = pos[0] * m[0] + pos[1] * m[4] + pos[2] * m[8] + m[12];
+        const float y = pos[0] * m[1] + pos[1] * m[5] + pos[2] * m[9] + m[13];
+        const float cx = (x * inverse * 0.5f + 0.5f) * h.scaleU, cy = (0.5f - y * inverse * 0.5f) * h.scaleV;
+        const float ex = r * h.texelsPerMetreU * inverse, ey = r * h.texelsPerMetreV * inverse;
+        if (!(ex < 1.5f && ey < 1.5f && cx - ex >= 0.0f && cy - ey >= 0.0f && cx + ex < h.scaleU && cy + ey < h.scaleV))
+            return false;
+        const int tx0 = int(cx - ex), tx1 = std::min(int(cx + ex), h.width - 1);
+        const int ty0 = int(cy - ey), ty1 = std::min(int(cy + ey), h.height - 1);
+        for (int ty = ty0; ty <= ty1; ++ty)
+        {
+            const float* row = h.depth + size_t(ty) * h.width;
+            for (int tx = tx0; tx <= tx1; ++tx)
+                if (row[tx] >= nearest)
+                    return false;
+        }
+        return true;
+    }
 
     int32_t nMode = 1;                      // 0: the game's, 1: ours without what is out of view, 2: ours, all of them
     float* pCamera = nullptr;               // CE 0x128e340, the game camera's position, where it looks 8 floats before
@@ -455,6 +501,10 @@ namespace CoronaRender
                 frustum = planes;
         }
 
+        HiZPoints hiZ;
+        const bool testHiZ = skipBehind && pHiZBegin && pHiZBegin(hiZ);
+        uint32_t hiZTested = 0, hiZHidden = 0;
+
         static std::vector<uint32_t> drawn;
         drawn.clear();
         for (int32_t i = first; i < count; i++)
@@ -482,6 +532,16 @@ namespace CoronaRender
                     float margin = 1.5f * size + 0.5f + ahead * coneSin;
                     if (margin < 0.0f || lateralSquared * coneCos * coneCos > margin * margin)
                         continue;
+                }
+                if (testHiZ)
+                {
+                    ++hiZTested;
+                    if (BehindWorld(hiZ, pos, 1.5f * size + 0.5f, std::fabs(*(const float*)(item + 0x14))))
+                    {
+                        ++hiZHidden;
+                        if (hiZ.cull)
+                            continue;
+                    }
                 }
             }
             else if (frustum)
@@ -521,6 +581,8 @@ namespace CoronaRender
             }
             drawn.push_back(uint32_t(i));
         }
+        if (testHiZ && pHiZEnd)
+            pHiZEnd(hiZTested, hiZHidden);
         if (bOtherView)
         {
             nOtherListed += uint32_t(count - first);

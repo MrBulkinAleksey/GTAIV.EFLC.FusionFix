@@ -918,7 +918,7 @@ public:
     bool bVehicleBoxShadowsBlend = true; // VehicleBoxShadowsBlend, read with the others
     uint32_t nVehicleBoxShadowSlotFadeMs = 600;
     uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300, nVehicleBoxShadowSizeFadeMs = 300;
-    float fVehicleBoxShadowsMaxDistance = 60.0f; // metres from the camera to a lamp's light past which it has no boxes
+    float fVehicleBoxShadowsMaxDistance = 200.0f; // metres from the camera to a lamp's light past which it has no boxes
     int32_t nVehicleBoxShadowsPerLamp = 3; // cars a lamp shadows as boxes, up to five; each costs its lit pixels about as much again
     int32_t nVehicleBoxShadowsPerCar = 2;  // lamps that may shadow one car as a box, the strongest on it; 0 any number
     float fVehicleBoxShadowsMinLight = 0.04f; // the least share of a lamp's light at the car, (1 - distance / radius)^2, for a box
@@ -959,6 +959,8 @@ public:
     // lights near them, up to PropShapesPerLight shapes a light (see VehicleBoxShadows); a lamp post's post is
     // PropShapePostRadius thick, its arm PropShapeArmRadius
     bool bPropShapeShadows = true;
+    // PropsInLampCaches (nightshadows): a cached lamp's map holds the props it lights, so they take no shapes from it
+    bool bPropsInLampCaches = true;
     float fPropShapeDistance = 80.0f, fPropShapePostRadius = 0.12f, fPropShapeArmRadius = 0.08f;
     float fPropShapeScale = 0.85f; // of the bounds across, for a capsule's radius and a box's length and width
     bool bPropShapeViewCulling = true; // props whose shadow cannot fall in the camera's view take no shapes
@@ -2036,6 +2038,7 @@ public:
             IniFlag("PERFORMANCE", "LightEarlyOut", &PostFxResource::bLightEarlyOut, 1),
             IniFlag("PERFORMANCE", "LightVolumeDepth", &PostFxResource::bLightVolumeDepth, 1),
             IniFlag("NIGHTSHADOWS", "PropShapeShadows", &PostFxResource::bPropShapeShadows, 1),
+            IniFlag("NIGHTSHADOWS", "PropsInLampCaches", &PostFxResource::bPropsInLampCaches, 1),
             IniFloat("NIGHTSHADOWS", "PropShapeDistance", &PostFxResource::fPropShapeDistance, 80.0f, 10.0f, 200.0f),
             IniFloat("NIGHTSHADOWS", "PropShapePostRadius", &PostFxResource::fPropShapePostRadius, 0.12f, 0.03f, 0.5f),
             IniFloat("NIGHTSHADOWS", "PropShapeArmRadius", &PostFxResource::fPropShapeArmRadius, 0.08f, 0.02f, 0.5f),
@@ -2045,7 +2048,7 @@ public:
             IniInt("NIGHTSHADOWS", "VehicleBoxShadowsPerLamp", &PostFxResource::nVehicleBoxShadowsPerLamp, 3, 1, 5),
             IniInt("NIGHTSHADOWS", "VehicleBoxShadowsPerCar", &PostFxResource::nVehicleBoxShadowsPerCar, 2, 0, 8),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsMinLight", &PostFxResource::fVehicleBoxShadowsMinLight, 0.04f, 0.0f, 1.0f),
-            IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsMaxDistance", &PostFxResource::fVehicleBoxShadowsMaxDistance, 60.0f, 0.0f, 1000.0f),
+            IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsMaxDistance", &PostFxResource::fVehicleBoxShadowsMaxDistance, 200.0f, 0.0f, 1000.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsFollowLight", &PostFxResource::fVehicleBoxShadowFollowLight, 1.0f, 0.0f, 1.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsLowLightNarrow", &PostFxResource::fVehicleBoxShadowLowLightNarrow, 1.0f, 0.2f, 1.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsLowLightHeight", &PostFxResource::fVehicleBoxShadowLowLightHeight, 0.6f, 0.2f, 1.0f),

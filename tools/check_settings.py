@@ -33,7 +33,7 @@ idLiteral = re.compile(r'"([A-Z][A-Za-z0-9_]*\.[A-Za-z][A-Za-z0-9_]*)"')
 reads = {}      # id -> list of (file:line, kind, code default)
 mentioned = set()
 for path in sorted((root / 'source').rglob('*')):
-    if path.suffix not in ('.ixx', '.cpp', '.hpp', '.h', '.hxx'):
+    if path.suffix not in ('.ixx', '.cpp', '.hpp', '.h', '.hxx', '.inl'):
         continue
     text = path.read_text(encoding='utf-8', errors='replace')
     rel = path.relative_to(root)

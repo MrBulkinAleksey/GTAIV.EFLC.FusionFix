@@ -2752,7 +2752,7 @@ public:
             for (auto id : { "REFLECTIONS.SSR", "LIGHTING.IndirectLight", "LIGHTING.ContactShadows", "LIGHTING.SkinScattering",
                              "LIGHTING.VolumetricLight", "SUNSHAFTS.SunFlare", "MISC.CarMirrors", "WEATHER.VolumetricClouds", "WEATHER.PbrSky",
                              "WEATHER.AerialPerspective", "LIGHTING.GGX", "WEATHER.WetWeather", "WEATHER.CarRaindrops",
-                             "NIGHTSHADOWS.VehicleBoxShadows", "NIGHTSHADOWS.WorldLightShadows", "PROCEDURAL.GpuGrass" })
+                             "NIGHTSHADOWS.VehicleBoxShadows", "PROCEDURAL.GpuGrass" })
                 AddSetting(lighting, id);
             AddEmptyLine(lighting);
             AddSetting(lighting, "NIGHTSHADOWS.HeadlightReach");

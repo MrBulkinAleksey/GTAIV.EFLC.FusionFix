@@ -53,8 +53,8 @@ namespace EmergencyTrafficShadows
         const auto* lights = CurrentLights(); const auto count = CurrentCount();
         if (count > 4096 || (count && reinterpret_cast<uintptr_t>(lights) < 0x10000)) return false;
         for (uint32_t i = 0; i < count; ++i) if (static_cast<uint32_t>(lights[i].mCastShadows) == key) return false;
-        for (unsigned i = 0; i < 8; ++i)
-            if (*reinterpret_cast<const uint32_t*>(game + allocation::CacheAge0Rva + i * 0x100 + 4) == key) return false;
+        for (unsigned i = 0; i < fusionfix::shadows::cacheEntries; ++i)
+            if (*reinterpret_cast<const uint32_t*>(fusionfix::shadows::CacheRecord(game, i) + 0xE0) == key) return false;
         for (unsigned i = 0; i < 7; ++i)
             if (*reinterpret_cast<const uint32_t*>(game + allocation::DynamicPassFirstPositionRva + i * 0x110 + 0x30) == key) return false;
         return true;
@@ -369,6 +369,17 @@ namespace EmergencyTrafficShadows
                 if (age >= 0x80000000u) { Retire(index, traffic_signal::End::Clock); continue; }
                 if (age > 2 && registry.Suspend(index)) snapshots[index].state = 0;
             }
+        }
+
+        // LampsSkipOwnObject for a signal: its light's key is a reserved one, not its object's address plus an
+        // offset, so PropCaches::OwnObject never knew it and the signal's pole and heads went into its own map.
+        static bool OwnSignal(uintptr_t entity) noexcept
+        {
+            const auto index = KeyIndex(PropCaches::scopeKey);
+            if (index == UINT32_MAX || snapshots[index].state.load(std::memory_order_acquire) == 2 ||
+                snapshots[index].owner.load(std::memory_order_acquire) != static_cast<uint32_t>(entity)) return false;
+            ++PropCaches::ownSkipped;
+            return true;
         }
     }
 

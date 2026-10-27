@@ -958,8 +958,8 @@
     },
     {
       "id": "NIGHTSHADOWS.WorldLightShadows", "type": "bool", "default": 1,
-      "label": "@WorldLightShad",
-      "page": "lighting", "control": [ "switch", "cycler" ]
+      "label": "@NIGHTSHADOWS.WorldLightShadows", "description": "@NIGHTSHADOWS.WorldLightShadows.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
     },
     {
       "id": "NIGHTSHADOWS.BuildingShadows", "type": "bool", "default": 1,
@@ -1152,7 +1152,7 @@
       "page": "advanced", "group": "@group.performance", "visibility": "file"
     },
     {
-      "id": "PERFORMANCE.FarPropInstancing", "type": "bool", "default": 1,
+      "id": "PERFORMANCE.FarPropInstancing", "type": "int", "default": 2, "min": 0, "max": 2,
       "label": "@PERFORMANCE.FarPropInstancing", "description": "@PERFORMANCE.FarPropInstancing.description",
       "page": "advanced", "group": "@group.performance", "visibility": "file"
     },
@@ -1382,6 +1382,11 @@
       "page": "advanced", "group": "@group.performance", "visibility": "file"
     },
     {
+      "id": "PERFORMANCE.CoronasOcclusion", "type": "int", "default": 1, "min": 0, "max": 2,
+      "label": "@PERFORMANCE.CoronasOcclusion", "description": "@PERFORMANCE.CoronasOcclusion.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
       "id": "PERFORMANCE.HiZOccluderCategories", "type": "int", "default": 1,
       "label": "@PERFORMANCE.HiZOccluderCategories",
       "page": "advanced", "group": "@group.performance", "visibility": "file"
@@ -1519,6 +1524,11 @@
     {
       "id": "PROCEDURAL.ProceduralConeRelease", "type": "bool", "default": 1,
       "label": "@PROCEDURAL.ProceduralConeRelease", "description": "@PROCEDURAL.ProceduralConeRelease.description",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.ProceduralGroundCovers", "type": "bool", "default": 1,
+      "label": "@PROCEDURAL.ProceduralGroundCovers", "description": "@PROCEDURAL.ProceduralGroundCovers.description",
       "page": "advanced", "group": "@group.procedural", "visibility": "file"
     },
     {
@@ -1957,7 +1967,7 @@
       "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
     },
     {
-      "id": "NIGHTSHADOWS.ModelLightShadows", "type": "bool", "default": 1,
+      "id": "NIGHTSHADOWS.ModelLightShadows", "type": "int", "default": 3, "min": 0, "max": 3,
       "label": "@NIGHTSHADOWS.ModelLightShadows", "description": "@NIGHTSHADOWS.ModelLightShadows.description",
       "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
     },
@@ -2022,6 +2032,41 @@
       "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
     },
     {
+      "id": "NIGHTSHADOWS.ModelLightCacheDistance", "type": "float", "default": 15.0, "min": 0.0, "max": 60.0,
+      "label": "@NIGHTSHADOWS.ModelLightCacheDistance", "description": "@NIGHTSHADOWS.ModelLightCacheDistance.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampCacheBudget", "type": "int", "default": 12, "min": 0, "max": 24,
+      "label": "@NIGHTSHADOWS.LampCacheBudget", "description": "@NIGHTSHADOWS.LampCacheBudget.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampShadowCaches", "type": "int", "default": 32, "min": 8, "max": 32,
+      "label": "@NIGHTSHADOWS.LampShadowCaches", "description": "@NIGHTSHADOWS.LampShadowCaches.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.CacheWholeTileDistance", "type": "float", "default": 25.0, "min": 0.0, "max": 200.0,
+      "label": "@NIGHTSHADOWS.CacheWholeTileDistance", "description": "@NIGHTSHADOWS.CacheWholeTileDistance.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.CacheEvictMargin", "type": "float", "default": 1.25, "min": 1.0, "max": 4.0,
+      "label": "@NIGHTSHADOWS.CacheEvictMargin", "description": "@NIGHTSHADOWS.CacheEvictMargin.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.PropsInLampCaches", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.PropsInLampCaches", "description": "@NIGHTSHADOWS.PropsInLampCaches.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampsSkipOwnObject", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.LampsSkipOwnObject", "description": "@NIGHTSHADOWS.LampsSkipOwnObject.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
+    },
+    {
       "id": "NIGHTSHADOWS.SharedMaps", "type": "bool", "default": 1,
       "label": "@NIGHTSHADOWS.SharedMaps", "description": "@NIGHTSHADOWS.SharedMaps.description",
       "page": "advanced", "group": "@group.night shadows", "visibility": "file", "apply": "restart"
@@ -2054,6 +2099,16 @@
     {
       "id": "NIGHTSHADOWS.LampViewPriority", "type": "bool", "default": 1,
       "label": "@NIGHTSHADOWS.LampViewPriority", "description": "@NIGHTSHADOWS.LampViewPriority.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampShadowAxis", "type": "int", "default": 0, "min": 0, "max": 2,
+      "label": "@NIGHTSHADOWS.LampShadowAxis", "description": "@NIGHTSHADOWS.LampShadowAxis.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.LampShadowPlaneDepth", "type": "bool", "default": 1,
+      "label": "@NIGHTSHADOWS.LampShadowPlaneDepth", "description": "@NIGHTSHADOWS.LampShadowPlaneDepth.description",
       "page": "advanced", "group": "@group.night shadows", "visibility": "file"
     },
     {
@@ -2229,6 +2284,11 @@
     {
       "id": "DEBUG.NightShadowsSlotLog", "type": "bool", "default": 0,
       "label": "@DEBUG.NightShadowsSlotLog", "description": "@DEBUG.NightShadowsSlotLog.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "DEBUG.NightShadowsCacheLog", "type": "bool", "default": 0,
+      "label": "@DEBUG.NightShadowsCacheLog", "description": "@DEBUG.NightShadowsCacheLog.description",
       "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
     },
     {
@@ -3060,6 +3120,26 @@
       "id": "LIGHTING.FillLightsMinRadius", "type": "float", "default": 30.0, "min": 0.0, "max": 1000.0,
       "label": "@LIGHTING.FillLightsMinRadius",
       "page": "advanced", "group": "@group.lighting", "visibility": "file"
+    },
+    {
+      "id": "LIGHTING.FarLights", "type": "bool", "default": 1,
+      "label": "@LIGHTING.FarLights", "description": "@LIGHTING.FarLights.description",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "LIGHTING.FarLightsDistance", "type": "float", "default": 350.0, "min": 35.0, "max": 1000.0,
+      "label": "@LIGHTING.FarLightsDistance",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "LIGHTING.FarLightsOffscreenDistance", "type": "float", "default": 100.0, "min": 35.0, "max": 350.0,
+      "label": "@LIGHTING.FarLightsOffscreenDistance",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "LIGHTING.FarLightsTrafficObjects", "type": "float", "default": 200.0, "min": 80.0, "max": 350.0,
+      "label": "@LIGHTING.FarLightsTrafficObjects",
+      "page": "advanced", "group": "@group.lighting", "visibility": "file", "apply": "restart"
     },
     {
       "id": "LIGHTING.VolumetricLightHeadlightPitch", "type": "float", "default": 6.0, "min": -45.0, "max": 45.0,

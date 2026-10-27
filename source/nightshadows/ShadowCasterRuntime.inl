@@ -254,6 +254,8 @@ namespace ShadowDiagnostics
                 if (log.good()) startupWritten = true;
             }
             log << "tick=" << now << " admission_installed=" << admissionInstalled
+                << " lamp_shadow_caches=" << ShadowCache16::status << " cache_quarter_choices=" << ShadowCache16::choices.load() << " cache_promotions=" << ShadowCache16::promotions.load() << " cache_rewarp_rects=" << ShadowCache16::rectsFixed.load() << " props_in_caches=" << PropCaches::status
+                << " prop_cache_bakes=" << PropCaches::bakes.load() << " prop_cache_added=" << PropCaches::added.load() << " prop_cache_redraws=" << PropCaches::redraws.load() << " own_object_skipped=" << PropCaches::ownSkipped.load() << " lamp_axis=" << LampShadowAxis::status << " lamp_axis_mode=" << LampShadowAxis::mode.load()
                 << " lamp_size_gate=" << LampShadowSizeGate::status << " lamp_size_gate_kept=" << LampShadowSizeGate::kept.load()
                 << " lamp_size_gate_retained=" << LampShadowSizeGate::retained.load() << " lamp_size_gate_indoor=" << LampShadowSizeGate::indoor.load()
                 << " lamp_size_gate_fade=" << LampShadowSizeGate::fade << " lamp_size_gate_faded=" << LampShadowSizeGate::faded.load()
@@ -319,6 +321,7 @@ namespace ShadowDiagnostics
                 << " lamp_dropped_present=" << PlayerShadowAllocation::lampDroppedPresent.load()
                 << " rejected_dynamic_map=" << ShadowLookupGuard::rejectedDynamic.load()
                 << " rejected_static_map=" << ShadowLookupGuard::rejectedStatic.load()
+                << " map_not_baked_yet=" << ShadowLookupGuard::notBaked.load()
                 << " lookup_buffer_changed=" << ShadowLookupGuard::changedBuffer.load()
                 << " stale_keys_cleared=" << PlayerShadowAllocation::staleKeysCleared.load()
                 << " rejected_adapter=" << PlayerShadowAllocation::rejectedAdapterChecks.load()

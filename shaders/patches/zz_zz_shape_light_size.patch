@@ -1,0 +1,105 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index c00941cc..2b42bc8d 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -681,6 +681,10 @@
+       // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
+       // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
+       // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_zz_shape_light_size.patch: the shapes soften by the light's own size (c142.y), not by c149.x, which a lamp
++      // --- of a pair on one post widens by half their spacing so that the cars' two shadows are one: a post's thin shadow went
++      // --- into that penumbra and was not seen at all
++      mov r12.x, c142.y
+       add r13.z, c154.z, c154.w
+       max r13.z, r13.z, r12.x
+       max r13.z, r13.z, c138.w
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+index 50d964af..e7fbb579 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -463,6 +463,10 @@
+       // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
+       // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
+       // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_zz_shape_light_size.patch: the shapes soften by the light's own size (c142.y), not by c149.x, which a lamp
++      // --- of a pair on one post widens by half their spacing so that the cars' two shadows are one: a post's thin shadow went
++      // --- into that penumbra and was not seen at all
++      mov r12.x, c142.y
+       add r13.z, c154.z, c154.w
+       max r13.z, r13.z, r12.x
+       max r13.z, r13.z, c138.w
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index dbf257a2..1a82ef1b 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -686,6 +686,10 @@
+       // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
+       // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
+       // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_zz_shape_light_size.patch: the shapes soften by the light's own size (c142.y), not by c149.x, which a lamp
++      // --- of a pair on one post widens by half their spacing so that the cars' two shadows are one: a post's thin shadow went
++      // --- into that penumbra and was not seen at all
++      mov r12.x, c142.y
+       add r13.z, c154.z, c154.w
+       max r13.z, r13.z, r12.x
+       max r13.z, r13.z, c138.w
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+index 6b98a671..34013dab 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+@@ -429,6 +429,10 @@
+       // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
+       // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
+       // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_zz_shape_light_size.patch: the shapes soften by the light's own size (c142.y), not by c149.x, which a lamp
++      // --- of a pair on one post widens by half their spacing so that the cars' two shadows are one: a post's thin shadow went
++      // --- into that penumbra and was not seen at all
++      mov r12.x, c142.y
+       add r13.z, c154.z, c154.w
+       max r13.z, r13.z, r12.x
+       max r13.z, r13.z, c138.w
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+index a92ccff9..c4234bfa 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+@@ -438,6 +438,10 @@
+       // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
+       // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
+       // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_zz_shape_light_size.patch: the shapes soften by the light's own size (c142.y), not by c149.x, which a lamp
++      // --- of a pair on one post widens by half their spacing so that the cars' two shadows are one: a post's thin shadow went
++      // --- into that penumbra and was not seen at all
++      mov r12.x, c142.y
+       add r13.z, c154.z, c154.w
+       max r13.z, r13.z, r12.x
+       max r13.z, r13.z, c138.w
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+index fc3ed68c..c8ae2d48 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+@@ -440,6 +440,10 @@
+       // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
+       // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
+       // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_zz_shape_light_size.patch: the shapes soften by the light's own size (c142.y), not by c149.x, which a lamp
++      // --- of a pair on one post widens by half their spacing so that the cars' two shadows are one: a post's thin shadow went
++      // --- into that penumbra and was not seen at all
++      mov r12.x, c142.y
+       add r13.z, c154.z, c154.w
+       max r13.z, r13.z, r12.x
+       max r13.z, r13.z, c138.w
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+index d1431e5d..2276c905 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -443,6 +443,10 @@
+       // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
+       // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
+       // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_zz_shape_light_size.patch: the shapes soften by the light's own size (c142.y), not by c149.x, which a lamp
++      // --- of a pair on one post widens by half their spacing so that the cars' two shadows are one: a post's thin shadow went
++      // --- into that penumbra and was not seen at all
++      mov r12.x, c142.y
+       add r13.z, c154.z, c154.w
+       max r13.z, r13.z, r12.x
+       max r13.z, r13.z, c138.w

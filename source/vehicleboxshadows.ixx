@@ -298,8 +298,17 @@ export struct VehicleBoxShadows
         shape.t1[3] = -1.0f;
     }
 
+    // Traffic signals (model type 3, +0x40's top byte, the models CE 0xA32838 gives the signals' lights) stand as lamp
+    // posts too: the pole at the origin and the mast over the road the bounds' far end (the mast signal 0x3C670D6F, 7 m
+    // tall, its mast 10.2 m out along -x), or the pole alone (the crossing's 3.6 m 0xD2F20A93). As upright wide props their
+    // bounds, taller than 3.2 m, left them without a shadow at all.
+    static bool IsTrafficSignal(uintptr_t info)
+    {
+        return (*reinterpret_cast<const uint32_t*>(info + 0x40) & 0xFF000000) == 0x03000000;
+    }
+
     // Objects within PropShapeDistance of the player as shapes, the nearest kProps:
-    // - lamp posts: the post and its arm, two capsules;
+    // - lamp posts and traffic signals: the post and its arm, two capsules;
     // - upright and narrow (0.7 m across at most): a standing capsule as thick as its narrow way (a sign's plate is
     //   no thicker than its pole);
     // - upright and wider: a box turned as the prop, no taller than 3.2 m nor wider than 6 m (a billboard high on
@@ -361,7 +370,7 @@ export struct VehicleBoxShadows
             prop.entity = object;
             prop.inMaps = (*reinterpret_cast<const uint32_t*>(object + 0x210) & 0x800) != 0;
             const bool upright = m[10] > 0.95f;
-            prop.post = upright && IsPost(*reinterpret_cast<const uint32_t*>(info + 0x3C));
+            prop.post = upright && (IsPost(*reinterpret_cast<const uint32_t*>(info + 0x3C)) || IsTrafficSignal(info));
             if (prop.post)
             {
                 const float radius = R.fPropShapePostRadius;
@@ -1313,6 +1322,9 @@ export struct VehicleBoxShadows
             // nothing there; its cache shows those with the bit (mode 0). Each a second, square shadow beside the real.
             if ((hasMap && !p.post) || (light.mShadowCacheIndex >= 0 && p.inMaps))
                 continue;
+            // Its cache has the props in it too (PropsInLampCaches)
+            if (light.mShadowCacheIndex >= 0 && !p.post && R.bPropsInLampCaches)
+                continue;
             // A car light's map with the posts in it (PostShadowsFromCarLights)
             if (hasMap && p.post && R.bPostShadowsFromCarLights && (light.mFlags & rage::LF_VEHICLE))
                 continue;
@@ -1975,7 +1987,9 @@ export struct VehicleBoxShadows
         const float capsule[4] = { R.fPedCapsuleRadius, -(R.fPedCapsuleRadius + 0.3f), pedLightSize, R.fPedCapsuleBaseSoftness };
         pDevice->SetPixelShaderConstantF(150, peds[0], kPedsPerLight);
         pDevice->SetPixelShaderConstantF(154, capsule, 1);
-        const float capsuleFromDistance[4] = { R.fPedCapsuleDistanceSoftness, 0.0f, 0.0f, 0.0f };
+        // c142.y the props' shapes' light size: the lamp's own, without the pair's half spacing the boxes take in c149.x
+        // (zz_zz_shape_light_size.patch); a post's thin shadow from a lamp of a pair was lost in a 1.45 m penumbra
+        const float capsuleFromDistance[4] = { R.fPedCapsuleDistanceSoftness, R.fVehicleBoxShadowLightSize, 0.0f, 0.0f };
         pDevice->SetPixelShaderConstantF(142, capsuleFromDistance, 1);
         // The shapes' groups (zz_shape_groups.patch): c115 their count and where groups 0-2 end, c129 where groups 3-6
         // end; the groups' spheres in c125-c128, c116, c117, c119 and c120

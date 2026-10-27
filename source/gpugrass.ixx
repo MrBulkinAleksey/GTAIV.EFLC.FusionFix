@@ -116,8 +116,8 @@ namespace GpuGrass
     constexpr int kEdgeBlur = 2;                // cells each side
     constexpr float kEdgeWobble = 0.6f, kEdgeWobbleLength = 2.5f;      // metres
     constexpr float kEdgeRipple = 0.25f, kEdgeRippleLength = 0.9f;
-    // The edge factor of each cell (0..1), for EdgeTex (R16F, vertex sampler 2, filtered, read at each blade's root;
-    // without it the edges are hard)
+    // The edge factor of each cell (0..1; -1 under a cover, ProceduralGround::CopyCovers), for EdgeTex (R16F, vertex
+    // sampler 2, filtered, read at each blade's root; without it the edges are hard)
     std::vector<float> edgeField;
     float edgeOrigin[2] = {};
     bool edgeDirty = false;
@@ -145,6 +145,7 @@ namespace GpuGrass
     struct Piece { float corner[3], edge1[3], edge2[3]; float centre[3]; float radius; float share; float seed; Look look; };
     std::vector<Piece> pieces;
     uint32_t piecesVersion = ~0u;
+    uint32_t piecesCoversVersion = ~0u;
     std::array<float, 256> tagShare{};
     std::array<std::array<float, 4>, 256> tagKinds{};   // the share of grass, of weeds, of small plants; tagShare
     // By model index, read by the render lists (HideGrass): 1 for procedural.dat's grass models; whether the blades are
@@ -392,8 +393,9 @@ namespace GpuGrass
     }
 
     // The edge grid's cells whose centre lies on the triangle seen from above, or within a fifth of a cell of it, so
-    // slivers and the seams between triangles leave no false edges
-    void MarkGrass(const ProceduralGround::Triangle& t, float originX, float originY, std::vector<float>& grid)
+    // slivers and the seams between triangles leave no false edges; `top` the highest grass at each, by the triangle's
+    // plane there
+    void MarkGrass(const ProceduralGround::Triangle& t, float originX, float originY, std::vector<float>& grid, std::vector<float>& top)
     {
         float x[3], y[3];
         for (int k = 0; k < 3; ++k)
@@ -424,7 +426,50 @@ namespace GpuGrass
                     inside = side >= -0.2f * edgeLength[k];
                 }
                 if (inside)
-                    grid[size_t(cy) * kEdgeSide + cx] = 1.0f;
+                {
+                    const size_t at = size_t(cy) * kEdgeSide + cx;
+                    grid[at] = 1.0f;
+                    const float l1 = ((x[1] - px) * (y[2] - py) - (x[2] - px) * (y[1] - py)) / area;
+                    const float l2 = ((x[2] - px) * (y[0] - py) - (x[0] - px) * (y[2] - py)) / area;
+                    const float z = l1 * t.corner[0][2] + l2 * t.corner[1][2] + (1.0f - l1 - l2) * t.corner[2][2];
+                    top[at] = (std::max)(top[at], z);
+                }
+            }
+    }
+
+    // Cells under a cover (a road over the lawn's terrain) taken off the grass: their centre on the cover seen from above,
+    // the cover level with the highest grass there or up to ProceduralGround::CoverHeight above
+    void MarkCovered(const ProceduralGround::Cover& c, float originX, float originY, std::vector<float>& grid,
+                     const std::vector<float>& top, std::vector<uint8_t>& covered)
+    {
+        float x[3], y[3];
+        for (int k = 0; k < 3; ++k)
+            x[k] = (c.corner[k][0] - originX) / kEdgeCell, y[k] = (c.corner[k][1] - originY) / kEdgeCell;
+        const float area = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
+        if (std::abs(area) < 1e-6f)
+            return;
+        const int x0 = (std::max)(int(std::floor((std::min)({ x[0], x[1], x[2] }))), 0);
+        const int x1 = (std::min)(int(std::ceil((std::max)({ x[0], x[1], x[2] }))), kEdgeSide - 1);
+        const int y0 = (std::max)(int(std::floor((std::min)({ y[0], y[1], y[2] }))), 0);
+        const int y1 = (std::min)(int(std::ceil((std::max)({ y[0], y[1], y[2] }))), kEdgeSide - 1);
+        for (int cy = y0; cy <= y1; ++cy)
+            for (int cx = x0; cx <= x1; ++cx)
+            {
+                const size_t at = size_t(cy) * kEdgeSide + cx;
+                if (grid[at] <= 0.0f)
+                    continue;
+                const float px = float(cx) + 0.5f, py = float(cy) + 0.5f;
+                const float l1 = ((x[1] - px) * (y[2] - py) - (x[2] - px) * (y[1] - py)) / area;
+                const float l2 = ((x[2] - px) * (y[0] - py) - (x[0] - px) * (y[2] - py)) / area;
+                const float l3 = 1.0f - l1 - l2;
+                if (l1 < 0.0f || l2 < 0.0f || l3 < 0.0f)
+                    continue;
+                const float above = l1 * c.corner[0][2] + l2 * c.corner[1][2] + l3 * c.corner[2][2] - top[at];
+                if (above > -ProceduralGround::CoverBelow && above < ProceduralGround::CoverHeight)
+                {
+                    grid[at] = 0.0f;
+                    covered[at] = 1;
+                }
             }
     }
 
@@ -438,6 +483,7 @@ namespace GpuGrass
     struct Build
     {
         std::vector<Grassy> grassy;
+        std::vector<ProceduralGround::Cover> covers;
         float camera[3] = {};
         std::vector<Piece> pieces;
         std::vector<float> edgeField;
@@ -453,13 +499,21 @@ namespace GpuGrass
         // triangles each time, and the blades at an edge came and went as the camera moved
         const float originX = std::floor((camera[0] - kEdgeReach) / kEdgeCell) * kEdgeCell;
         const float originY = std::floor((camera[1] - kEdgeReach) / kEdgeCell) * kEdgeCell;
+        // Here, not on the render thread: a copy of them all
+        ProceduralGround::CopyCovers(build.covers, camera[0], camera[1], kEdgeReach + kEdgeCell);
         static std::vector<float> distance;     // in cells; 0 where no grass grows (the builder's thread only)
+        static std::vector<float> top;
+        static std::vector<uint8_t> covered;
         distance.assign(size_t(kEdgeSide) * kEdgeSide, 0.0f);
+        top.assign(distance.size(), -1e30f);
+        covered.assign(distance.size(), 0);
         for (const auto& [t, look] : build.grassy)
         {
             AddPieces(build.pieces, t.corner[0], t.corner[1], t.corner[2], look, 0);
-            MarkGrass(t, originX, originY, distance);
+            MarkGrass(t, originX, originY, distance, top);
         }
+        for (const auto& c : build.covers)
+            MarkCovered(c, originX, originY, distance, top, covered);
 
         // Each marked cell's distance to an unmarked one (chamfer, 1 and sqrt 2), then the pieces' corners
         constexpr float kBig = 1e6f, kDiagonal = 1.41421356f;
@@ -524,7 +578,9 @@ namespace GpuGrass
                 float& e = edgeField[at(x, y)];
                 // A marked cell next to an unmarked one is 1: the edge itself lies half a cell nearer
                 const float metres = (d - 0.5f) * kEdgeCell;
-                if (d <= 0.0f)
+                if (covered[at(x, y)])
+                    e = -1.0f;
+                else if (d <= 0.0f)
                     e = 0.0f;
                 else if (metres - kEdgeWobble - kEdgeRipple >= kEdgeFade)
                     e = 1.0f;
@@ -584,9 +640,11 @@ namespace GpuGrass
             return;
         {
             std::lock_guard groundLock(groundMutex);
-            if (piecesVersion == groundVersion)
+            const uint32_t coversVersion = ProceduralGround::CoversVersion();
+            if (piecesVersion == groundVersion && piecesCoversVersion == coversVersion)
                 return;
             piecesVersion = groundVersion;
+            piecesCoversVersion = coversVersion;
             build.grassy.clear();
             build.grassy.reserve(ground.size());
             for (auto it = ground.begin(); it != ground.end();)
