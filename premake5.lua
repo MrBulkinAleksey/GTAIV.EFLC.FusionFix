@@ -128,6 +128,10 @@ workspace "GTAIV.EFLC.FusionFix"
    files { "source/resources/Shaders.rc" }
    files { "source/resources/snow/*.rc" }
    files { "source/resources/temporal/*.rc" }
+   -- Temporal anti-aliasing, DLAA and FSR through FusionFixHub's upscaler bridge (source/aa); the graphics API, DXVK
+   -- and D3D9On12 interop (source/upscaler)
+   files { "source/aa/*.hpp", "source/aa/*.inl" }
+   files { "source/upscaler/*.h", "source/upscaler/*.hpp" }
    files { "source/resources/hdr/*.rc" }
    -- ASI Settings: the description and translations of the settings, embedded by source/resources/Settings.rc
    files { "source/resources/Settings.rc" }
@@ -271,7 +275,7 @@ project "GTAIV.EFLC.FusionFix.Tests"
 
 
 -- d3d9.dll: a pass-through to the system's d3d9.dll, shipped only so that unpacking a release over an old one replaces
--- the old graphics-API proxy (the plugin applies the graphics API itself, FusionFixUtils upscaler/graphics_api.h)
+-- the old graphics-API proxy (the plugin applies the graphics API itself, source/upscaler/graphics_api.h)
 project "d3d9"
    language "C++"
    targetdir "bin"
