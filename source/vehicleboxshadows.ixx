@@ -298,8 +298,17 @@ export struct VehicleBoxShadows
         shape.t1[3] = -1.0f;
     }
 
+    // Traffic signals (model type 3, +0x40's top byte, the models CE 0xA32838 gives the signals' lights) stand as lamp
+    // posts too: the pole at the origin and the mast over the road the bounds' far end (the mast signal 0x3C670D6F, 7 m
+    // tall, its mast 10.2 m out along -x), or the pole alone (the crossing's 3.6 m 0xD2F20A93). As upright wide props their
+    // bounds, taller than 3.2 m, left them without a shadow at all.
+    static bool IsTrafficSignal(uintptr_t info)
+    {
+        return (*reinterpret_cast<const uint32_t*>(info + 0x40) & 0xFF000000) == 0x03000000;
+    }
+
     // Objects within PropShapeDistance of the player as shapes, the nearest kProps:
-    // - lamp posts: the post and its arm, two capsules;
+    // - lamp posts and traffic signals: the post and its arm, two capsules;
     // - upright and narrow (0.7 m across at most): a standing capsule as thick as its narrow way (a sign's plate is
     //   no thicker than its pole);
     // - upright and wider: a box turned as the prop, no taller than 3.2 m nor wider than 6 m (a billboard high on
@@ -361,7 +370,7 @@ export struct VehicleBoxShadows
             prop.entity = object;
             prop.inMaps = (*reinterpret_cast<const uint32_t*>(object + 0x210) & 0x800) != 0;
             const bool upright = m[10] > 0.95f;
-            prop.post = upright && IsPost(*reinterpret_cast<const uint32_t*>(info + 0x3C));
+            prop.post = upright && (IsPost(*reinterpret_cast<const uint32_t*>(info + 0x3C)) || IsTrafficSignal(info));
             if (prop.post)
             {
                 const float radius = R.fPropShapePostRadius;
