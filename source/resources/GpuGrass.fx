@@ -2,7 +2,7 @@
 // triangles the procedural manager holds, drawn into the G-buffer at the end of its pass, so the game's lighting,
 // shadows and fog take them as any other surface.
 //
-// One mesh of kCards cards (stream 0) is drawn once per piece of ground (stream 1, instanced): a piece is a triangle of
+// One mesh of GpuGrassClumps cards, or crosses of two (stream 0) is drawn once per piece of ground (stream 1, instanced): a piece is a triangle of
 // at most a metre and a half square, its corner and two edges; each card stands at its own barycentric place on it,
 // turned and sized by its own random values, and a piece keeps only the first `share` of its cards (by area, the
 // surface's grass and the distance); the others go to one point and draw nothing. A card is an upright quad of three

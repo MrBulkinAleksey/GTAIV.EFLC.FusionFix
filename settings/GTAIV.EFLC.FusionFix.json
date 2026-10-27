@@ -1297,6 +1297,16 @@
       "page": "advanced", "group": "@group.procedural", "visibility": "file"
     },
     {
+      "id": "PROCEDURAL.GpuGrassClumps", "type": "int", "default": 80, "min": 8, "max": 160, "step": 8,
+      "label": "@PROCEDURAL.GpuGrassClumps", "description": "@PROCEDURAL.GpuGrassClumps.description",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GpuGrassCrossed", "type": "bool", "default": 0,
+      "label": "@PROCEDURAL.GpuGrassCrossed", "description": "@PROCEDURAL.GpuGrassCrossed.description",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
       "id": "PROCEDURAL.GpuGrassDensity", "type": "float", "default": 1.0, "min": 0.1, "max": 1.0,
       "label": "@PROCEDURAL.GpuGrassDensity",
       "page": "advanced", "group": "@group.procedural", "visibility": "file"
