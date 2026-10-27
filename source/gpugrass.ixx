@@ -86,12 +86,14 @@ using namespace PostFxProfiler;
 // Their colours: hidden [PROCEDURAL] GpuGrassGreen, GpuGrassTip, GpuGrassDry ("r, g, b", 0..1, live): the greenest
 // patches, the tips, dry blades and patches.
 //
+// [PROCEDURAL] GpuGrassCards (live): 0 flat cards, kCards of them; 1 crossed, a card and one turned a quarter at the same
+// root, half as many (as many quads, the same cost); 2 crossed, kCards of them (twice the quads).
 // [PROCEDURAL] GpuGrassRange (100 m; the manager gathers ground that far ahead, less behind: ProceduralGround::GatherAhead), GpuGrassFullRange (22 m), GpuGrassDensity (0.1..1). GpuGrassDebug (Graphics >
 // Debug) colours the blades by their surface's tag. GpuGrassLog = 1 ([DEBUG]) writes the triangles, pieces and blades
 // to GTAIV.EFLC.FusionFix.GpuGrass.log every 600 frames.
 namespace GpuGrass
 {
-    constexpr int kCards = 80;              // per piece of ground
+    constexpr int kCards = 80;              // per piece of ground (GpuGrassCards 0 and 2; 1: half as many crosses)
     constexpr int kVertsPerCard = 6;        // three pairs up the card
     constexpr int kIndicesPerCard = 12;     // four triangles
     constexpr float kPieceArea = 1.5f;      // square metres: up to 53 cards, some 1300 blades a square metre
@@ -134,6 +136,7 @@ namespace GpuGrass
     // Settings
     bool bLog = false;
     bool bHideProps = true;
+    int nCards = 0;                         // GpuGrassCards
     float fRange = 100.0f, fFullRange = 22.0f, fDensity = 1.0f;
     float fGroundTint = 0.5f;
     float green[3] = { 0.30f, 0.38f, 0.11f }, tip[3] = { 0.62f, 0.60f, 0.26f }, dry[3] = { 0.46f, 0.39f, 0.20f };
@@ -159,6 +162,9 @@ namespace GpuGrass
     bool effectTried = false;
     IDirect3DVertexBuffer9* meshVB = nullptr;
     IDirect3DIndexBuffer9* meshIB = nullptr;
+    int meshCards = -1;                     // the GpuGrassCards the mesh was made for
+    int meshQuads = kCards;                 // quads in the mesh
+    int meshPlaces = kCards;                // places on a piece, a card or a cross each: what a piece's share counts
     IDirect3DVertexBuffer9* instanceVB = nullptr;
     IDirect3DVertexDeclaration9* declaration = nullptr;
     IDirect3DTexture9* cardTexture = nullptr;
@@ -221,6 +227,7 @@ namespace GpuGrass
         fRange = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassRange", 100.0f), 5.0f, 150.0f);
         fFullRange = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassFullRange", 22.0f), 0.0f, fRange - 1.0f);
         bHideProps = iniReader.ReadInteger("PROCEDURAL", "GpuGrassHideProps", 1) != 0;
+        nCards = std::clamp(iniReader.ReadInteger("PROCEDURAL", "GpuGrassCards", 0), 0, 2);
         fDensity = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassDensity", 1.0f), 0.1f, 1.0f);
         fGroundTint = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassGroundTint", 0.5f), 0.0f, 1.0f);
         bLog = iniReader.ReadInteger("DEBUG", "GpuGrassLog", 0) != 0;
@@ -950,37 +957,51 @@ namespace GpuGrass
             if (FAILED(real->CreateVertexDeclaration(elements, &declaration)))
                 return false;
         }
+        // GpuGrassCards changed (live): the mesh made again
+        if (meshCards != nCards)
+        {
+            SAFE_RELEASE(meshVB);
+            SAFE_RELEASE(meshIB);
+            meshCards = nCards;
+            meshPlaces = nCards == 1 ? kCards / 2 : kCards;
+            meshQuads = nCards == 0 ? kCards : meshPlaces * 2;
+        }
         if (!meshVB)
         {
-            // kCards cards, each at its own random place on the piece, turned and sized at random; the order is
-            // random too, so a piece keeping its first cards keeps them spread over it
-            if (FAILED(real->CreateVertexBuffer(kCards * kVertsPerCard * sizeof(MeshVertex), D3DUSAGE_WRITEONLY, 0, D3DPOOL_MANAGED, &meshVB, nullptr)))
+            // meshPlaces places, each at its own random spot on the piece, turned and sized at random, a card there or a
+            // cross of two (the second turned a quarter and mirrored, the same root, kind and share, so they come and go
+            // together; each leans its own way); the order is random too, so a piece keeping its first places keeps them
+            // spread over it
+            if (FAILED(real->CreateVertexBuffer(meshQuads * kVertsPerCard * sizeof(MeshVertex), D3DUSAGE_WRITEONLY, 0, D3DPOOL_MANAGED, &meshVB, nullptr)))
                 return false;
             MeshVertex* v = nullptr;
             if (FAILED(meshVB->Lock(0, 0, reinterpret_cast<void**>(&v), 0)))
                 return false;
             uint32_t state = 0x9E3779B9u;
             const auto next = [&]() { state ^= state << 13; state ^= state >> 17; state ^= state << 5; return (state & 0xFFFFFF) / float(0x1000000); };
-            for (int b = 0; b < kCards; ++b)
+            const int perPlace = meshQuads / meshPlaces;
+            for (int b = 0; b < meshPlaces; ++b)
             {
                 const float u = next(), w = next(), turn = next() * 6.2831853f, height = next(), random = next();
-                const float place = (b + 0.5f) / kCards;
+                const float place = (b + 0.5f) / meshPlaces;
                 // A row in the middle, so the wind bends the card
                 static constexpr float kUp[kVertsPerCard] = { 0.0f, 0.0f, 0.5f, 0.5f, 1.0f, 1.0f };
                 static constexpr float kAcross[kVertsPerCard] = { -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f };
-                for (int k = 0; k < kVertsPerCard; ++k)
-                    v[b * kVertsPerCard + k] = { { u, w, turn, height }, { kUp[k], kAcross[k], place, random } };
+                for (int q = 0; q < perPlace; ++q)
+                    for (int k = 0; k < kVertsPerCard; ++k)
+                        v[(b * perPlace + q) * kVertsPerCard + k] = { { u, w, turn + q * 1.5707963f, height },
+                                                                       { kUp[k], q ? -kAcross[k] : kAcross[k], place, random } };
             }
             meshVB->Unlock();
         }
         if (!meshIB)
         {
-            if (FAILED(real->CreateIndexBuffer(kCards * kIndicesPerCard * sizeof(uint16_t), D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_MANAGED, &meshIB, nullptr)))
+            if (FAILED(real->CreateIndexBuffer(meshQuads * kIndicesPerCard * sizeof(uint16_t), D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_MANAGED, &meshIB, nullptr)))
                 return false;
             uint16_t* i = nullptr;
             if (FAILED(meshIB->Lock(0, 0, reinterpret_cast<void**>(&i), 0)))
                 return false;
-            for (int b = 0; b < kCards; ++b)
+            for (int b = 0; b < meshQuads; ++b)
             {
                 const uint16_t o = uint16_t(b * kVertsPerCard);
                 uint16_t list[kIndicesPerCard];
@@ -1186,7 +1207,7 @@ export namespace GpuGrass
             SetSamplerStateBoth(pDevice, D3DVERTEXTEXTURESAMPLER1, kSamplerStates[i], kTrampleValues[i]);
             SetSamplerStateBoth(pDevice, D3DVERTEXTEXTURESAMPLER2, kSamplerStates[i], kEdgeValues[i]);
         }
-        pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, kCards * kVertsPerCard, 0, kCards * kIndicesPerCard / 3);
+        pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, meshQuads * kVertsPerCard, 0, meshQuads * kIndicesPerCard / 3);
         effect->EndPass();
         effect->End();
 
@@ -1284,12 +1305,12 @@ export namespace GpuGrass
             if (!inside)
                 continue;
             const float share = p.share * fDensity * BladeShare(distance);
-            if (share * kCards < 0.5f)
+            if (share * meshPlaces < 0.5f)
                 continue;
             const auto& k = p.look.kinds;
             out[count] = { { p.corner[0], p.corner[1], p.corner[2], p.seed }, { p.edge1[0], p.edge1[1], p.edge1[2], share },
                            { p.edge2[0], p.edge2[1], p.edge2[2], p.look.tag }, { k[0], k[1], RiseScale(distance, p.share * fDensity), k[3] } };
-            blades += share * kCards;
+            blades += share * meshQuads;
             if (++count >= kMaxInstances)
                 break;
         }
