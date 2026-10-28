@@ -35,10 +35,11 @@ import framehistory;
 //
 // EntityDrawLog = 1 ([DEBUG]): every 600 scene frames, the draws of each kind and the CPU time their
 // execute took, per frame and per target the game had locked (RenderSkip::CurrentTarget), to
-// GTAIV.EFLC.FusionFix.EntityClass.log: what leaving a kind out of a pass would save. For the G-buffer and the water's
-// reflection also by the distance from the viewport's camera and by the size on screen (the sphere's reach over the
-// distance), for the lamps' maps the same from the lamp of the half drawn, and for the G-buffer and the lamps' maps the
-// costliest models, by the hash of their name (model info +0x3c), with their mean distance.
+// GTAIV.EFLC.FusionFix.EntityClass.log: what leaving a kind out of a pass would save. For the G-buffer, the water's
+// reflection and FullScreenCopy (the forward and transparent geometry) also by the distance from the viewport's camera
+// and by the size on screen (the sphere's reach over the distance), for the lamps' maps the same from the lamp of the
+// half drawn, and for the G-buffer, FullScreenCopy and the lamps' maps the costliest models, by the hash of their name
+// (model info +0x3c), with their mean distance.
 //
 // SkipLeftOutDraws = 1 ([PERFORMANCE]): RenderSkip leaves passes out on the GPU (the reflections and far cascades
 // taking turns, the night's cascades) by dropping their device draws, but the game still works through every draw
@@ -280,10 +281,11 @@ namespace
             targetStats.push_back({ shown });
             it = targetStats.end() - 1;
             it->water = !std::strcmp(shown, "WATER_REFLECTION_COLOUR");
-            it->camera = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->water;
+            const bool transparent = !std::strcmp(shown, "FullScreenCopy");    // the forward and transparent geometry
+            it->camera = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->water || transparent;
             it->lamp = !std::strcmp(shown, "SHADOW_MAP_COLOUR_POINT");
             it->camera |= it->lamp;
-            it->models = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->lamp;
+            it->models = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->lamp || transparent;
         }
         lastTargetName = name;
         lastTarget = size_t(it - targetStats.begin());
