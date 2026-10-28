@@ -162,8 +162,10 @@ class GrassWind
     static inline IDirect3DTexture9* trampleTexture = nullptr;
     static inline int trampleSupport = -1;                    // vertex textures: -1 not checked yet, 0 none, 1 there
     static inline bool trampleAny = false, trampleUploaded = false, bTrampleBound = false;
-    // Stamped this frame; frames since the last upload while the grass only stands up again
+    // Stamped this frame, and the window's rows the stamps reached (first, last); frames since the last whole upload
+    // while the grass only stands up again
     static inline bool trampleStamped = false;
+    static inline int trampleRows[2] = { INT_MAX, INT_MIN };
     static inline int trampleRecoverFrames = 0;
 
     // By model index: the hash the entry was made for, the model's height (0 if not grass) and its height above its origin
@@ -355,6 +357,11 @@ class GrassWind
     {
         const int x0 = int(std::floor((x - radius) / kCell)) - 2, x1 = int(std::floor((x + radius) / kCell)) + 2;
         const int y0 = int(std::floor((y - radius) / kCell)) - 2, y1 = int(std::floor((y + radius) / kCell)) + 2;
+        if ((std::max)(y0, gridOrigin[1]) <= (std::min)(y1, gridOrigin[1] + kCells - 1))
+        {
+            trampleRows[0] = (std::min)(trampleRows[0], (std::max)(y0, gridOrigin[1]) - gridOrigin[1]);
+            trampleRows[1] = (std::max)(trampleRows[1], (std::min)(y1, gridOrigin[1] + kCells - 1) - gridOrigin[1]);
+        }
         for (int cy = (std::max)(y0, gridOrigin[1]); cy <= (std::min)(y1, gridOrigin[1] + kCells - 1); ++cy)
         {
             for (int cx = (std::max)(x0, gridOrigin[0]); cx <= (std::min)(x1, gridOrigin[0] + kCells - 1); ++cx)
@@ -432,15 +439,16 @@ class GrassWind
     // The grid's cells to the texture: r, g the direction, b the strength, a the ground modulo kHeightWrap. From the
     // window's corner, not by world cell modulo kCells: sampled with wrapping, ground 32-64 m off took the cells of the
     // other side of the player, so grass ahead lay down along the path behind and rose as the player came nearer.
-    // The edge texels stay empty, so the clamped sampler gives nothing outside the window.
-    static void UploadTrample()
+    // The edge texels stay empty, so the clamped sampler gives nothing outside the window. Rows first to last.
+    static void UploadTrample(int first = 0, int last = kCells - 1)
     {
         D3DLOCKED_RECT locked{};
-        if (FAILED(trampleTexture->LockRect(0, &locked, nullptr, 0)))
+        const RECT rect = { 0, first, kCells, last + 1 };
+        if (FAILED(trampleTexture->LockRect(0, &locked, &rect, 0)))
             return;
-        for (int y = 0; y < kCells; ++y)
+        for (int y = first; y <= last; ++y)
         {
-            auto row = reinterpret_cast<uint8_t*>(locked.pBits) + y * locked.Pitch;
+            auto row = reinterpret_cast<uint8_t*>(locked.pBits) + (y - first) * locked.Pitch;
             for (int x = 0; x < kCells; ++x)
             {
                 const bool edge = x == 0 || y == 0 || x == kCells - 1 || y == kCells - 1;
@@ -465,6 +473,7 @@ class GrassWind
         MoveGrid(focus);
         const bool moved = origin[0] != gridOrigin[0] || origin[1] != gridOrigin[1];
         trampleStamped = false;
+        trampleRows[0] = INT_MAX, trampleRows[1] = INT_MIN;
         if (trampleAny && dt > 0.0f)
         {
             trampleAny = false;
@@ -500,16 +509,19 @@ class GrassWind
         }
         // The whole texture each frame while any cell still stood up again (fTrampleSeconds after a walk) was 1.5% of the
         // render thread (profile at Firefly Island, 2026-10-28). While the grass only stands up, every few frames: at
-        // 12 s it rises a third of a texel step a frame. A stamp, a moved window or the last of it at once.
+        // 12 s it rises a third of a texel step a frame. A moved window or the last of it at once, whole; a stamp (anyone
+        // moving near the player, a car on the road, stamps every frame) only the rows it reached.
         if (trampleAny || trampleUploaded)
         {
             const int every = std::clamp(int(fTrampleSeconds / 3.0f), 1, 4);
-            if (!trampleAny || trampleStamped || moved || ++trampleRecoverFrames >= every)
+            if (!trampleAny || moved || ++trampleRecoverFrames >= every)
             {
                 UploadTrample();
                 trampleUploaded = trampleAny;
                 trampleRecoverFrames = 0;
             }
+            else if (trampleStamped && trampleRows[0] <= trampleRows[1])
+                UploadTrample(trampleRows[0], trampleRows[1]);
         }
         return true;
     }
