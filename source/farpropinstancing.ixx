@@ -189,14 +189,19 @@ class FarPropInstancing
     static constexpr uint32_t kStateTypes[] = { 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 23 };
     // With them the technique group the shaders draw with (CE [0x106B308], -1 the default; its setter 0x42F0A0): the list
     // changes it for its last buckets, and a street lamp's sample drew with another technique (vs 945 / ps 188 for the
-    // game's 947 / 189, other samplers): its albedo 0, black (capture 2026-10-28)
+    // game's 947 / 189, other samplers): its albedo 0, black (capture 2026-10-28). And the draw mode (CE [0x17f59d4], its
+    // setter 0x62bf30) the drawables pick their shaders by: the cascades' list puts it back to 0 right after the entities
+    // (0x924ce0), and copies executed after that drew into CASCADE_TARGET_R32 with the scene's pixel shader (ps 1AD for the
+    // depth's ps 5, capture 2026-10-28): colours for depths, shadows of the wrong shape
     struct States
     {
         uint32_t values[std::size(kStateTypes)];
         int32_t group;
+        int32_t mode;
         bool operator==(const States&) const = default;
     };
     static inline int32_t* techniqueGroup = nullptr;
+    static inline int32_t* drawMode = nullptr;
     static inline void(__cdecl* setPassState)(uint32_t type, uint32_t value) = nullptr;
     static inline const uint32_t* passStateCache = nullptr;
     static inline std::vector<States> stateSets;    // this pass's
@@ -207,6 +212,7 @@ class FarPropInstancing
         for (size_t i = 0; i < std::size(kStateTypes); ++i)
             now.values[i] = passStateCache[kStateTypes[i]];
         now.group = *techniqueGroup;
+        now.mode = drawMode ? *drawMode : 0;
         return now;
     }
 
@@ -231,6 +237,8 @@ class FarPropInstancing
             if (passStateCache[kStateTypes[i]] != states.values[i])
                 setPassState(kStateTypes[i], states.values[i]);
         *techniqueGroup = states.group;
+        if (drawMode)
+            *drawMode = states.mode;
     }
 
     static void ReadIni(CIniReader& iniReader)
@@ -1303,7 +1311,7 @@ class FarPropInstancing
     // Commands in a cascade's list around its entities: they are taken as the G-buffer's are, executed after them
     static void BeginCascade()
     {
-        if (!bEnabled || !bCascades || bInScene)
+        if (!bEnabled || !bCascades || bInScene || !drawMode)
             return;
         BeginScene();
         bCascadePass = bInScene;
@@ -1398,6 +1406,14 @@ public:
             if (auto groupSetter = hook::pattern("8B 44 24 04 A3 ? ? ? ? C3 CC CC CC CC CC CC A1 ? ? ? ? C3");
                 !groupSetter.empty() && *groupSetter.get_first<int32_t*>(5) == *groupSetter.get_first<int32_t*>(17))
                 techniqueGroup = *groupSetter.get_first<int32_t*>(5);
+            // The draw mode's reset after a cascade's entities (CE 0x924d66): mov [eax+8], setter / mov [eax+0Ch], 0 / call;
+            // the setter is mov eax, [esp+4] / mov [mode], eax / ret
+            if (auto modeReset = hook::pattern("C7 40 08 ? ? ? ? C7 40 0C 00 00 00 00 E8"); !modeReset.empty())
+            {
+                const auto setter = *modeReset.get_first<const uint8_t*>(3);
+                if (setter[0] == 0x8B && setter[1] == 0x44 && setter[2] == 0x24 && setter[3] == 0x04 && setter[4] == 0xA3 && setter[9] == 0xC3)
+                    drawMode = *reinterpret_cast<int32_t* const*>(setter + 5);
+            }
         };
 
         FusionFix::onGameInitEvent() += []()
