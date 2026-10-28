@@ -20,6 +20,7 @@ import comvars;
 import d3dx9_43;
 import inireload;
 import entityclass;
+import framegeneration;
 import framehistory;
 import grasswind;
 import procedural;
@@ -358,7 +359,7 @@ class FarPropInstancing
     // While copies are executed one by one on the render thread
     static void CountDraw()
     {
-        if (bExecuting && !bInstancing && GetCurrentThreadId() == instancingThread)
+        if (bExecuting && !bInstancing && GetCurrentThreadId() == instancingThread && !FrameGeneration::PresentingInDraw())
             deviceDraws++;
     }
 
@@ -635,9 +636,11 @@ class FarPropInstancing
     // ---------------------------------------------------------------------------------------------
     // Device draws on the real device: the sample's are made instanced, any it cannot be are dropped and fail the batch
 
+    // Frame generation presents waiting frames from inside the render thread's draws (CheckPending), a sample's too: those
+    // draws (the shown frame's sharpening from user memory, 2026-10-28) are no part of the sample, and failed its batch
     static bool Instancing()
     {
-        return bInstancing && GetCurrentThreadId() == instancingThread;
+        return bInstancing && GetCurrentThreadId() == instancingThread && !FrameGeneration::PresentingInDraw();
     }
 
     static HRESULT __stdcall DrawIndexedPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count)
