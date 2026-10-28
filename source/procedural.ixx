@@ -287,7 +287,83 @@ namespace Procedural
     // The props that are out, for the render lists, with their model's radius and the share of the way past
     // SmallFarThinFrom they keep being drawn at (from the hash of their place)
     struct PropInfo { float radius; float keep; };
-    std::unordered_map<uintptr_t, PropInfo> props;
+    // By entity, open addressing (linear probing, at most half full): the render lists ask for every prop of every
+    // list, tens of thousands a frame, and an unordered_map's node was a cache miss each (2.6% of the main thread,
+    // profile at Firefly Island 2026-10-28)
+    struct PropTable
+    {
+        struct Slot { uintptr_t entity; PropInfo info; };
+        std::vector<Slot> slots = std::vector<Slot>(size_t(1) << 16);
+        size_t count = 0;
+
+        size_t Mask() const { return slots.size() - 1; }
+        size_t Home(uintptr_t entity) const
+        {
+            uint32_t h = uint32_t(entity >> 4) * 0x9E3779B1u;
+            return (h ^ (h >> 16)) & Mask();
+        }
+        const PropInfo* Find(uintptr_t entity) const
+        {
+            for (size_t i = Home(entity);; i = (i + 1) & Mask())
+            {
+                if (slots[i].entity == entity)
+                    return &slots[i].info;
+                if (!slots[i].entity)
+                    return nullptr;
+            }
+        }
+        void Set(uintptr_t entity, PropInfo info)
+        {
+            if ((count + 1) * 2 > slots.size())
+                Grow();
+            for (size_t i = Home(entity);; i = (i + 1) & Mask())
+            {
+                if (slots[i].entity == entity)
+                    return void(slots[i].info = info);
+                if (!slots[i].entity)
+                {
+                    slots[i] = { entity, info };
+                    ++count;
+                    return;
+                }
+            }
+        }
+        void Erase(uintptr_t entity)
+        {
+            size_t hole = Home(entity);
+            for (; slots[hole].entity != entity; hole = (hole + 1) & Mask())
+                if (!slots[hole].entity)
+                    return;
+            // The run after it moves back into the hole where its home lets it, so no lookup stops short at a gap
+            for (size_t j = (hole + 1) & Mask(); slots[j].entity; j = (j + 1) & Mask())
+            {
+                const size_t home = Home(slots[j].entity);
+                const bool between = hole <= j ? (home > hole && home <= j) : (home > hole || home <= j);
+                if (!between)
+                {
+                    slots[hole] = slots[j];
+                    hole = j;
+                }
+            }
+            slots[hole] = {};
+            --count;
+        }
+        void Clear()
+        {
+            std::fill(slots.begin(), slots.end(), Slot{});
+            count = 0;
+        }
+        void Grow()
+        {
+            auto old = std::move(slots);
+            slots.assign(old.size() * 2, Slot{});
+            count = 0;
+            for (const auto& s : old)
+                if (s.entity)
+                    Set(s.entity, s.info);
+        }
+    };
+    PropTable props;
     SRWLOCK propsLock = SRWLOCK_INIT;
     uintptr_t modelInfos = 0;           // CE 0x1295cd8, model infos by index
 
@@ -295,8 +371,8 @@ namespace Procedural
     PropInfo FindProp(uintptr_t entity)
     {
         AcquireSRWLockShared(&propsLock);
-        auto it = props.find(entity);
-        PropInfo info = it != props.end() ? it->second : PropInfo{ -1.0f, 0.0f };
+        const auto found = props.Find(entity);
+        PropInfo info = found ? *found : PropInfo{ -1.0f, 0.0f };
         ReleaseSRWLockShared(&propsLock);
         return info;
     }
@@ -550,7 +626,7 @@ namespace Procedural
         queuedAt.clear();
         Trace(std::format("I {} generator init, records {}", When(), Records()));
         AcquireSRWLockExclusive(&propsLock);
-        props.clear();
+        props.Clear();
         ReleaseSRWLockExclusive(&propsLock);
         auto extra = Records() - VanillaRecords;
         if (extra && ListPush)
@@ -798,7 +874,7 @@ namespace Procedural
                 const float keep = CEntity::GetPosition(uintptr_t(entity), place) ?
                     float((PositionKey(place) >> 12) & 0xFFFFFF) / float(0x1000000) : 0.0f;
                 AcquireSRWLockExclusive(&propsLock);
-                props[uintptr_t(entity)] = { radius, keep };
+                props.Set(uintptr_t(entity), { radius, keep });
                 ReleaseSRWLockExclusive(&propsLock);
 
                 // Drawn while its own distance times the phase's multiplier (about 1) plus Detail Quality's extra
@@ -838,7 +914,7 @@ namespace Procedural
             if (bTrace && CEntity::GetPosition(entity, position))
                 Trace(std::format("R {} model={}{}", When(), *(int16_t*)(entity + 0x2E), Where(position)));
             AcquireSRWLockExclusive(&propsLock);
-            props.erase(entity);
+            props.Erase(entity);
             ReleaseSRWLockExclusive(&propsLock);
         }
         shRelease.unsafe_fastcall(generator, edx, record, list);
@@ -2248,7 +2324,7 @@ public:
             if (!nUpdates)
                 return;
             AcquireSRWLockShared(&propsLock);
-            auto alive = props.size();
+            auto alive = props.count;
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
                 "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, grass left to GPU grass {}, heavy out of cascades {}, heavy left out {}, faded far left out {}; under covers not queued {}, let go {}, covers kept {}; box full {}, candidates capped {}",
