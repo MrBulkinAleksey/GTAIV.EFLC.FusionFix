@@ -91,7 +91,15 @@ class FarPropInstancing
         bool operator==(const FragKey&) const = default;
     };
     struct FragKeyHash { size_t operator()(const FragKey& k) const { return std::hash<uint64_t>()(k.a ^ (k.b * 0x9E3779B97F4A7C15ull)); } };
-    struct Batch { UINT count = 0; UINT offset = 0; int draws = 0; bool failed = false; const char* reason = ""; };
+    struct Batch
+    {
+        UINT count = 0; UINT offset = 0; int draws = 0; bool failed = false; const char* reason = "";
+        const std::vector<uint32_t>* items = nullptr;   // the group's copies and its sample's point, for parts on a bone
+        float origin[3] = {};
+    };
+    // A part's own transform within its object, drawn as gWorld = its bone's matrix (rows) and offset, then the sample's
+    // point: a street lamp's arm and head, a container's lid. The instance's rows must come after it, not before
+    struct Part { float m[3][3]; float b[3]; };
 
     static inline bool bEnabled = true;
     static inline bool bProps = true;
@@ -728,10 +736,16 @@ class FarPropInstancing
         auto instancedShader = shader ? InstancedShader(device, shader) : nullptr;
         auto instancedDecl = decl ? InstancedDecl(device, decl) : nullptr;
         HRESULT result = S_OK;
-        if (!instancedShader || !instancedDecl)
+        // A part with its own transform gets rows of its own (written before the draw's states change)
+        UINT offset = batch.offset;
+        Part part;
+        const bool partRowsFailed = instancedShader && instancedDecl && batch.items && PartOfDraw(device, part) &&
+                                    !UploadRows(device, *batch.items, batch.origin, &part, offset);
+        if (!instancedShader || !instancedDecl || partRowsFailed)
         {
             batch.failed = true;
-            batch.reason = !instancedShader ? "its vertex shader has no instanced copy" : "its declaration has no instanced copy";
+            batch.reason = !instancedShader ? "its vertex shader has no instanced copy" : !instancedDecl ? "its declaration has no instanced copy"
+                                            : "a part's rows could not be written";
         }
         else
         {
@@ -741,7 +755,7 @@ class FarPropInstancing
             device->GetStreamSource(1, &stream1, &offset1, &stride1);
             device->SetVertexShader(instancedShader);
             device->SetVertexDeclaration(instancedDecl);
-            device->SetStreamSource(1, instanceVB, batch.offset, kInstanceStride);
+            device->SetStreamSource(1, instanceVB, offset, kInstanceStride);
             device->SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | batch.count);
             device->SetStreamSourceFreq(1, D3DSTREAMSOURCE_INSTANCEDATA | 1u);
             result = RealDrawIndexedPrimitive(device, type, base, minIndex, vertices, start, count);
@@ -811,7 +825,10 @@ class FarPropInstancing
 
     // ---------------------------------------------------------------------------------------------
 
-    static bool Upload(IDirect3DDevice9* device, const std::vector<uint32_t>& items, const float* origin)
+    // The rows of `items` from `offset` on: each instance's rotation and its position less `origin`; with `part`, those
+    // that put the part's own transform B (rows m, offset b) inside the instance's R, P: v R' + d' then B is (v B + b) R
+    // + P for R' = B R B^-1, d' = (b R + P - b - origin) B^-1
+    static bool UploadRows(IDirect3DDevice9* device, const std::vector<uint32_t>& items, const float* origin, const Part* part, UINT& offset)
     {
         if (!instanceVB)
         {
@@ -821,6 +838,18 @@ class FarPropInstancing
                 return false;
             }
             instanceCursor = 0;
+        }
+        float inverse[3][3] = {};
+        if (part)
+        {
+            D3DXMATRIX m(part->m[0][0], part->m[0][1], part->m[0][2], 0.0f, part->m[1][0], part->m[1][1], part->m[1][2], 0.0f,
+                         part->m[2][0], part->m[2][1], part->m[2][2], 0.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+            D3DXMATRIX mi;
+            if (!D3DXMatrixInverse(&mi, nullptr, &m))
+                return false;
+            for (int r = 0; r < 3; ++r)
+                for (int k = 0; k < 3; ++k)
+                    inverse[r][k] = mi(r, k);
         }
         const UINT size = UINT(items.size()) * kInstanceStride;
         DWORD flags = D3DLOCK_NOOVERWRITE;
@@ -835,21 +864,76 @@ class FarPropInstancing
         {
             float rotation[3][3];
             const float* place = Placement(copies[i], rotation);
-            // Row k: the world's axis k from the model's x, y, z (the matrix's rows), and the position less the origin
+            float rows[3][3], move[3];
+            if (!part)
+            {
+                std::memcpy(rows, rotation, sizeof(rows));
+                for (int k = 0; k < 3; ++k)
+                    move[k] = place[k] - origin[k];
+            }
+            else
+            {
+                float br[3][3];    // B R
+                for (int r = 0; r < 3; ++r)
+                    for (int k = 0; k < 3; ++k)
+                        br[r][k] = part->m[r][0] * rotation[0][k] + part->m[r][1] * rotation[1][k] + part->m[r][2] * rotation[2][k];
+                for (int r = 0; r < 3; ++r)
+                    for (int k = 0; k < 3; ++k)
+                        rows[r][k] = br[r][0] * inverse[0][k] + br[r][1] * inverse[1][k] + br[r][2] * inverse[2][k];
+                float d[3];
+                for (int k = 0; k < 3; ++k)
+                    d[k] = part->b[0] * rotation[0][k] + part->b[1] * rotation[1][k] + part->b[2] * rotation[2][k] + place[k] - part->b[k] - origin[k];
+                for (int k = 0; k < 3; ++k)
+                    move[k] = d[0] * inverse[0][k] + d[1] * inverse[1][k] + d[2] * inverse[2][k];
+            }
+            // Row k: the world's axis k from the model's x, y, z (the matrix's rows), and the move
             for (int k = 0; k < 3; ++k)
             {
-                out[0] = rotation[0][k];
-                out[1] = rotation[1][k];
-                out[2] = rotation[2][k];
-                out[3] = place[k] - origin[k];
+                out[0] = rows[0][k];
+                out[1] = rows[1][k];
+                out[2] = rows[2][k];
+                out[3] = move[k];
                 out += 4;
             }
         }
         instanceVB->Unlock();
-        batch.offset = instanceCursor;
-        batch.count = UINT(items.size());
+        offset = instanceCursor;
         instanceCursor += size;
         return true;
+    }
+
+    static bool Upload(IDirect3DDevice9* device, const std::vector<uint32_t>& items, const float* origin)
+    {
+        if (!UploadRows(device, items, origin, nullptr, batch.offset))
+            return false;
+        batch.count = UINT(items.size());
+        return true;
+    }
+
+    // The draw's part transform from gWorld (c0-c3) less the sample's point; false when it is none (a plain translation)
+    static bool PartOfDraw(IDirect3DDevice9* device, Part& part)
+    {
+        float c[4][4];
+        if (FAILED(device->GetVertexShaderConstantF(0, &c[0][0], 4)))
+            return false;
+        // The shaders take gWorld transposed (dp4 of the position with each register): the fourth register is 0 0 0 1
+        const bool columns = std::abs(c[3][0]) < 1e-5f && std::abs(c[3][1]) < 1e-5f && std::abs(c[3][2]) < 1e-5f && std::abs(c[3][3] - 1.0f) < 1e-5f;
+        float t[3];
+        for (int r = 0; r < 3; ++r)
+        {
+            for (int k = 0; k < 3; ++k)
+                part.m[r][k] = columns ? c[k][r] : c[r][k];
+            t[r] = columns ? c[r][3] : c[3][r];
+        }
+        bool plain = true;
+        for (int r = 0; r < 3; ++r)
+        {
+            part.b[r] = t[r] - batch.origin[r];
+            plain &= std::abs(part.b[r]) < 1e-3f;
+            for (int k = 0; k < 3; ++k)
+                plain &= std::abs(part.m[r][k] - (r == k ? 1.0f : 0.0f)) < 1e-4f;
+        }
+        return !plain;
     }
 
     // A point `distance` along the camera's axis that projects into the view
@@ -896,6 +980,8 @@ class FarPropInstancing
         batch.draws = 0;
         batch.failed = false;
         batch.reason = "";
+        batch.items = &items;
+        std::memcpy(batch.origin, origin, sizeof(batch.origin));
         instancingThread = GetCurrentThreadId();
         bExecuting = true;
         bInstancing = true;
