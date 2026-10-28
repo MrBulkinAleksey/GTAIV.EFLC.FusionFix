@@ -576,7 +576,14 @@ public:
     float fVolumetricCloudsSkyLight = 0.5f;
     // The least of the sun's light any part of a cloud keeps, however deep in its shadow: lighter,
     // airier bases than the light's march alone gives.
-    float fVolumetricCloudsMinLight = 0.25f;
+    float fVolumetricCloudsMinLight = 0.1f;
+    // [WEATHER] VolumetricCloudsScatterTail: the light scattered many times inside a cloud in four octaves at a
+    // fifth of the extinction each (Wrenninge's, as al-ro's clouds have it), which reach deep and fall off
+    // smoothly; 0: three at half each, as before, spent 0.3 of the layer in, with VolumetricCloudsMinLight 0.25.
+    bool bVolumetricCloudsScatterTail = true;
+    // [WEATHER] VolumetricCloudsLightJitter: the steps towards the sun slid per pixel and frame, so a cloud's body
+    // shades smoothly instead of in layers copying its top (Clouds.fx's fLightJitter). Hidden, live.
+    bool bVolumetricCloudsLightJitter = true;
     // The clouds' sunlit side against the sky behind them, in times its brightness.
     float fVolumetricCloudsSkyMatch = 2.0f;
     bool bVolumetricCloudsWeather = true;
@@ -2114,7 +2121,9 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsSunTint", &PostFxResource::fVolumetricCloudsSunTint, 0.6f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsMoonlight", &PostFxResource::fVolumetricCloudsMoonlight, 0.2f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsSkyLight", &PostFxResource::fVolumetricCloudsSkyLight, 0.5f, 0.0f, 1.0f),
-            IniFloat("WEATHER", "VolumetricCloudsMinLight", &PostFxResource::fVolumetricCloudsMinLight, 0.25f, 0.0f, 0.9f),
+            IniFloat("WEATHER", "VolumetricCloudsMinLight", &PostFxResource::fVolumetricCloudsMinLight, 0.1f, 0.0f, 0.9f),
+            IniFlag("WEATHER", "VolumetricCloudsScatterTail", &PostFxResource::bVolumetricCloudsScatterTail, 1),
+            IniFlag("WEATHER", "VolumetricCloudsLightJitter", &PostFxResource::bVolumetricCloudsLightJitter, 1),
             IniFloat("WEATHER", "VolumetricCloudsSkyMatch", &PostFxResource::fVolumetricCloudsSkyMatch, 2.0f, 0.0f, 20.0f),
             IniFlag("WEATHER", "VolumetricCloudsWeather", &PostFxResource::bVolumetricCloudsWeather, 1),
             IniFlag("WEATHER", "VolumetricCloudsPerlinWorley", &PostFxResource::bVolumetricCloudsPerlinWorley, 1),
