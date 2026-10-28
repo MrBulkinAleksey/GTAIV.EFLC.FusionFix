@@ -38,7 +38,10 @@ import vtablepatch;
 // took 2.5-3.5 ms of CPU a frame, which is why ProceduralSmallFarCull thinned them past 60 m; the models drawn here are
 // left out of that thinning (ProceduralGround::DrawnInstanced). FarPropInstancing = 2 (the default) takes the rest of
 // procedural.dat's PROCOBJ models too, the litter, rocks and rubble, but not those whose record has +0x37 set (they
-// float on water); 1 the plants only, 0 none.
+// float on water); 1 the plants only, 0 none; 3 (the default) any small model besides (radius under kAnyRadius, a
+// building or a prop: the map's fences, bollards, bins, small street furniture) drawn by CDrawEntityDC, a group of one
+// copy executed as it was: at night looking down a street 1360 building draws took 3.9 ms of a 6 ms G-buffer, one
+// model of 2.4 m 115 times (two draws each).
 //
 // The game's draw command for them, CDrawEntityDC, keeps the entity's place as a quaternion (+0x10, x y z w) and a
 // position (+0x20); its execute (CE 0x8dcbf0) makes the matrix from them (0x6708d0, rows at +0, +0x10, +0x20) and has
@@ -76,6 +79,7 @@ import vtablepatch;
 class FarPropInstancing
 {
     static constexpr float kFromDistance = 30.0f;       // metres from the camera
+    static constexpr float kAnyRadius = 15.0f;          // FarPropInstancing 3: models under this radius
     static constexpr float kSampleDistance = 4.0f;
     static constexpr uint32_t kMaxInstances = 32768;    // a pass
     static constexpr int kAlphaSteps = 8;
@@ -103,6 +107,7 @@ class FarPropInstancing
 
     static inline bool bEnabled = true;
     static inline bool bProps = true;
+    static inline bool bAnyModel = true;               // FarPropInstancing 3
     static inline bool bFragments = true;
     static inline volatile bool bStatesStale = false;  // FarPropInstancing's mode changed: models looked at again
     static inline bool bLog = false;
@@ -124,6 +129,7 @@ class FarPropInstancing
     // on the game thread (DrawnInstanced)
     static inline volatile uint8_t modelState[0x10000] = {};
     static inline bool modelIsProp[0x10000] = {};       // a PROCOBJ model that is not a plant
+    static inline bool modelIsAny[0x10000] = {};        // neither: taken by FarPropInstancing 3 for its size
     static inline std::vector<bool> procObjModels;      // PROCOBJ models instanced as props, made once the records are in
     static inline uint8_t modelMisses[0x10000] = {};
     // The same for the models of CDrawFragTypeDC copies: 0 not looked at, 1 drawn instanced, 3 given up on
@@ -151,7 +157,7 @@ class FarPropInstancing
     // FarPropInstancingLog
     static inline uint32_t logPasses = 0;
     static inline uint64_t logInstances = 0, logGroups = 0, logDraws = 0, logOneByOne = 0, logCapped = 0, logEmptyDropped = 0;
-    static inline uint64_t logPropInstances = 0, logNoMeshList = 0, logFragInstances = 0;
+    static inline uint64_t logPropInstances = 0, logNoMeshList = 0, logFragInstances = 0, logAnyInstances = 0, logAnySingle = 0;
     static inline uint32_t logShadersMade = 0, logShadersFailed = 0;
 
     // The pass states the draw list sets around its buckets (CE 0x437140's types: 0 depth test, 2 depth write, 3 alpha
@@ -210,11 +216,12 @@ class FarPropInstancing
 
     static void ReadIni(CIniReader& iniReader)
     {
-        const int mode = std::clamp(iniReader.ReadInteger("PERFORMANCE", "FarPropInstancing", 2), 0, 2);
-        if (bEnabled != (mode != 0) || bProps != (mode == 2))
+        const int mode = std::clamp(iniReader.ReadInteger("PERFORMANCE", "FarPropInstancing", 3), 0, 3);
+        if (bEnabled != (mode != 0) || bProps != (mode >= 2) || bAnyModel != (mode == 3))
             bStatesStale = true;
         bEnabled = mode != 0;
-        bProps = mode == 2;
+        bProps = mode >= 2;
+        bAnyModel = mode == 3;
         bFragments = iniReader.ReadInteger("PERFORMANCE", "FragmentInstancing", 1) != 0;
         bLog = iniReader.ReadInteger("DEBUG", "FarPropInstancingLog", 0) != 0;
     }
@@ -252,8 +259,11 @@ class FarPropInstancing
             const bool prop = !plant && bProps && ProcObjProp(model);
             if (!plant && !prop && bProps && procObjModels.empty())
                 return false;   // not looked at until the records are in
-            state = plant || prop ? uint8_t(1) : uint8_t(2);
+            const float radius = *reinterpret_cast<const float*>(info + 0x1c);
+            const bool any = !plant && !prop && bAnyModel && radius > 0.0f && radius < kAnyRadius;
+            state = plant || prop || any ? uint8_t(1) : uint8_t(2);
             modelIsProp[model] = prop;
+            modelIsAny[model] = any;
             modelState[model] = state;
         }
         return state == 1;
@@ -1048,7 +1058,16 @@ class FarPropInstancing
             logInstances += items.size();
             if (modelIsProp[model])
                 logPropInstances += items.size();
+            if (modelIsAny[model])
+                logAnyInstances += items.size();
             logGroups++;
+            // A model taken for its size alone, seen once: a sample would cost more than the copy's own draw
+            if (modelIsAny[model] && items.size() < 2)
+            {
+                logAnySingle++;
+                ExecuteOneByOne(items);
+                continue;
+            }
             if (ready && modelState[model] == 1 && !HasMeshList(model))
             {
                 logNoMeshList += items.size();
@@ -1123,13 +1142,13 @@ class FarPropInstancing
             for (auto state : fragState)
                 givenUp += state == 3;
             const double n = double(logPasses);
-            FusionLog::Write("FarPropInstancing", "Stats", "%u passes; per pass: %.0f instances (%.0f of them props, %.0f objects with fragments) in %.1f groups, "
+            FusionLog::Write("FarPropInstancing", "Stats", "%u passes; per pass: %.0f instances (%.0f of them props, %.0f other small models in groups of two or more, %.0f objects with fragments) in %.1f groups, "
                 "%.1f instanced draws, %.1f copies executed one by one (%.1f of models without a mesh list), %.1f dropped (a bucket "
                 "the model draws nothing in), %.1f left to the game (store full); shader copies made %u, failed %u; models given up on %u\n",
-                logPasses, logInstances / n, logPropInstances / n, logFragInstances / n, logGroups / n, logDraws / n, logOneByOne / n, logNoMeshList / n,
+                logPasses, logInstances / n, logPropInstances / n, (logAnyInstances - logAnySingle) / n, logFragInstances / n, logGroups / n, logDraws / n, logOneByOne / n, logNoMeshList / n,
                 logEmptyDropped / n, logCapped / n, logShadersMade, logShadersFailed, givenUp);
             logPasses = 0;
-            logInstances = logGroups = logDraws = logOneByOne = logCapped = logEmptyDropped = logPropInstances = logNoMeshList = logFragInstances = 0;
+            logInstances = logGroups = logDraws = logOneByOne = logCapped = logEmptyDropped = logPropInstances = logNoMeshList = logFragInstances = logAnyInstances = logAnySingle = 0;
         }
     }
 
