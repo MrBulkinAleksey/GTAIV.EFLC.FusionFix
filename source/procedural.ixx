@@ -79,7 +79,7 @@ import entityclass;
 //    Taken where the entity goes into the phases' lists (CE 0xae43a0): the render lists' hooks above miss most
 //    objects (a log: CJ_MH_CP_POST1 kept 30 cascade draws a frame 75 m out).
 //  - FarFadeOpaque ([PERFORMANCE]): the same entities that FarFadeCull keeps in that fade are given their whole alpha
-//    back (255) as they go into the lists, so they draw as they do nearer and leave at their own point. An object with
+//    (255) where the fade loop writes it (CE 0xae7d46), so they draw as they do nearer and leave at their own point. An object with
 //    fragments (a bench, a street lamp) under 255 is drawn by the game in the forward pass with blending, every part,
 //    not in the G-buffer: at night six benches 150 m out took 310 draws there, Far Prop Instancing never saw them
 //    (a test with the fade loop's write at CE 0xae7d46 made 255: the forward pass's props went from 557 draws to 29).
@@ -1634,15 +1634,14 @@ namespace Procedural
         return phases;
     }
 
-    // FarFadeCull: a small building or prop far off out of the scene in the faint half of the game's fade;
-    // FarFadeOpaque: the ones kept drawn whole
+    // FarFadeCull: a small building or prop far off out of the scene in the faint half of the game's fade
     uint32_t DropFaded(uintptr_t entity, uint32_t phases, float distance)
     {
         if (!(distance > kFadeCullFrom) || !modelInfos || !pScenePhase)
             return phases;
         const auto scene = *pScenePhase;
         const uint32_t alpha = *(uint8_t*)(entity + 0x63);
-        if (!(phases & scene) || alpha >= (bFarFadeOpaque ? 0xffu : kFadeCullAlpha) || *(uintptr_t*)(entity + 0x4c))
+        if (!(phases & scene) || alpha >= kFadeCullAlpha || *(uintptr_t*)(entity + 0x4c))
             return phases;
         const auto info = *(uintptr_t*)(modelInfos + *(uint16_t*)(entity + 0x2e) * 4);
         const float radius = info ? *(float*)(info + 0x1c) : 0.0f;
@@ -1653,17 +1652,34 @@ namespace Procedural
             return phases;
         float place[3];
         const float keep = CEntity::GetPosition(entity, place) ? float((PositionKey(place) >> 12) & 0xFFFFFF) / float(0x1000000) : 0.0f;
-        if (bFarFadeCull && float(alpha) < keep * float(kFadeCullAlpha))
+        if (float(alpha) >= keep * float(kFadeCullAlpha))
+            return phases;
+        nFadeCulled++;
+        return phases & ~scene;
+    }
+
+    // FarFadeOpaque: the alpha the fade loop is about to write for an entity (CE 0xae7d46, esi the entity, xmm2 the alpha,
+    // xmm4 its distance): whole for the small ones FarFadeCull would keep, as they are where it leaves them out
+    float OpaqueFade(uintptr_t entity, float alpha, float distance)
+    {
+        if (!(alpha < 255.0f) || !(distance > kFadeCullFrom) || !modelInfos || *(uintptr_t*)(entity + 0x4c))
+            return alpha;
+        const auto info = *(uintptr_t*)(modelInfos + *(uint16_t*)(entity + 0x2e) * 4);
+        const float radius = info ? *(float*)(info + 0x1c) : 0.0f;
+        if (!(radius > 0.0f && radius < kFadeCullRadius))
+            return alpha;
+        const auto kind = EntityClass::OfEntity((void*)entity);
+        if (kind == EntityClass::Kind::Vehicle || kind == EntityClass::Kind::Ped)
+            return alpha;
+        if (bFarFadeCull && alpha < float(kFadeCullAlpha))
         {
-            nFadeCulled++;
-            return phases & ~scene;
+            float place[3];
+            const float keep = CEntity::GetPosition(entity, place) ? float((PositionKey(place) >> 12) & 0xFFFFFF) / float(0x1000000) : 0.0f;
+            if (alpha < keep * float(kFadeCullAlpha))
+                return alpha;   // left out of the scene where it goes into the lists (DropFaded)
         }
-        if (bFarFadeOpaque)
-        {
-            *(uint8_t*)(entity + 0x63) = 0xff;
-            nFadeOpaque++;
-        }
-        return phases;
+        nFadeOpaque++;
+        return 255.0f;
     }
 
     // Far Prop Instancing takes the entity's commands: its model is drawn in batches and the entity has no matrix of its
@@ -2297,10 +2313,23 @@ public:
                             return;
                         if (bHeavyPropCull)
                             phases = DropHeavy(entity, phases, *(float*)(regs.esp + 0xc));
-                        if ((bFarFadeCull || bFarFadeOpaque) && phases)
+                        if (bFarFadeCull && phases)
                             phases = DropFaded(entity, phases, *(float*)(regs.esp + 0xc));
                     });
                 }
+            }
+
+            // FarFadeOpaque: the fade loop's write of an entity's alpha (CE 0xae7d46: movzx eax, byte [esi+63] / movd xmm0, eax /
+            // cvtdq2ps xmm0, xmm0 / comiss xmm0, xmm2 / ja / movaps xmm2, xmm0 / cvttss2si eax, xmm2 / mov [esi+63], al). The
+            // lists are made before it for some entities (a bench's object at 150 m kept the loop's alpha over one written as
+            // it went into them), so it is taken here
+            if (auto fade = hook::pattern("0F B6 46 63 66 0F 6E C0 0F 5B C0 0F 2F C2 77 03 0F 28 D0 F3 0F 2C C2 88 46 63"); !fade.empty())
+            {
+                static auto FadeHook = safetyhook::create_mid(fade.get_first(19), [](SafetyHookContext& regs)
+                {
+                    if (bFarFadeOpaque && regs.esi)
+                        regs.xmm2.f32[0] = OpaqueFade(regs.esi, regs.xmm2.f32[0], regs.xmm4.f32[0]);
+                });
             }
 
             FusionFixSettings.SetCallback("PREF_PROCEDURAL_DISTANCE", [](int32_t value)
