@@ -190,9 +190,8 @@ class FarPropInstancing
     // With them the technique group the shaders draw with (CE [0x106B308], -1 the default; its setter 0x42F0A0): the list
     // changes it for its last buckets, and a street lamp's sample drew with another technique (vs 945 / ps 188 for the
     // game's 947 / 189, other samplers): its albedo 0, black (capture 2026-10-28). And the draw mode (CE [0x17f59d4], its
-    // setter 0x62bf30) the drawables pick their shaders by: the cascades' list puts it back to 0 right after the entities
-    // (0x924ce0), and copies executed after that drew into CASCADE_TARGET_R32 with the scene's pixel shader (ps 1AD for the
-    // depth's ps 5, capture 2026-10-28): colours for depths, shadows of the wrong shape
+    // setter 0x62bf30; CDrawEntityDC's execute draws its own way when it is not 0): the cascades' list puts it back to 0
+    // right after the entities (0x924ce0), before the copies are executed
     struct States
     {
         uint32_t values[std::size(kStateTypes)];
@@ -231,11 +230,15 @@ class FarPropInstancing
         return uint8_t(stateSets.size() - 1);
     }
 
+    // Not the pass states in a cascade: its list sets the device's states past the cache, which keeps an earlier pass's
+    // (blending and alpha test on), and the copies set from it drew depths blended and alpha tested, with the alpha
+    // test's shaders (vs 850 / ps 98 for the game's 7D1 / 5, capture 2026-10-28): shadows missing in places and flickering
     static void SetStates(const States& states)
     {
-        for (size_t i = 0; i < std::size(kStateTypes); ++i)
-            if (passStateCache[kStateTypes[i]] != states.values[i])
-                setPassState(kStateTypes[i], states.values[i]);
+        if (!bCascadePass)
+            for (size_t i = 0; i < std::size(kStateTypes); ++i)
+                if (passStateCache[kStateTypes[i]] != states.values[i])
+                    setPassState(kStateTypes[i], states.values[i]);
         *techniqueGroup = states.group;
         if (drawMode)
             *drawMode = states.mode;
