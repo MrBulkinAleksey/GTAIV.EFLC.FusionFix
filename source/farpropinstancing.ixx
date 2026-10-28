@@ -1430,7 +1430,7 @@ public:
                 if (setter[0] == 0x8B && setter[1] == 0x44 && setter[2] == 0x24 && setter[3] == 0x04 && setter[4] == 0xA3 && setter[9] == 0xC3)
                 {
                     drawMode = *reinterpret_cast<int32_t* const*>(setter + 5);
-                    static auto ForcedShaderSet = safetyhook::create_mid(setter, [](SafetyHookContext& regs)
+                    static auto ForcedShaderSet = safetyhook::create_mid(const_cast<uint8_t*>(setter), [](SafetyHookContext& regs)
                     {
                         if (*reinterpret_cast<const int32_t*>(regs.esp + 4) == 0)
                             FlushCascadePart();
