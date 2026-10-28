@@ -45,11 +45,13 @@ import vtablepatch;
 // copy executed as it was, trees and bushes left out (GrassShared::SwaysByPlace): at night looking down a street 1360 building draws took 3.9 ms of a 6 ms G-buffer, one
 // model of 2.4 m 115 times (two draws each).
 //
-// CascadeInstancing = 1 ([PERFORMANCE], the default): the same in each of the sun's cascades (CASCADE_TARGET_R32,
+// CascadeInstancing = 1 ([PERFORMANCE], off by default: broken): the same in each of the sun's cascades (CASCADE_TARGET_R32,
 // RenderSkip's lock hooks): the copies taken while a cascade is locked are executed as it is about to be unlocked, each
 // group's sample where its model's sphere is wholly inside the cascade's own view (ViewportOrigin), not before the
 // camera. A model that fails there is given up on in the cascades alone. By day props took 290 draws and 0.7 ms of the
-// cascades' 2.1 ms of CPU, buildings 516 and 1.0 ms.
+// cascades' 2.1 ms of CPU, buildings 516 and 1.0 ms. Broken as it is (2026-10-28 test): by the unlock the current viewport
+// is no longer the cascade's (37 of 46 groups found no sample place, none were instanced), and the copies executed there
+// one by one cast shadows of the wrong shape that flickered: the copies have to be executed inside the cascade's list.
 //
 // The game's draw command for them, CDrawEntityDC, keeps the entity's place as a quaternion (+0x10, x y z w) and a
 // position (+0x20); its execute (CE 0x8dcbf0) makes the matrix from them (0x6708d0, rows at +0, +0x10, +0x20) and has
@@ -117,7 +119,7 @@ class FarPropInstancing
     static inline bool bProps = true;
     static inline bool bAnyModel = true;               // FarPropInstancing 3
     static inline bool bFragments = true;
-    static inline bool bCascades = true;               // CascadeInstancing
+    static inline bool bCascades = false;              // CascadeInstancing
     static inline volatile bool bStatesStale = false;  // FarPropInstancing's mode changed: models looked at again
     static inline bool bLog = false;
 
@@ -239,7 +241,7 @@ class FarPropInstancing
         bProps = mode >= 2;
         bAnyModel = mode == 3;
         bFragments = iniReader.ReadInteger("PERFORMANCE", "FragmentInstancing", 1) != 0;
-        bCascades = iniReader.ReadInteger("PERFORMANCE", "CascadeInstancing", 1) != 0;
+        bCascades = iniReader.ReadInteger("PERFORMANCE", "CascadeInstancing", 0) != 0;
         bLog = iniReader.ReadInteger("DEBUG", "FarPropInstancingLog", 0) != 0;
     }
 
