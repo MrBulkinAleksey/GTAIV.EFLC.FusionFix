@@ -127,6 +127,10 @@ class FarPropInstancing
     // Render thread
     static inline bool bInScene = false;
     static inline bool bCascadePass = false;   // the copies are of a cascade of the sun's, not of the G-buffer
+    // A cascade's forced shader has its alpha test's pass bound (0xaebd90(technique, 1)): nothing is taken then. The
+    // copies of that pass cast no shadow (2026-10-28: the elevated railway's grating, vs 808 / ps 53, gone from the sun's
+    // shadow while its beams were right), likely the instanced vertex shader's copy losing what the alpha test reads
+    static inline bool bCascadeAlphaPass = false;
     static inline bool bExecuting = false;      // copies being executed: not taken again
     static inline bool bInstancing = false;     // the sample's draws are made instanced
     static inline DWORD instancingThread = 0;
@@ -389,7 +393,7 @@ class FarPropInstancing
     // EntityClass::SetFragTypeCommandHook: far objects with fragments drawn whole are copied instead of executed
     static bool OnFragTypeCommand(EntityClass::Kind kind, void* dc)
     {
-        if (!bEnabled || !bFragments || !bInScene || bExecuting || kind != EntityClass::Kind::Prop)
+        if (!bEnabled || !bFragments || !bInScene || bExecuting || kind != EntityClass::Kind::Prop || (bCascadePass && bCascadeAlphaPass))
             return true;
         const auto* bytes = static_cast<const uint8_t*>(dc);
         const uint16_t model = *reinterpret_cast<const uint16_t*>(bytes + 0x58);
@@ -423,7 +427,7 @@ class FarPropInstancing
     // EntityClass::SetEntityCommandHook: far candidates are copied instead of executed
     static bool OnCommand(EntityClass::Kind kind, void* dc)
     {
-        if (!bEnabled || !bInScene || bExecuting)
+        if (!bEnabled || !bInScene || bExecuting || (bCascadePass && bCascadeAlphaPass))
             return true;
         if (kind != EntityClass::Kind::Building && kind != EntityClass::Kind::Prop)
             return true;
@@ -1294,6 +1298,7 @@ class FarPropInstancing
             return;
         BeginScene();
         bCascadePass = bInScene;
+        bCascadeAlphaPass = false;
     }
 
     static void EndCascade()
@@ -1410,7 +1415,10 @@ public:
                     static auto ForcedShaderSet = safetyhook::create_mid(const_cast<uint8_t*>(setter), [](SafetyHookContext& regs)
                     {
                         if (*reinterpret_cast<const int32_t*>(regs.esp + 4) == 0)
+                        {
                             FlushCascadePart();
+                            bCascadeAlphaPass = false;
+                        }
                     });
                 }
             }
@@ -1418,9 +1426,12 @@ public:
             // mov esi, eax / mov ecx, esi / ja
             if (auto forcedPass = hook::pattern("56 E8 ? ? ? ? 83 7C 24 08 03 8B F0 8B CE 77"); !forcedPass.empty())
             {
-                static auto ForcedPassBind = safetyhook::create_mid(forcedPass.get_first(0), [](SafetyHookContext&)
+                static auto ForcedPassBind = safetyhook::create_mid(forcedPass.get_first(0), [](SafetyHookContext& regs)
                 {
                     FlushCascadePart();
+                    // (technique, alpha test): a technique past 3 lets the pass go
+                    const uint32_t technique = *reinterpret_cast<const uint32_t*>(regs.esp + 4);
+                    bCascadeAlphaPass = technique <= 3 && *reinterpret_cast<const uint8_t*>(regs.esp + 8) == 1;
                 });
             }
         };
