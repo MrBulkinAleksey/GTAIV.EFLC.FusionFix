@@ -493,6 +493,8 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     effect->SetFloat(effect->GetParameterByName(nullptr, "fFrameJitter"), static_cast<float>(std::fmod(FrameHistory::Frame() * 0.6180339887, 1.0)));
     // The outline wanders by up to 150 metres.
     effect->SetFloat(effect->GetParameterByName(nullptr, "fWarp"), 150.0f / R.fCloudShadowsScale);
+    // The outline's bulges by billows, VolumetricCloudsLumps either way.
+    effect->SetFloat(effect->GetParameterByName(nullptr, "fLump"), 2.0f * R.fVolumetricCloudsLumps / R.fCloudShadowsScale);
     const D3DXVECTOR4 morph(R.CloudMorphPhase(), R.kCloudMorphReach / R.fCloudShadowsScale, R.kCloudWeatherScale, R.kCloudWeatherReach);
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Morph"), &morph);
     effect->SetFloat(effect->GetParameterByName(nullptr, "fMaxDistance"), R.fVolumetricCloudsMaxDistance);

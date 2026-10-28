@@ -742,6 +742,9 @@ public:
     // Worley billows, as in Horizon Zero Dawn's clouds): billows joined by wisps and ragged plumes instead of
     // round billows alone. Off, the plain Worley billows. The texture is built again when it changes.
     bool bVolumetricCloudsPerlinWorley = true;
+    // [WEATHER] VolumetricCloudsLumps: how far, in metres either way, the clouds' outline bulges and dents by
+    // billows, so the sides and tops seen from afar are lumpy rather than smooth (Clouds.fx's fLump). 0: off.
+    float fVolumetricCloudsLumps = 200.0f;
     bool bCloudDetailPerlinWorley = false; // what CloudDetailTexture was built with
     // Volumetric Clouds in the graphics menu (PREF_VOLUMETRIC_CLOUDS, the same VolumetricClouds key)
     // turns them on and off at once; the game's flat clouds and the cloud shadows follow.
@@ -2115,6 +2118,7 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsSkyMatch", &PostFxResource::fVolumetricCloudsSkyMatch, 2.0f, 0.0f, 20.0f),
             IniFlag("WEATHER", "VolumetricCloudsWeather", &PostFxResource::bVolumetricCloudsWeather, 1),
             IniFlag("WEATHER", "VolumetricCloudsPerlinWorley", &PostFxResource::bVolumetricCloudsPerlinWorley, 1),
+            IniFloat("WEATHER", "VolumetricCloudsLumps", &PostFxResource::fVolumetricCloudsLumps, 200.0f, 0.0f, 1000.0f),
             IniFlag("WEATHER", "PbrSkyHorizonHue", &PostFxResource::bPbrSkyHorizonHue, 0),
             IniFloat("WEATHER", "VolumetricCloudsVanilla", &PostFxResource::fVolumetricCloudsVanilla, 0.0f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsTranslucency", &PostFxResource::fVolumetricCloudsTranslucency, 0.25f, 0.0f, 0.9f),
