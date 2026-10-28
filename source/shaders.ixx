@@ -624,7 +624,27 @@ public:
                         arr13[2] = fSSDecay;
                         // The sun lens flare, drawn with the shafts (SunShafts_PS.hlsl)
                         static auto sunFlare = FusionFixSettings.GetRef("PREF_SUN_FLARE");
-                        arr13[3] = (sunFlare && sunFlare->get()) ? fSunFlare : 0.0f;
+                        // Out under an overcast sheet, where the sky at the sun is a broad glow: the flare made a star
+                        // and rings of it with the exposure up in the rain. Its frame's own test, the sun's pixel
+                        // against the frame a twentieth of the height around, put it out in clear weather too: the
+                        // sky's sun is a soft spot of that size, 12% darker there
+                        auto flareByWeather = [](uint32_t type)
+                        {
+                            switch (type)
+                            {
+                            case CWeather::EXTRASUNNY: case CWeather::SUNNY: case CWeather::SUNNY_WINDY: return 1.0f;
+                            case CWeather::CLOUDY: return 0.5f;
+                            default: return 0.0f;
+                            }
+                        };
+                        float flareWeather = 1.0f;
+                        if (CWeather::OldWeatherType && CWeather::NewWeatherType && CWeather::InterpolationValue)
+                        {
+                            const float k = std::clamp(*CWeather::InterpolationValue, 0.0f, 1.0f);
+                            const float from = flareByWeather(*CWeather::OldWeatherType);
+                            flareWeather = from + (flareByWeather(*CWeather::NewWeatherType) - from) * k;
+                        }
+                        arr13[3] = (sunFlare && sunFlare->get()) ? fSunFlare * flareWeather : 0.0f;
 
                         pDevice->SetPixelShaderConstantF(208, &arr13[0], 1);
                     }
