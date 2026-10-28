@@ -48,9 +48,9 @@ import vtablepatch;
 // (vtable 0xe866ac slot 7, CE 0x928ac0) is made for the four cascades in a loop: its viewport, the lock of
 // CASCADE_TARGET_R32, the entities (CE 0xb1e480(list, -1, 0), cdecl), the unlock and the copy into the atlas. The call
 // is taken (AddCascadeEntities) to put a command before the entities that starts taking copies and one after that
-// executes them, inside the cascade with its viewport current; each group's sample goes where its model's sphere is
-// wholly inside that orthographic view (ViewportOrigin), not before the camera. A model that fails there is given up
-// on in the cascades alone. By day props took 290 draws and 0.7 ms of the cascades' 2.1 ms of CPU, buildings 516 and
+// executes them, inside the cascade with its viewport current, and before each change of the forced depth shader's pass
+// (FlushCascadePart); each group's sample goes where its copy nearest the camera stands (CopyOrigin), not before the
+// camera. A model that fails there is given up on in the cascades alone. By day props took 290 draws and 0.7 ms of the cascades' 2.1 ms of CPU, buildings 516 and
 // 1.0 ms. Taken first at the target's unlock instead (2026-10-28), when the viewport was no longer the cascade's: 37 of
 // 46 groups found no sample place and the copies executed there one by one cast flickering shadows of the wrong shape.
 //
@@ -1077,74 +1077,38 @@ class FarPropInstancing
         return true;
     }
 
-    // A cascade's sample: its model's bounding sphere wholly inside the viewport drawn now (the cascade's, orthographic),
-    // where the drawables test their parts: at the middle of the view's box, as its projection gives it (the point that
-    // lands on the clip's centre at half depth), taken back to the world by the view's inverse. The cascades' viewports
-    // are made by hand (CE 0x928c15: camera 0x4319b0, projection 0x4317e0) and their near and far clips are not their
-    // box's, likely why a sample at depths between them found no place (2026-10-28: about half the groups had none,
-    // none were given up on, nothing was instanced)
-    static bool ViewportOrigin(uint16_t model, float origin[3])
+    // A cascade's sample: where one of its group's copies stands, the one nearest the camera (the cascades are made
+    // around the camera's view), drawn there by the game in this very cascade a moment before; its rotation is the
+    // sample's own, none. The cascade's viewport tells nothing that can be trusted: made by hand (CE 0x928c15, camera
+    // 0x4319b0, projection 0x4317e0, which sets +0x2f0 too), its matrices read as a projection scaled 151 times on every
+    // axis and a view at the world's origin with axes 0.0002 long (FarPropInstancingLog, 2026-10-28); a sample placed
+    // from them never fitted, and nothing was instanced. The forced shader's draw (the drawable's 0x6a1e10) is not seen
+    // to test the sphere
+    static bool CopyOrigin(const std::vector<uint32_t>& items, float origin[3])
     {
-        const auto viewport = rage::GetCurrentViewport();
-        const auto info = EntityClass::ModelInfo(model);
-        if (!viewport || !info)
-            return false;
-        float centre[3];
-        std::memcpy(centre, reinterpret_cast<const void*>(info + 0x10), sizeof(centre));
-        const float radius = *reinterpret_cast<const float*>(info + 0x1c);
-        if (!(radius > 0.0f && radius < 200.0f) || !std::isfinite(centre[0] + centre[1] + centre[2]))
-            return false;
-        const auto& p = viewport->mProjectionMatrix;
-        const auto& inverse = viewport->mViewInverseMatrix;
-        // Orthographic only: w stays 1
-        if (p[0][3] != 0.0f || p[1][3] != 0.0f || p[2][3] != 0.0f || p[3][3] != 1.0f || p[0][0] == 0.0f || p[1][1] == 0.0f || p[2][2] == 0.0f)
+        float best = -1.0f;
+        for (auto i : items)
         {
-            LogViewport(viewport, "not orthographic");
-            return false;
-        }
-        const float middle[3] = { -p[3][0] / p[0][0], -p[3][1] / p[1][1], (0.5f - p[3][2]) / p[2][2] };
-        // The sphere's reach along the view's own axes, in the view's space
-        const float r = radius * 1.1f;
-        for (int axis = -1; axis < 3; ++axis)
-            for (float sign : { 1.0f, -1.0f })
+            float rows[3][3];
+            const float* place = Placement(copies[i], rows);
+            if (!std::isfinite(place[0] + place[1] + place[2]))
+                continue;
+            const float dx = place[0] - cameraPos[0], dy = place[1] - cameraPos[1], dz = place[2] - cameraPos[2];
+            const float d = dx * dx + dy * dy + dz * dz;
+            if (best < 0.0f || d < best)
             {
-                float v[3] = { middle[0], middle[1], middle[2] };
-                if (axis >= 0)
-                    v[axis] += sign * r;
-                float clip[3];
-                for (int k = 0; k < 3; ++k)
-                    clip[k] = v[0] * p[0][k] + v[1] * p[1][k] + v[2] * p[2][k] + p[3][k];
-                if (!(std::abs(clip[0]) < 1.0f && std::abs(clip[1]) < 1.0f && clip[2] > 0.0f && clip[2] < 1.0f))
-                {
-                    LogViewport(viewport, "the sphere is wider than the view");
-                    return false;
-                }
+                best = d;
+                std::memcpy(origin, place, 3 * sizeof(float));
             }
-        for (int k = 0; k < 3; ++k)
-            origin[k] = middle[0] * inverse[0][k] + middle[1] * inverse[1][k] + middle[2] * inverse[2][k] + inverse[3][k] - centre[k];
-        return std::isfinite(origin[0] + origin[1] + origin[2]);
+        }
+        return best >= 0.0f;
     }
 
-    // FarPropInstancingLog: the first cascade viewport a sample found no place in, once
-    static void LogViewport(const rage::grcViewport* viewport, const char* why)
-    {
-        static bool logged = false;
-        if (!bLog || logged)
-            return;
-        logged = true;
-        const auto& p = viewport->mProjectionMatrix;
-        const auto& i = viewport->mViewInverseMatrix;
-        FusionLog::Write("FarPropInstancing", "Cascades", "no sample place (%s): projection rows (%g %g %g %g) (%g %g %g %g) "
-            "(%g %g %g %g) (%g %g %g %g), view's place %g %g %g, its axis %g %g %g, near %g far %g\n", why,
-            p[0][0], p[0][1], p[0][2], p[0][3], p[1][0], p[1][1], p[1][2], p[1][3], p[2][0], p[2][1], p[2][2], p[2][3],
-            p[3][0], p[3][1], p[3][2], p[3][3], i[3][0], i[3][1], i[3][2], i[2][0], i[2][1], i[2][2], viewport->mNearClip, viewport->mFarClip);
-    }
-
-    static bool SampleOrigin(uint16_t model, float origin[3])
+    static bool SampleOrigin(uint16_t model, const std::vector<uint32_t>& items, float origin[3])
     {
         if (!bCascadePass)
             return GroupOrigin(model, origin);
-        if (ViewportOrigin(model, origin))
+        if (CopyOrigin(items, origin))
             return true;
         logCascadeNoSample++;
         return false;
@@ -1205,7 +1169,7 @@ class FarPropInstancing
                 ExecuteOneByOne(items);
                 continue;
             }
-            if (!ready || modelState[model] != 1 || !SampleOrigin(model, origin) || !Upload(device, items, origin))
+            if (!ready || modelState[model] != 1 || !SampleOrigin(model, items, origin) || !Upload(device, items, origin))
             {
                 ExecuteOneByOne(items);
                 continue;
@@ -1248,7 +1212,7 @@ class FarPropInstancing
             logInstances += items.size();
             logFragInstances += items.size();
             logGroups++;
-            if (!ready || fragState[model] != 1 || !SampleOrigin(model, origin) || !Upload(device, items, origin))
+            if (!ready || fragState[model] != 1 || !SampleOrigin(model, items, origin) || !Upload(device, items, origin))
             {
                 ExecuteOneByOne(items);
                 continue;
