@@ -78,6 +78,11 @@ import entityclass;
 //    price of a draw, 5-9 us each for the posts, some 1.5 ms of a 6 ms G-buffer looking over a park.
 //    Taken where the entity goes into the phases' lists (CE 0xae43a0): the render lists' hooks above miss most
 //    objects (a log: CJ_MH_CP_POST1 kept 30 cascade draws a frame 75 m out).
+//  - FarFadeOpaque ([PERFORMANCE]): the same entities that FarFadeCull keeps in that fade are given their whole alpha
+//    back (255) as they go into the lists, so they draw as they do nearer and leave at their own point. An object with
+//    fragments (a bench, a street lamp) under 255 is drawn by the game in the forward pass with blending, every part,
+//    not in the G-buffer: at night six benches 150 m out took 310 draws there, Far Prop Instancing never saw them
+//    (a test with the fade loop's write at CE 0xae7d46 made 255: the forward pass's props went from 557 draws to 29).
 //  - ProceduralGroundCovers: grass that runs on under a road or a pavement grows no props there, nor GPU grass
 //    (Procedural::UnderCover).
 //
@@ -156,6 +161,7 @@ namespace Procedural
     bool bSmallFarCull = true;
     bool bHeavyPropCull = true;
     bool bFarFadeCull = true;
+    bool bFarFadeOpaque = true;
     constexpr float kFadeCullRadius = 8.0f;        // entities under this radius
     constexpr float kFadeCullFrom = 50.0f;         // further than this
     constexpr uint32_t kFadeCullAlpha = 128;       // leave once their fade's alpha is under their share of this
@@ -571,7 +577,7 @@ namespace Procedural
     uint32_t nCandidatesCapped = 0, nEntitiesCapped = 0;
     uint32_t nQueueMax = 0, nWaitingMax = 0, nDropped = 0;
     uint32_t nGrassHidden = 0;
-    uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0, nHeavyCascades = 0, nHeavyScene = 0, nFadeCulled = 0;
+    uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0, nHeavyCascades = 0, nHeavyScene = 0, nFadeCulled = 0, nFadeOpaque = 0;
     uint32_t nConeFull = 0, nParkedNow = 0;
     uint32_t nUpdates = 0;
     double fUpdateMs = 0.0, fUpdateMaxMs = 0.0;
@@ -743,6 +749,7 @@ namespace Procedural
         bSmallFarCull = iniReader.ReadInteger("PROCEDURAL", "ProceduralSmallFarCull", 1) != 0;
         bHeavyPropCull = iniReader.ReadInteger("PERFORMANCE", "HeavyPropCull", 1) != 0;
         bFarFadeCull = iniReader.ReadInteger("PERFORMANCE", "FarFadeCull", 1) != 0;
+        bFarFadeOpaque = iniReader.ReadInteger("PERFORMANCE", "FarFadeOpaque", 1) != 0;
         fConeFullCos = std::cos(std::clamp(iniReader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
         fConeTurnLead = std::clamp(iniReader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
         bConeRelease = iniReader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
@@ -1627,14 +1634,15 @@ namespace Procedural
         return phases;
     }
 
-    // FarFadeCull: a small building or prop far off out of the scene in the faint half of the game's fade
+    // FarFadeCull: a small building or prop far off out of the scene in the faint half of the game's fade;
+    // FarFadeOpaque: the ones kept drawn whole
     uint32_t DropFaded(uintptr_t entity, uint32_t phases, float distance)
     {
         if (!(distance > kFadeCullFrom) || !modelInfos || !pScenePhase)
             return phases;
         const auto scene = *pScenePhase;
         const uint32_t alpha = *(uint8_t*)(entity + 0x63);
-        if (!(phases & scene) || alpha >= kFadeCullAlpha || *(uintptr_t*)(entity + 0x4c))
+        if (!(phases & scene) || alpha >= (bFarFadeOpaque ? 0xffu : kFadeCullAlpha) || *(uintptr_t*)(entity + 0x4c))
             return phases;
         const auto info = *(uintptr_t*)(modelInfos + *(uint16_t*)(entity + 0x2e) * 4);
         const float radius = info ? *(float*)(info + 0x1c) : 0.0f;
@@ -1645,10 +1653,17 @@ namespace Procedural
             return phases;
         float place[3];
         const float keep = CEntity::GetPosition(entity, place) ? float((PositionKey(place) >> 12) & 0xFFFFFF) / float(0x1000000) : 0.0f;
-        if (float(alpha) >= keep * float(kFadeCullAlpha))
-            return phases;
-        nFadeCulled++;
-        return phases & ~scene;
+        if (bFarFadeCull && float(alpha) < keep * float(kFadeCullAlpha))
+        {
+            nFadeCulled++;
+            return phases & ~scene;
+        }
+        if (bFarFadeOpaque)
+        {
+            *(uint8_t*)(entity + 0x63) = 0xff;
+            nFadeOpaque++;
+        }
+        return phases;
     }
 
     // Far Prop Instancing takes the entity's commands: its model is drawn in batches and the entity has no matrix of its
@@ -2282,7 +2297,7 @@ public:
                             return;
                         if (bHeavyPropCull)
                             phases = DropHeavy(entity, phases, *(float*)(regs.esp + 0xc));
-                        if (bFarFadeCull && phases)
+                        if ((bFarFadeCull || bFarFadeOpaque) && phases)
                             phases = DropFaded(entity, phases, *(float*)(regs.esp + 0xc));
                     });
                 }
@@ -2327,14 +2342,14 @@ public:
             auto alive = props.count;
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
-                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, grass left to GPU grass {}, heavy out of cascades {}, heavy left out {}, faded far left out {}; under covers not queued {}, let go {}, covers kept {}; box full {}, candidates capped {}",
+                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, grass left to GPU grass {}, heavy out of cascades {}, heavy left out {}, faded far left out {}, faded far drawn whole {}; under covers not queued {}, let go {}, covers kept {}; box full {}, candidates capped {}",
                 fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
-                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nGrassHidden, nHeavyCascades, nHeavyScene, nFadeCulled, nCoverSkipped, nCoverReleased, covers.size(), nEntitiesCapped, nCandidatesCapped));
+                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nGrassHidden, nHeavyCascades, nHeavyScene, nFadeCulled, nFadeOpaque, nCoverSkipped, nCoverReleased, covers.size(), nEntitiesCapped, nCandidatesCapped));
             nCoverSkipped = nCoverReleased = 0;
             fUpdateMs = fUpdateMaxMs = 0.0;
             nUpdates = 0;
             nQueueMax = nWaitingMax = 0;
-            nReflectionsSkipped = nSmallFarCulled = nGrassHidden = nHeavyCascades = nHeavyScene = nFadeCulled = 0;
+            nReflectionsSkipped = nSmallFarCulled = nGrassHidden = nHeavyCascades = nHeavyScene = nFadeCulled = nFadeOpaque = 0;
             nConeFull = 0;
             nConeReleased = 0;
         };
