@@ -395,6 +395,13 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     // lights too, grey where they should take its colour.
     effect->SetFloat(effect->GetParameterByName(nullptr, "fMinLight"), R.fVolumetricCloudsMinLight);
     {
+        // The octaves of the light scattered many times: four at a fifth of the extinction each, or three at half.
+        const D3DXVECTOR4 extinction = R.bVolumetricCloudsScatterTail ? D3DXVECTOR4(1.0f, 0.2f, 0.04f, 0.008f) : D3DXVECTOR4(1.0f, 0.5f, 0.25f, 0.0f);
+        const D3DXVECTOR4 weight = R.bVolumetricCloudsScatterTail ? D3DXVECTOR4(1.0f, 0.5f, 0.25f, 0.125f) / 1.875f : D3DXVECTOR4(1.0f, 0.5f, 0.25f, 0.0f) / 1.75f;
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4ScatterExtinction"), &extinction);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4ScatterWeight"), &weight);
+    }
+    {
         const float lowSun = std::clamp((sun.z - 0.0872f) / (0.5736f - 0.0872f), 0.0f, 1.0f);
         const float day = lowSun * lowSun * (3.0f - 2.0f * lowSun);
         effect->SetFloat(effect->GetParameterByName(nullptr, "fBacklight"), 0.3f + 0.7f * day);

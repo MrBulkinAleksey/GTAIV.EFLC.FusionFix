@@ -79,6 +79,8 @@ float3 vec3ShadeColour;   // the game's cloud colour darkened by VolumetricCloud
 float3 vec3SunsetColour;  // the game's sunset colour, exposed
 float fSilver;            // the game's CloudInscatteringRange: the brightening along the sun's axis
 float fMinLight;          // VolumetricCloudsMinLight: the least of the sun's light any part of a cloud keeps
+float4 vec4ScatterExtinction; // the share of the extinction each octave of the light scattered many times takes
+float4 vec4ScatterWeight;     // and its weight, the four summing to 1
 float fMottle;            // VolumetricCloudsMottle: how much the small billows at the surface fleck the light
 float fBacklight;         // with the sun low, the share of their light the clouds straight towards it keep
 float fGlowBoost;         // and how much stronger the glow of their thin edges is
@@ -500,9 +502,13 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
                 }
             }
             // Light scattered many times inside a cloud gets far deeper than the sun's direct beam,
-            // which is what keeps real clouds bright: three octaves, each with half the extinction
-            // and half the weight of the one before. With the direct beam alone the sun barely
-            // reached the faces seen from below and the clouds came out dark.
+            // which is what keeps real clouds bright: octaves of it, each with a share of the extinction
+            // and half the weight of the one before (vec4ScatterExtinction, vec4ScatterWeight). With the
+            // direct beam alone the sun barely reached the faces seen from below and the clouds came out
+            // dark. Three octaves at half the extinction each (VolumetricCloudsScatterTail 0) were spent
+            // some 0.3 of the layer's thickness in: the sun's light fell to VolumetricCloudsMinLight there
+            // and stayed, so every cloud was a lit cap on one flat grey body with a sharp edge between;
+            // four at a fifth each (1) reach a kilometre and more, and the light falls off all the way in.
             // A share of the extinction (VolumetricCloudsAbsorption): past the sun's direct beam the
             // light inside a cloud is scattered forwards mostly and gets through more cloud than the
             // eye's view does. At 0.6 the sun was spent within some 50 metres, about as deep as the
@@ -512,7 +518,7 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
             float tau = lightDepth * sigma * fLightAbsorption;
             // Never below VolumetricCloudsMinLight of the sun, however deep in the cloud: for looks, the
             // bases and the shaded sides stay light and airy rather than heavy.
-            float sun = lerp(fMinLight, 1.0, (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) / 1.75) * fLightStrength;
+            float sun = lerp(fMinLight, 1.0, dot(exp(-tau * vec4ScatterExtinction), vec4ScatterWeight)) * fLightStrength;
             // The billows shade each other: where a coarse billow stands a billow's size, 120 m,
             // towards the sun, the sample takes less of it, by its own density. The march above
             // leaves the detail out, and its first steps are too short for a billow to shade the
