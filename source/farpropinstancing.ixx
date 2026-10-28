@@ -127,10 +127,6 @@ class FarPropInstancing
     // Render thread
     static inline bool bInScene = false;
     static inline bool bCascadePass = false;   // the copies are of a cascade of the sun's, not of the G-buffer
-    // A cascade's forced shader has its alpha test's pass bound (0xaebd90(technique, 1)): nothing is taken then. The
-    // copies of that pass cast no shadow (2026-10-28: the elevated railway's grating, vs 808 / ps 53, gone from the sun's
-    // shadow while its beams were right), likely the instanced vertex shader's copy losing what the alpha test reads
-    static inline bool bCascadeAlphaPass = false;
     static inline bool bExecuting = false;      // copies being executed: not taken again
     static inline bool bInstancing = false;     // the sample's draws are made instanced
     static inline DWORD instancingThread = 0;
@@ -393,7 +389,7 @@ class FarPropInstancing
     // EntityClass::SetFragTypeCommandHook: far objects with fragments drawn whole are copied instead of executed
     static bool OnFragTypeCommand(EntityClass::Kind kind, void* dc)
     {
-        if (!bEnabled || !bFragments || !bInScene || bExecuting || kind != EntityClass::Kind::Prop || (bCascadePass && bCascadeAlphaPass))
+        if (!bEnabled || !bFragments || !bInScene || bExecuting || kind != EntityClass::Kind::Prop)
             return true;
         const auto* bytes = static_cast<const uint8_t*>(dc);
         const uint16_t model = *reinterpret_cast<const uint16_t*>(bytes + 0x58);
@@ -427,7 +423,7 @@ class FarPropInstancing
     // EntityClass::SetEntityCommandHook: far candidates are copied instead of executed
     static bool OnCommand(EntityClass::Kind kind, void* dc)
     {
-        if (!bEnabled || !bInScene || bExecuting || (bCascadePass && bCascadeAlphaPass))
+        if (!bEnabled || !bInScene || bExecuting)
             return true;
         if (kind != EntityClass::Kind::Building && kind != EntityClass::Kind::Prop)
             return true;
@@ -781,6 +777,42 @@ class FarPropInstancing
         return bInstancing && GetCurrentThreadId() == instancingThread && !FrameGeneration::PresentingInDraw();
     }
 
+    // A pixel shader that samples a texture or kills pixels (texld, texldd, texldl, texkill), from its bytecode; once
+    // for each shader
+    static bool ReadsTexture(IDirect3DPixelShader9* shader)
+    {
+        static std::unordered_map<IDirect3DPixelShader9*, bool> known;
+        if (auto it = known.find(shader); it != known.end())
+            return it->second;
+        bool reads = false;
+        UINT size = 0;
+        if (SUCCEEDED(shader->GetFunction(nullptr, &size)) && size >= 8)
+        {
+            std::vector<DWORD> code(size / sizeof(DWORD));
+            if (SUCCEEDED(shader->GetFunction(code.data(), &size)))
+                for (size_t i = 1; i < code.size();)
+                {
+                    const DWORD token = code[i];
+                    const DWORD opcode = token & 0xFFFF;
+                    if (opcode == 0xFFFF)
+                        break;
+                    if (opcode == 0xFFFE)
+                    {
+                        i += 1 + ((token >> 16) & 0x7FFF);
+                        continue;
+                    }
+                    if (opcode == 0x42 || opcode == 0x5D || opcode == 0x5F || opcode == 0x41)
+                    {
+                        reads = true;
+                        break;
+                    }
+                    i += 1 + ((token >> 24) & 0xF);
+                }
+        }
+        known.emplace(shader, reads);
+        return reads;
+    }
+
     static HRESULT __stdcall DrawIndexedPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count)
     {
         if (!Instancing())
@@ -790,6 +822,22 @@ class FarPropInstancing
         }
         if (batch.failed)
             return S_OK;
+        // In a cascade a part drawn by an alpha tested pass (its depth's pixel shader reads the texture: wire fences,
+        // grating, vs 850 / ps 98 and vs 808 / ps 53) cast no shadow instanced (2026-10-28: the fences' and the elevated
+        // railway's mesh gone from the sun's shadow, their frames right); the model is left to the game there
+        if (bCascadePass)
+        {
+            IDirect3DPixelShader9* pixelShader = nullptr;
+            device->GetPixelShader(&pixelShader);
+            const bool alphaTested = pixelShader && ReadsTexture(pixelShader);
+            SAFE_RELEASE(pixelShader);
+            if (alphaTested)
+            {
+                batch.failed = true;
+                batch.reason = "a part drawn alpha tested";
+                return S_OK;
+            }
+        }
         IDirect3DVertexShader9* shader = nullptr;
         IDirect3DVertexDeclaration9* decl = nullptr;
         device->GetVertexShader(&shader);
@@ -1298,7 +1346,6 @@ class FarPropInstancing
             return;
         BeginScene();
         bCascadePass = bInScene;
-        bCascadeAlphaPass = false;
     }
 
     static void EndCascade()
@@ -1415,10 +1462,7 @@ public:
                     static auto ForcedShaderSet = safetyhook::create_mid(const_cast<uint8_t*>(setter), [](SafetyHookContext& regs)
                     {
                         if (*reinterpret_cast<const int32_t*>(regs.esp + 4) == 0)
-                        {
                             FlushCascadePart();
-                            bCascadeAlphaPass = false;
-                        }
                     });
                 }
             }
@@ -1426,12 +1470,9 @@ public:
             // mov esi, eax / mov ecx, esi / ja
             if (auto forcedPass = hook::pattern("56 E8 ? ? ? ? 83 7C 24 08 03 8B F0 8B CE 77"); !forcedPass.empty())
             {
-                static auto ForcedPassBind = safetyhook::create_mid(forcedPass.get_first(0), [](SafetyHookContext& regs)
+                static auto ForcedPassBind = safetyhook::create_mid(forcedPass.get_first(0), [](SafetyHookContext&)
                 {
                     FlushCascadePart();
-                    // (technique, alpha test): a technique past 3 lets the pass go
-                    const uint32_t technique = *reinterpret_cast<const uint32_t*>(regs.esp + 4);
-                    bCascadeAlphaPass = technique <= 3 && *reinterpret_cast<const uint8_t*>(regs.esp + 8) == 1;
                 });
             }
         };
