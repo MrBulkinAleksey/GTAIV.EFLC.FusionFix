@@ -434,6 +434,9 @@ namespace Procedural
     std::vector<Made> made;
     std::unordered_map<uint8_t*, uint32_t> madeAt;
     size_t madeCursor = 0;                  // where ReleaseOutsideCone's next share starts
+    // Made since ReleaseOutsideCone last ran, looked at all of them there: grass props near the camera the game made in
+    // spite of GPU grass stood for up to ConeWalkUpdates updates before the share came to them, and blinked
+    std::vector<uint8_t*> madeFresh;
     uint32_t nConeReleased = 0;
 
     Made* FindMade(uint8_t* record)
@@ -484,6 +487,7 @@ namespace Procedural
         madeAt.clear();
         madeCells.clear();
         madeCursor = 0;
+        madeFresh.clear();
     }
 
     // Statistics for the log
@@ -778,6 +782,7 @@ namespace Procedural
                 madeAt[record] = uint32_t(made.size());
                 made.push_back({ record });
                 memcpy(made.back().entry, entry, QueueEntrySize);
+                madeFresh.push_back(record);
                 madeCells[CoverCellAt((const float*)entry)].push_back(record);
             }
         }
@@ -1231,36 +1236,57 @@ namespace Procedural
     constexpr size_t ConeWalkUpdates = 8;
     void ReleaseOutsideCone(uint8_t* generator)
     {
+        std::vector<Made> outside;
+        const auto full = [&] { return outside.size() >= ReleasesPerUpdate || parked.size() + (outside.size() + 1) * QueueEntrySize > ParkedLimit * QueueEntrySize; };
+        const auto going = [](const Made& m)
+        {
+            // Its own copy first; the game's record, another cache line, only for one going
+            if (!((bConeRelease && !InCone((const float*)m.entry, ReleaseSlack)) || GrassGivesWay(m.entry, GrassReleaseSlack)))
+                return false;
+            // The game's own removal clears the provider before it lets a record go
+            return *(uintptr_t*)(m.record + 8) && *(uintptr_t*)(m.record + 0xC) == *(uintptr_t*)(m.entry + 0x1C);
+        };
+        // Release takes them out of `made` (ForgetMade), so they go from the copies
+        const auto release = [&]
+        {
+            for (auto& m : outside)
+            {
+                if (bTrace)
+                    Trace(std::format("B {}{}", When(), Where((const float*)m.entry)));
+                Release(generator, nullptr, m.record, *(uint8_t**)(m.entry + 0xC) + 0x38);
+                parked.insert(parked.end(), m.entry, m.entry + QueueEntrySize);
+                nConeReleased++;
+            }
+            outside.clear();
+        };
+
+        // Those made since the last time, all of them (those past a full update wait for the next), let go before the
+        // share so it can't take one of them twice
+        size_t waitingFresh = 0;
+        for (auto record : madeFresh)
+        {
+            if (full())
+                madeFresh[waitingFresh++] = record;
+            else if (auto m = FindMade(record); m && going(*m))
+                outside.push_back(*m);
+        }
+        madeFresh.resize(waitingFresh);
+        release();
+
         const size_t count = made.size();
         if (!count)
             return;
         const size_t share = std::min(count, std::max<size_t>((count + ConeWalkUpdates - 1) / ConeWalkUpdates, 256));
         if (madeCursor >= count)
             madeCursor = 0;
-        std::vector<Made> outside;
-        for (size_t n = 0; n < share; ++n)
+        for (size_t n = 0; n < share && !full(); ++n)
         {
-            if (outside.size() >= ReleasesPerUpdate || parked.size() + (outside.size() + 1) * QueueEntrySize > ParkedLimit * QueueEntrySize)
-                break;
             const Made& m = made[madeCursor];
             madeCursor = madeCursor + 1 == count ? 0 : madeCursor + 1;
-            // Its own copy first; the game's record, another cache line, only for one going
-            if (!((bConeRelease && !InCone((const float*)m.entry, ReleaseSlack)) || GrassGivesWay(m.entry, GrassReleaseSlack)))
-                continue;
-            // The game's own removal clears the provider before it lets a record go
-            if (!*(uintptr_t*)(m.record + 8) || *(uintptr_t*)(m.record + 0xC) != *(uintptr_t*)(m.entry + 0x1C))
-                continue;
-            outside.push_back(m);
+            if (going(m))
+                outside.push_back(m);
         }
-        // Release takes them out of `made` (ForgetMade), so they go from the copies
-        for (auto& m : outside)
-        {
-            if (bTrace)
-                Trace(std::format("B {}{}", When(), Where((const float*)m.entry)));
-            Release(generator, nullptr, m.record, *(uint8_t**)(m.entry + 0xC) + 0x38);
-            parked.insert(parked.end(), m.entry, m.entry + QueueEntrySize);
-            nConeReleased++;
-        }
+        release();
     }
 
     // Before the queue's props are made (the game's lock held, the providers it removed already done)
@@ -1324,6 +1350,8 @@ namespace Procedural
         {
             if (bConeRelease || ProceduralGround::HideGrass)
                 ReleaseOutsideCone(generator);
+            else
+                madeFresh.clear();
             uint32_t capacity = *(uint32_t*)(generator + 0x5220);
             // A parked one goes by its last's place taken
             const auto take = [](size_t index)
@@ -1396,6 +1424,8 @@ namespace Procedural
             count = uint16_t(write);
             nParkedNow = uint32_t(parked.size() / QueueEntrySize);
         }
+        else
+            madeFresh.clear();
         nQueueMax = std::max<uint32_t>(nQueueMax, count);
         lastQueue = count;
         lastNew = count - carriedLeft;
