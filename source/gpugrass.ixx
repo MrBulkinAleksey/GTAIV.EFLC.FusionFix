@@ -5,6 +5,7 @@ module;
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <condition_variable>
 #include <cmath>
@@ -27,6 +28,7 @@ import settings;
 import inireload;
 import framehistory;
 import temporal;
+import renderscale;
 import postfxresources;
 import postfxprofiler;
 import postfxpass;
@@ -160,6 +162,7 @@ namespace GpuGrass
     bool bCrossed = false;                  // GpuGrassCrossed
     float fRange = 100.0f, fFullRange = 22.0f, fDensity = 1.0f;
     float fGroundTint = 0.5f;
+    float fUpscalerLodBias = -1.0f;         // [ANTIALIASING] UpscalerLodBias, as texturequality reads it
     float green[3] = { 0.25f, 0.33f, 0.14f }, tip[3] = { 0.45f, 0.50f, 0.30f }, dry[3] = { 0.38f, 0.36f, 0.25f };
     constexpr float kGroundTintColour[3] = { 0.45f, 0.55f, 0.3f };   // what the ground is multiplied towards
 
@@ -258,6 +261,7 @@ namespace GpuGrass
         bCrossed = iniReader.ReadInteger("PROCEDURAL", "GpuGrassCrossed", 0) != 0;
         fDensity = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassDensity", 1.0f), 0.1f, 1.0f);
         fGroundTint = std::clamp(iniReader.ReadFloat("PROCEDURAL", "GpuGrassGroundTint", 0.5f), 0.0f, 1.0f);
+        fUpscalerLodBias = std::clamp(iniReader.ReadFloat("ANTIALIASING", "UpscalerLodBias", -1.0f), -2.0f, 0.0f);
         bLog = iniReader.ReadInteger("DEBUG", "GpuGrassLog", 0) != 0;
         const auto colour = [&](const char* key, float* rgb, const float* fallback)
         {
@@ -1229,15 +1233,20 @@ export namespace GpuGrass
     }
 
     // The instances of this frame with `technique`: the ground's colour copy on s0 (or none), the cards' texture on s7,
-    // the trample grid on the vertex sampler s1, the edges on s2; the samplers and the streams' frequencies put back
+    // the trample grid on the vertex sampler s1, the edges on s2; the samplers and the streams' frequencies put back.
+    // The cards anisotropic, with the render scale's mip bias as the game's textures get it (texturequality): cards
+    // stand upright and are seen from above, so a linear mip picked by their squeezed height blurred the blades
+    // across, and the coverage kept on the coarse mip made each one a wide leaf, the more so the lower the resolution
     void DrawBlades(IDirect3DDevice9* pDevice, D3DXHANDLE technique, IDirect3DBaseTexture9* ground, int count)
     {
         static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER,
-                                                                  D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
-        static constexpr DWORD kSamplerValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, FALSE };
-        static constexpr DWORD kTrampleValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE };
-        static constexpr DWORD kEdgeValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE };
-        static constexpr DWORD kCardValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_LINEAR, FALSE };
+                                                                  D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE, D3DSAMP_MAXANISOTROPY, D3DSAMP_MIPMAPLODBIAS };
+        static constexpr DWORD kSamplerValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, FALSE, 1, 0 };
+        static constexpr DWORD kTrampleValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE, 1, 0 };
+        static constexpr DWORD kEdgeValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE, 1, 0 };
+        const float cardBias = (std::min)(std::log2(RenderScale::GetScale()) + (RenderScale::IsUpscalerAntialiasing() ? fUpscalerLodBias : 0.0f), 0.0f);
+        const DWORD cardValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_ANISOTROPIC, D3DTEXF_LINEAR, FALSE, 16,
+                                      std::bit_cast<DWORD>(cardBias) };
         static constexpr DWORD kSamplers[4] = { 0, D3DVERTEXTEXTURESAMPLER1, D3DVERTEXTEXTURESAMPLER2, 7 };
         IDirect3DBaseTexture9* oldTexture[4] = {};
         DWORD oldSampler[4][std::size(kSamplerStates)] = {};
@@ -1267,7 +1276,7 @@ export namespace GpuGrass
         SetTextureBoth(pDevice, 7, cardTexture);
         for (size_t i = 0; i < std::size(kSamplerStates); ++i)
         {
-            SetSamplerStateBoth(pDevice, 7, kSamplerStates[i], kCardValues[i]);
+            SetSamplerStateBoth(pDevice, 7, kSamplerStates[i], cardValues[i]);
             SetSamplerStateBoth(pDevice, 0, kSamplerStates[i], kSamplerValues[i]);
             SetSamplerStateBoth(pDevice, D3DVERTEXTEXTURESAMPLER1, kSamplerStates[i], kTrampleValues[i]);
             SetSamplerStateBoth(pDevice, D3DVERTEXTEXTURESAMPLER2, kSamplerStates[i], kEdgeValues[i]);
