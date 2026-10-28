@@ -40,7 +40,7 @@ import vtablepatch;
 // procedural.dat's PROCOBJ models too, the litter, rocks and rubble, but not those whose record has +0x37 set (they
 // float on water); 1 the plants only, 0 none; 3 (the default) any small model besides (radius under kAnyRadius, a
 // building or a prop: the map's fences, bollards, bins, small street furniture) drawn by CDrawEntityDC, a group of one
-// copy executed as it was: at night looking down a street 1360 building draws took 3.9 ms of a 6 ms G-buffer, one
+// copy executed as it was, trees and bushes left out (GrassShared::SwaysByPlace): at night looking down a street 1360 building draws took 3.9 ms of a 6 ms G-buffer, one
 // model of 2.4 m 115 times (two draws each).
 //
 // The game's draw command for them, CDrawEntityDC, keeps the entity's place as a quaternion (+0x10, x y z w) and a
@@ -260,7 +260,16 @@ class FarPropInstancing
             if (!plant && !prop && bProps && procObjModels.empty())
                 return false;   // not looked at until the records are in
             const float radius = *reinterpret_cast<const float*>(info + 0x1c);
-            const bool any = !plant && !prop && bAnyModel && radius > 0.0f && radius < kAnyRadius;
+            bool any = !plant && !prop && bAnyModel && radius > 0.0f && radius < kAnyRadius;
+            if (any)
+            {
+                // Trees and bushes sway and shake by the object's place, which a sample's is not: they swung as the
+                // camera ran
+                const int sways = GrassShared::SwaysByPlace(model);
+                if (sways < 0)
+                    return false;   // looked at again once its drawable is in
+                any = sways == 0;
+            }
             state = plant || prop || any ? uint8_t(1) : uint8_t(2);
             modelIsProp[model] = prop;
             modelIsAny[model] = any;

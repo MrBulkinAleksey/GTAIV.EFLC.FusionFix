@@ -35,6 +35,10 @@ export namespace GrassShared
     // What a grass model is, by its name: 0 not grass, 1 grass (proc_grass*, grass0_*, GrassWindModels), 2 weeds, 3 small
     // plants with broad leaves (*proc_plant_*, sm_plant*)
     int GrassKind(uint32_t nameHash);
+    // Render thread: whether a model sways or shakes by its own place, drawn with gta_trees or a bush of gta_default and a
+    // plant's texture (the trees' wind and the bush shake read the object's position): 1 yes, 0 no, -1 not known yet
+    // (its drawable not in)
+    int SwaysByPlace(uint16_t model);
     inline float BendPerHeight = 0.0f, FlutterPerHeight = 0.0f;   // at the tip, per metre of height
     inline float GustPhase = 0.0f, FlutterPhase = 0.0f;           // cycles
     inline float Direction[2] = { 0.929f, 0.370f };
@@ -913,6 +917,17 @@ class GrassWind
     }
 
 public:
+    static int SwaysByPlace(uint16_t model)
+    {
+        MakeModelListIfAsked();
+        if (models.empty())
+            return -1;
+        GrassHeight(model);     // the entry made fresh for this model
+        if (models[model].bush < 0)
+            IsBush(model);
+        return models[model].bush;
+    }
+
     static bool IsGrass(uint32_t hash)
     {
         MakeModelListIfAsked();
@@ -973,5 +988,10 @@ namespace GrassShared
     int GrassKind(uint32_t nameHash)
     {
         return GrassWind::Kind(nameHash);
+    }
+
+    int SwaysByPlace(uint16_t model)
+    {
+        return GrassWind::SwaysByPlace(model);
     }
 }
