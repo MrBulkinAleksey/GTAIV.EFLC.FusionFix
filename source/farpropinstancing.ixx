@@ -66,7 +66,8 @@ import vtablepatch;
 // kFromDistance. Each of their parts is a drawable of its own drawn with the object's matrix (CE 0x5fd190 -> 0x9ffee0 ->
 // 0xaec7b0), so a breakable bench of 23 parts took 48 device draws (67 us of CPU) each; the command keeps the matrix's
 // rows (+0x10, +0x20, +0x30) and position (+0x40), the sample gets identity rows. Its copies are grouped by model and the
-// command's other fields (+0x50, the bucket mask +0x54, +0x5a-0x5c, EntityClass's mark +0x5f).
+// command's other fields (+0x50, the bucket mask +0x54, +0x5a-0x5c, EntityClass's mark +0x5f; +0x5d and +0x5e
+// are never written).
 //
 // FarPropInstancingLog = 1 ([DEBUG]): every 600 passes, the instances, groups, instanced draws and copies executed
 // one by one per pass, and the models given up on, to GTAIV.EFLC.FusionFix.FarPropInstancing.log.
@@ -292,9 +293,11 @@ class FarPropInstancing
         Copy copy;
         std::memcpy(copy.dc, bytes, sizeof(copy.dc));
         copy.frag = true;
+        // +0x5d and +0x5e are left as they were by the constructor (any bytes, a group a bench before)
         uint64_t a = 0, b = 0;
         std::memcpy(&a, bytes + 0x50, 8);
         std::memcpy(&b, bytes + 0x58, 8);
+        b &= ~(0xFFFFull << 40);
         fragGroups[{ a, b }].push_back(uint32_t(copies.size()));
         copies.push_back(copy);
         return false;
