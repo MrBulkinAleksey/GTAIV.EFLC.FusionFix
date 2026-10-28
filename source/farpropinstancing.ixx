@@ -146,12 +146,14 @@ class FarPropInstancing
     static inline uint64_t logPropInstances = 0, logNoMeshList = 0, logFragInstances = 0;
     static inline uint32_t logShadersMade = 0, logShadersFailed = 0;
 
-    // The pass states the draw list sets around its buckets (CE 0x437140's types: 3 alpha test, 4 and 5 the blend, 8
-    // alpha ref, 9 alpha func, 10 alpha blending, 23 blend op), as they were where each copy's command stood. The copies
+    // The pass states the draw list sets around its buckets (CE 0x437140's types: 0 depth test, 2 depth write, 3 alpha
+    // test, 4 and 5 the blend, 6 cull, 7 depth func, 8 alpha ref, 9 alpha func, 10 alpha blending, 11-15, 17, 18 the
+    // stencil but its reference, which each command sets itself (0xac7050), 19 colour write, 23 blend op), as they were
+    // where each copy's command stood. Without the stencil the lighting left the instances' pixels out: black. The copies
     // are executed at the pass's end, after the list turned alpha blending on for its last bucket: a hydrant's sample
     // blended its G-buffer into the scene's (capture 2026-10-28: blend 1 5/6), and every fire hydrant and bin drawn from
     // it looked see-through. Each group's set goes on for its sample and its copies, and the pass's comes back after.
-    static constexpr uint32_t kStateTypes[] = { 3, 4, 5, 8, 9, 10, 23 };
+    static constexpr uint32_t kStateTypes[] = { 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 23 };
     struct States
     {
         uint32_t values[std::size(kStateTypes)];
@@ -481,6 +483,10 @@ class FarPropInstancing
                 const size_t dot = text.find('.', operand);
                 const bool hasW = dot == std::string::npos || text.find('w', dot) != std::string::npos;
                 maxInput = (std::max)(maxInput, index);
+                // Skinned: a part on a bone (a street lamp's arm 7 m up) went through the instance's rows before its bone,
+                // turned about the object's origin as if the bone were not there, and the lamps' tops came apart
+                if (usage.rfind("blendindices", 0) == 0 || usage.rfind("blendweight", 0) == 0)
+                    return false;
                 if (usage.rfind("texcoord", 0) == 0)
                 {
                     const int usageIndex = usage.size() > 8 ? std::atoi(usage.c_str() + 8) : 0;
