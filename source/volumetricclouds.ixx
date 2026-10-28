@@ -401,6 +401,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4ScatterExtinction"), &extinction);
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4ScatterWeight"), &weight);
     }
+    effect->SetFloat(effect->GetParameterByName(nullptr, "fLightJitter"), R.bVolumetricCloudsLightJitter ? 1.0f : 0.0f);
     {
         const float lowSun = std::clamp((sun.z - 0.0872f) / (0.5736f - 0.0872f), 0.0f, 1.0f);
         const float day = lowSun * lowSun * (3.0f - 2.0f * lowSun);

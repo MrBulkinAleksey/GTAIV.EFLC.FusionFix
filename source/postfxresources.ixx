@@ -581,6 +581,9 @@ public:
     // fifth of the extinction each (Wrenninge's, as al-ro's clouds have it), which reach deep and fall off
     // smoothly; 0: three at half each, as before, spent 0.3 of the layer in, with VolumetricCloudsMinLight 0.25.
     bool bVolumetricCloudsScatterTail = true;
+    // [WEATHER] VolumetricCloudsLightJitter: the steps towards the sun slid per pixel and frame, so a cloud's body
+    // shades smoothly instead of in layers copying its top (Clouds.fx's fLightJitter). Hidden, live.
+    bool bVolumetricCloudsLightJitter = true;
     // The clouds' sunlit side against the sky behind them, in times its brightness.
     float fVolumetricCloudsSkyMatch = 2.0f;
     bool bVolumetricCloudsWeather = true;
@@ -2120,6 +2123,7 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsSkyLight", &PostFxResource::fVolumetricCloudsSkyLight, 0.5f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsMinLight", &PostFxResource::fVolumetricCloudsMinLight, 0.1f, 0.0f, 0.9f),
             IniFlag("WEATHER", "VolumetricCloudsScatterTail", &PostFxResource::bVolumetricCloudsScatterTail, 1),
+            IniFlag("WEATHER", "VolumetricCloudsLightJitter", &PostFxResource::bVolumetricCloudsLightJitter, 1),
             IniFloat("WEATHER", "VolumetricCloudsSkyMatch", &PostFxResource::fVolumetricCloudsSkyMatch, 2.0f, 0.0f, 20.0f),
             IniFlag("WEATHER", "VolumetricCloudsWeather", &PostFxResource::bVolumetricCloudsWeather, 1),
             IniFlag("WEATHER", "VolumetricCloudsPerlinWorley", &PostFxResource::bVolumetricCloudsPerlinWorley, 1),

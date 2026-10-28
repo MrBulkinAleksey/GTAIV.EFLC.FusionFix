@@ -81,6 +81,7 @@ float fSilver;            // the game's CloudInscatteringRange: the brightening 
 float fMinLight;          // VolumetricCloudsMinLight: the least of the sun's light any part of a cloud keeps
 float4 vec4ScatterExtinction; // the share of the extinction each octave of the light scattered many times takes
 float4 vec4ScatterWeight;     // and its weight, the four summing to 1
+float fLightJitter;           // VolumetricCloudsLightJitter: 1 slides the steps towards the sun per pixel and frame, 0 keeps them fixed
 float fMottle;            // VolumetricCloudsMottle: how much the small billows at the surface fleck the light
 float fBacklight;         // with the sun low, the share of their light the clouds straight towards it keep
 float fGlowBoost;         // and how much stronger the glow of their thin edges is
@@ -430,6 +431,13 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
     // Each pixel starts up to a coarse step later: with the same coarse steps for every pixel,
     // thin cloud between two of them went missing in whole bands across the screen.
     float jitter = frac(PixelJitter(vpos) + fFrameJitter);
+    // The steps towards the sun, each twice the last, sample the cloud at fixed distances: as a sample point
+    // moved down through a cloud, each of them in turn left its top and the light jumped by its whole step,
+    // and the body came out in layers, each a copy of the top's outline (by up to a fifth of the sun's
+    // light per few metres where the even steps gave at most half that). The scene's clouds slide the whole
+    // series by up to a step, 2^u for u from a pixel's own noise that changes every frame, and the
+    // accumulation averages the layers away; the reflections, without it, keep the fixed steps.
+    float lightScale = full ? exp2(frac(PixelJitter(vpos + 37.0) + fFrameJitter * 1.618034) * fLightJitter) : 1.0;
     float t = t0 + max(vec4Layer.y / 24.0, t0 * FAR_STEP) * stepScale * COARSE_STEP * jitter;
     float fineLeft = 0.0;
     float lightDepth = 0.0;
@@ -487,7 +495,7 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
             if (sums.transmittance > LIGHT_CUTOFF)
             {
                 lightDepth = 0.0;
-                float stepLength = vec4Layer.y * lightStart;
+                float stepLength = vec4Layer.y * lightStart * lightScale;
                 float3 q = p;
                 // A float counter, and no [fastopt]: with an int counter under [fastopt] the compiler
                 // negated the loop's bound, and the loop broke before its first step. The light's march
