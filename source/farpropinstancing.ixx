@@ -8,6 +8,7 @@ module;
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <iterator>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -46,7 +47,8 @@ import vtablepatch;
 // off is not executed but copied, grouped by model, fade alpha (+0x32, in kAlphaSteps steps), the two other scalars
 // (+0x33, +0x34), the bucket (+0x35) and the flags (+0x36). At the end of the pass, before the depth copy and the
 // motion vectors (TemporalAA::AppendBeforeSceneEnd), each group's first copy is executed once, turned to no rotation
-// and moved to a point kSampleDistance in front of the camera, so gWorld is a translation by that point. Its device
+// and moved in front of the camera, its bounding sphere wholly in view (GroupOrigin), so gWorld is a translation by
+// that point; it is drawn with the pass states its group's commands stood in (StatesHere). Its device
 // draws are made instanced: stream 1 holds per instance three rows that take a vertex from the model into the space of
 // that point (the entity's rotation, its position less the point), and a copy of the draw's vertex shader, made once
 // from the game's by disassembling and assembling it again (D3DX), puts the position, normal, tangent and binormal
@@ -82,7 +84,7 @@ class FarPropInstancing
     static constexpr uint32_t kLogPasses = 600;
     static constexpr int kMissesToGiveUp = 30;
 
-    struct Copy { uint8_t dc[0x60]; bool frag; };    // CDrawEntityDC's 0x38 bytes or CDrawFragTypeDC's 0x60
+    struct Copy { uint8_t dc[0x60]; bool frag; uint8_t states; };    // CDrawEntityDC's 0x38 bytes or CDrawFragTypeDC's 0x60
     struct FragKey
     {
         uint64_t a, b;
@@ -107,7 +109,7 @@ class FarPropInstancing
     static inline float cameraPos[3] = {};
     static inline bool cameraKnown = false;
     static inline std::vector<Copy> copies;
-    static inline std::unordered_map<uint64_t, std::vector<uint32_t>> groups;
+    static inline std::unordered_map<FragKey, std::vector<uint32_t>, FragKeyHash> groups;     // the key, the states
     static inline std::unordered_map<FragKey, std::vector<uint32_t>, FragKeyHash> fragGroups;
 
     // By model: 0 not looked at, 1 drawn instanced, 2 not a candidate, 3 given up on. Written on the render thread, read
@@ -143,6 +145,51 @@ class FarPropInstancing
     static inline uint64_t logInstances = 0, logGroups = 0, logDraws = 0, logOneByOne = 0, logCapped = 0, logEmptyDropped = 0;
     static inline uint64_t logPropInstances = 0, logNoMeshList = 0, logFragInstances = 0;
     static inline uint32_t logShadersMade = 0, logShadersFailed = 0;
+
+    // The pass states the draw list sets around its buckets (CE 0x437140's types: 3 alpha test, 4 and 5 the blend, 8
+    // alpha ref, 9 alpha func, 10 alpha blending, 23 blend op), as they were where each copy's command stood. The copies
+    // are executed at the pass's end, after the list turned alpha blending on for its last bucket: a hydrant's sample
+    // blended its G-buffer into the scene's (capture 2026-10-28: blend 1 5/6), and every fire hydrant and bin drawn from
+    // it looked see-through. Each group's set goes on for its sample and its copies, and the pass's comes back after.
+    static constexpr uint32_t kStateTypes[] = { 3, 4, 5, 8, 9, 10, 23 };
+    struct States
+    {
+        uint32_t values[std::size(kStateTypes)];
+        bool operator==(const States&) const = default;
+    };
+    static inline void(__cdecl* setPassState)(uint32_t type, uint32_t value) = nullptr;
+    static inline const uint32_t* passStateCache = nullptr;
+    static inline std::vector<States> stateSets;    // this pass's
+
+    static States CurrentStates()
+    {
+        States now{};
+        for (size_t i = 0; i < std::size(kStateTypes); ++i)
+            now.values[i] = passStateCache[kStateTypes[i]];
+        return now;
+    }
+
+    // The index of the states where a command stands now, 0xFF when they cannot be kept (the copy is not taken then)
+    static uint8_t StatesHere()
+    {
+        if (!passStateCache || !setPassState)
+            return 0xFF;
+        const States now = CurrentStates();
+        for (size_t i = 0; i < stateSets.size(); ++i)
+            if (stateSets[i] == now)
+                return uint8_t(i);
+        if (stateSets.size() >= 0xFF)
+            return 0xFF;
+        stateSets.push_back(now);
+        return uint8_t(stateSets.size() - 1);
+    }
+
+    static void SetStates(const States& states)
+    {
+        for (size_t i = 0; i < std::size(kStateTypes); ++i)
+            if (passStateCache[kStateTypes[i]] != states.values[i])
+                setPassState(kStateTypes[i], states.values[i]);
+    }
 
     static void ReadIni(CIniReader& iniReader)
     {
@@ -289,15 +336,19 @@ class FarPropInstancing
             logCapped++;
             return true;
         }
+        const uint8_t states = StatesHere();
+        if (states == 0xFF)
+            return true;
         fragState[model] = 1;
         Copy copy;
         std::memcpy(copy.dc, bytes, sizeof(copy.dc));
         copy.frag = true;
+        copy.states = states;
         // +0x5d and +0x5e are left as they were by the constructor (any bytes, a group a bench before)
         uint64_t a = 0, b = 0;
         std::memcpy(&a, bytes + 0x50, 8);
         std::memcpy(&b, bytes + 0x58, 8);
-        b &= ~(0xFFFFull << 40);
+        b = (b & ~(0xFFFFull << 40)) | uint64_t(states) << 40;
         fragGroups[{ a, b }].push_back(uint32_t(copies.size()));
         copies.push_back(copy);
         return false;
@@ -327,15 +378,19 @@ class FarPropInstancing
             logCapped++;
             return true;
         }
+        const uint8_t states = StatesHere();
+        if (states == 0xFF)
+            return true;
         Copy copy;
         std::memcpy(copy.dc, bytes, 0x38);
         copy.frag = false;
+        copy.states = states;
         const uint8_t alpha = bytes[0x32];
         const uint64_t alphaStep = alpha == 255 ? kAlphaSteps : alpha * kAlphaSteps / 256;
         // +0x37 too: EntityClass marks the command there (ground surfaces' b15), and the sample's mark is the group's
         const uint64_t key = uint64_t(model) | alphaStep << 16 | uint64_t(bytes[0x33]) << 24 | uint64_t(bytes[0x34]) << 32 |
                              uint64_t(bytes[0x35]) << 40 | uint64_t(bytes[0x36]) << 48 | uint64_t(bytes[0x37]) << 56;
-        groups[key].push_back(uint32_t(copies.size()));
+        groups[{ key, states }].push_back(uint32_t(copies.size()));
         copies.push_back(copy);
         return false;
     }
@@ -352,8 +407,13 @@ class FarPropInstancing
         instancingThread = GetCurrentThreadId();
         deviceDraws = 0;
         bExecuting = true;
+        const States pass = CurrentStates();
         for (auto i : items)
+        {
+            SetStates(stateSets[copies[i].states]);
             Execute(copies[i].dc);
+        }
+        SetStates(pass);
         bExecuting = false;
         logOneByOne += items.size();
         return deviceDraws;
@@ -786,8 +846,8 @@ class FarPropInstancing
         return true;
     }
 
-    // A point kSampleDistance along the camera's axis that projects into the view
-    static bool SamplePoint(float point[3])
+    // A point `distance` along the camera's axis that projects into the view
+    static bool SamplePoint(float distance, float point[3])
     {
         const auto& camera = FrameHistory::Current();
         D3DXMATRIX inverse;
@@ -795,8 +855,8 @@ class FarPropInstancing
             return false;
         for (float side : { 1.0f, -1.0f })
         {
-            const D3DXVECTOR3 p(inverse._41 + side * kSampleDistance * inverse._31, inverse._42 + side * kSampleDistance * inverse._32,
-                                inverse._43 + side * kSampleDistance * inverse._33);
+            const D3DXVECTOR3 p(inverse._41 + side * distance * inverse._31, inverse._42 + side * distance * inverse._32,
+                                inverse._43 + side * distance * inverse._33);
             D3DXVECTOR4 clip;
             D3DXVec3Transform(&clip, &p, &camera.ViewProjection);
             if (clip.w > 0.0f && std::abs(clip.x) < clip.w && std::abs(clip.y) < clip.w)
@@ -833,10 +893,39 @@ class FarPropInstancing
         instancingThread = GetCurrentThreadId();
         bExecuting = true;
         bInstancing = true;
+        const States pass = CurrentStates();
+        SetStates(stateSets[sample.states]);
         Execute(sample.dc);
+        SetStates(pass);
         bInstancing = false;
         bExecuting = false;
         logDraws += batch.draws;
+    }
+
+    // Where a group's sample goes: its model's bounding sphere (model info +0x10 centre, +0x1c radius) on the camera's
+    // axis, far enough to be wholly in view. The drawables leave out what is out of view part by part: a street lamp's
+    // sample 4 m off kept only the pole, its arm and head above the view, and so did every lamp drawn from it.
+    static bool GroupOrigin(uint16_t model, float origin[3])
+    {
+        float centre[3] = {}, radius = 0.0f;
+        if (const auto info = EntityClass::ModelInfo(model))
+        {
+            std::memcpy(centre, reinterpret_cast<const void*>(info + 0x10), sizeof(centre));
+            radius = *reinterpret_cast<const float*>(info + 0x1c);
+            if (!(radius > 0.0f && radius < 200.0f) || !std::isfinite(centre[0] + centre[1] + centre[2]))
+                radius = 0.0f, centre[0] = centre[1] = centre[2] = 0.0f;
+        }
+        const auto& projection = FrameHistory::Current().Projection;
+        const float tanHalf = projection._11 > 0.0f && projection._22 > 0.0f ? (std::min)(1.0f / projection._11, 1.0f / projection._22) : 0.0f;
+        float distance = kSampleDistance;
+        if (radius > 0.0f && tanHalf > 0.0f)
+            distance = (std::max)(distance, radius * 1.1f * std::sqrt(1.0f + tanHalf * tanHalf) / tanHalf);
+        float point[3];
+        if (!SamplePoint(distance, point))
+            return false;
+        for (int k = 0; k < 3; ++k)
+            origin[k] = point[k] - centre[k];
+        return true;
     }
 
     static void Flush()
@@ -846,13 +935,15 @@ class FarPropInstancing
         if (groups.empty() && fragGroups.empty())
         {
             copies.clear();
+            stateSets.clear();
             return;
         }
         auto device = RageDirect3DDevice9::GetRuntimeDevice();
         float origin[3];
-        const bool ready = device && InstallDrawHooks(device) && SamplePoint(origin);
-        for (auto& [key, items] : groups)
+        const bool ready = device && InstallDrawHooks(device) && SamplePoint(kSampleDistance, origin);
+        for (auto& [groupKey, items] : groups)
         {
+            const uint64_t key = groupKey.a;
             const uint16_t model = uint16_t(key & 0xFFFF);
             const uint8_t bucket = uint8_t(key >> 40), bucketBit = bucket < 8 ? uint8_t(1u << bucket) : uint8_t(0);
             logInstances += items.size();
@@ -865,7 +956,7 @@ class FarPropInstancing
                 ExecuteOneByOne(items);
                 continue;
             }
-            if (!ready || modelState[model] != 1 || !Upload(device, items, origin))
+            if (!ready || modelState[model] != 1 || !GroupOrigin(model, origin) || !Upload(device, items, origin))
             {
                 ExecuteOneByOne(items);
                 continue;
@@ -900,7 +991,7 @@ class FarPropInstancing
             logInstances += items.size();
             logFragInstances += items.size();
             logGroups++;
-            if (!ready || fragState[model] != 1 || !Upload(device, items, origin))
+            if (!ready || fragState[model] != 1 || !GroupOrigin(model, origin) || !Upload(device, items, origin))
             {
                 ExecuteOneByOne(items);
                 continue;
@@ -923,6 +1014,7 @@ class FarPropInstancing
         groups.clear();
         fragGroups.clear();
         copies.clear();
+        stateSets.clear();
 
         if (bLog && ++logPasses >= kLogPasses)
         {
@@ -958,6 +1050,7 @@ class FarPropInstancing
         groups.clear();
         fragGroups.clear();
         copies.clear();
+        stateSets.clear();
     }
 
     static void ReleaseResources()
@@ -994,6 +1087,13 @@ public:
             EntityClass::SetEntityCommandHook(&OnCommand);
             EntityClass::SetFragTypeCommandHook(&OnFragTypeCommand);
             ProceduralGround::DrawnInstanced = &DrawnInstanced;
+            // The pass state setter (CE 0x437140): mov eax, [esp+4] / mov edx, [esp+8] / push esi / mov esi, [types + eax*4] /
+            // mov [values + eax*4], edx / cmp esi, -1 / je; without it nothing is taken
+            if (auto passState = hook::pattern("8B 44 24 04 8B 54 24 08 56 8B 34 85 ? ? ? ? 89 14 85 ? ? ? ? 83 FE FF 74"); !passState.empty())
+            {
+                setPassState = passState.get_first<void(__cdecl)(uint32_t, uint32_t)>(0);
+                passStateCache = *passState.get_first<const uint32_t*>(19);
+            }
         };
 
         FusionFix::onGameInitEvent() += []()
@@ -1027,6 +1127,7 @@ public:
             groups.clear();
             fragGroups.clear();
             copies.clear();
+            stateSets.clear();
             ReleaseResources();
         };
     }
