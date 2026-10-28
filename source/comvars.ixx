@@ -1332,7 +1332,10 @@ export namespace rage
         float mViewInverseMatrix[4][4];
         float mViewMatrix[4][4];
         float mProjectionMatrix[4][4];
-        float mMatrix_200[4][4];//FrustumLRTB?
+        // World, view, projection and the viewport's own transform in one: a point (row vector, w 1) to pixels of the
+        // viewport after the divide by w, w being the depth along the view (CE 0x618310 projects the moon with it; seen in
+        // MoonLog, 2026-10-28). Not -1..1: the moon's on-screen test once compared it with that.
+        float mMatrix_200[4][4];
         float mMatrix_240[4][4];//FrustumNFNF?
         grcViewportWindow mGrcViewportWindow1;
         grcViewportWindow mGrcViewportWindow2;//UnclippedWindow?
