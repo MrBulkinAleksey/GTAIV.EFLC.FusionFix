@@ -208,7 +208,10 @@ class FarPropInstancing
 
     static void GiveUp(uint16_t model, const char* why, bool frag = false)
     {
-        (frag ? fragState : modelState)[model] = 3;
+        if (frag)
+            fragState[model] = 3;
+        else
+            modelState[model] = 3;
         if (bLog)
         {
             const auto info = EntityClass::ModelInfo(model);
