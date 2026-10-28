@@ -162,6 +162,9 @@ class GrassWind
     static inline IDirect3DTexture9* trampleTexture = nullptr;
     static inline int trampleSupport = -1;                    // vertex textures: -1 not checked yet, 0 none, 1 there
     static inline bool trampleAny = false, trampleUploaded = false, bTrampleBound = false;
+    // Stamped this frame; frames since the last upload while the grass only stands up again
+    static inline bool trampleStamped = false;
+    static inline int trampleRecoverFrames = 0;
 
     // By model index: the hash the entry was made for, the model's height (0 if not grass) and its height above its origin
     // if it is short enough for a bush (else 0), and whether it is a bush (-1 not looked at yet)
@@ -375,7 +378,7 @@ class GrassWind
                     cell.direction[0] = lx / length, cell.direction[1] = ly / length;
                 cell.strength = s;
                 cell.ground = ground;
-                trampleAny = true;
+                trampleAny = trampleStamped = true;
             }
         }
     }
@@ -458,7 +461,10 @@ class GrassWind
     {
         if (!MakeTrampleTexture(pDevice))
             return false;
+        const int origin[2] = { gridOrigin[0], gridOrigin[1] };
         MoveGrid(focus);
+        const bool moved = origin[0] != gridOrigin[0] || origin[1] != gridOrigin[1];
+        trampleStamped = false;
         if (trampleAny && dt > 0.0f)
         {
             trampleAny = false;
@@ -492,10 +498,18 @@ class GrassWind
                 StampPath(body.centre[0] + fx * a + fy * c, body.centre[1] + fy * a - fx * c, body.bottom, body.velocity, dt, 0.3f, 1.0f);
             }
         }
+        // The whole texture each frame while any cell still stood up again (fTrampleSeconds after a walk) was 1.5% of the
+        // render thread (profile at Firefly Island, 2026-10-28). While the grass only stands up, every few frames: at
+        // 12 s it rises a third of a texel step a frame. A stamp, a moved window or the last of it at once.
         if (trampleAny || trampleUploaded)
         {
-            UploadTrample();
-            trampleUploaded = trampleAny;
+            const int every = std::clamp(int(fTrampleSeconds / 3.0f), 1, 4);
+            if (!trampleAny || trampleStamped || moved || ++trampleRecoverFrames >= every)
+            {
+                UploadTrample();
+                trampleUploaded = trampleAny;
+                trampleRecoverFrames = 0;
+            }
         }
         return true;
     }
