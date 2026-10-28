@@ -10,6 +10,7 @@ module;
 #include <format>
 #include <iterator>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 #include "FusionLog.hpp"
@@ -25,6 +26,7 @@ import framegeneration;
 import framehistory;
 import grasswind;
 import procedural;
+import renderskip;
 import temporal;
 import vtablepatch;
 
@@ -42,6 +44,12 @@ import vtablepatch;
 // building or a prop: the map's fences, bollards, bins, small street furniture) drawn by CDrawEntityDC, a group of one
 // copy executed as it was, trees and bushes left out (GrassShared::SwaysByPlace): at night looking down a street 1360 building draws took 3.9 ms of a 6 ms G-buffer, one
 // model of 2.4 m 115 times (two draws each).
+//
+// CascadeInstancing = 1 ([PERFORMANCE], the default): the same in each of the sun's cascades (CASCADE_TARGET_R32,
+// RenderSkip's lock hooks): the copies taken while a cascade is locked are executed as it is about to be unlocked, each
+// group's sample where its model's sphere is wholly inside the cascade's own view (ViewportOrigin), not before the
+// camera. A model that fails there is given up on in the cascades alone. By day props took 290 draws and 0.7 ms of the
+// cascades' 2.1 ms of CPU, buildings 516 and 1.0 ms.
 //
 // The game's draw command for them, CDrawEntityDC, keeps the entity's place as a quaternion (+0x10, x y z w) and a
 // position (+0x20); its execute (CE 0x8dcbf0) makes the matrix from them (0x6708d0, rows at +0, +0x10, +0x20) and has
@@ -109,11 +117,13 @@ class FarPropInstancing
     static inline bool bProps = true;
     static inline bool bAnyModel = true;               // FarPropInstancing 3
     static inline bool bFragments = true;
+    static inline bool bCascades = true;               // CascadeInstancing
     static inline volatile bool bStatesStale = false;  // FarPropInstancing's mode changed: models looked at again
     static inline bool bLog = false;
 
     // Render thread
     static inline bool bInScene = false;
+    static inline bool bCascadePass = false;   // the copies are of a cascade of the sun's, not of the G-buffer
     static inline bool bExecuting = false;      // copies being executed: not taken again
     static inline bool bInstancing = false;     // the sample's draws are made instanced
     static inline DWORD instancingThread = 0;
@@ -135,6 +145,10 @@ class FarPropInstancing
     // The same for the models of CDrawFragTypeDC copies: 0 not looked at, 1 drawn instanced, 3 given up on
     static inline uint8_t fragState[0x10000] = {};
     static inline uint8_t fragMisses[0x10000] = {};
+    // The cascades' own: by model, 1 its entity copies and 2 its fragment type copies given up on there (a shadow vertex
+    // shader the copy cannot be made of leaves the G-buffer's instancing alone), and the misses of its samples
+    static inline uint8_t cascadeGivenUp[0x10000] = {};
+    static inline uint8_t cascadeMisses[0x10000] = {};
     // By model, a bit per bucket (+0x35, 0-7): its commands there draw nothing, the game's own executes neither (the
     // game adds an entity to the lists of several buckets, a weed has meshes in one). Dropped then, looked at again
     // every kEmptyRecheck passes.
@@ -159,6 +173,8 @@ class FarPropInstancing
     static inline uint64_t logInstances = 0, logGroups = 0, logDraws = 0, logOneByOne = 0, logCapped = 0, logEmptyDropped = 0;
     static inline uint64_t logPropInstances = 0, logNoMeshList = 0, logFragInstances = 0, logAnyInstances = 0, logAnySingle = 0;
     static inline uint32_t logShadersMade = 0, logShadersFailed = 0;
+    static inline uint32_t logCascadePasses = 0;
+    static inline uint64_t logCascadeInstances = 0, logCascadeGroups = 0, logCascadeDraws = 0, logCascadeOneByOne = 0, logCascadeNoSample = 0;
 
     // The pass states the draw list sets around its buckets (CE 0x437140's types: 0 depth test, 2 depth write, 3 alpha
     // test, 4 and 5 the blend, 6 cull, 7 depth func, 8 alpha ref, 9 alpha func, 10 alpha blending, 11-15, 17, 18 the
@@ -223,6 +239,7 @@ class FarPropInstancing
         bProps = mode >= 2;
         bAnyModel = mode == 3;
         bFragments = iniReader.ReadInteger("PERFORMANCE", "FragmentInstancing", 1) != 0;
+        bCascades = iniReader.ReadInteger("PERFORMANCE", "CascadeInstancing", 1) != 0;
         bLog = iniReader.ReadInteger("DEBUG", "FarPropInstancingLog", 0) != 0;
     }
 
@@ -363,7 +380,7 @@ class FarPropInstancing
             return true;
         const auto* bytes = static_cast<const uint8_t*>(dc);
         const uint16_t model = *reinterpret_cast<const uint16_t*>(bytes + 0x58);
-        if (fragState[model] == 3)
+        if (fragState[model] == 3 || (bCascadePass && (cascadeGivenUp[model] & 2)))
             return true;
         if (!Far(reinterpret_cast<const float*>(bytes + 0x40)))
             return true;
@@ -399,10 +416,11 @@ class FarPropInstancing
             return true;
         const auto* bytes = static_cast<const uint8_t*>(dc);
         const uint16_t model = *reinterpret_cast<const uint16_t*>(bytes + 0x30);
-        if (!Candidate(model))
+        if (!Candidate(model) || (bCascadePass && (cascadeGivenUp[model] & 1)))
             return true;
         const uint8_t bucket = bytes[0x35];
-        if (bucket < 8 && (emptyBuckets[model] & (1u << bucket)) && (passCount + model) % kEmptyRecheck != 0)
+        // The G-buffer's buckets: a cascade's commands are executed as they come
+        if (!bCascadePass && bucket < 8 && (emptyBuckets[model] & (1u << bucket)) && (passCount + model) % kEmptyRecheck != 0)
         {
             logEmptyDropped++;
             return false;
@@ -1046,19 +1064,97 @@ class FarPropInstancing
         return true;
     }
 
+    // A cascade's sample: its model's bounding sphere wholly inside the viewport drawn now (the cascade's, orthographic),
+    // where the drawables test their parts. Along the light's axis through the middle of the view, at a few depths
+    static bool ViewportOrigin(uint16_t model, float origin[3])
+    {
+        const auto viewport = rage::GetCurrentViewport();
+        const auto info = EntityClass::ModelInfo(model);
+        if (!viewport || !info)
+            return false;
+        float centre[3];
+        std::memcpy(centre, reinterpret_cast<const void*>(info + 0x10), sizeof(centre));
+        const float radius = *reinterpret_cast<const float*>(info + 0x1c);
+        if (!(radius > 0.0f && radius < 200.0f) || !std::isfinite(centre[0] + centre[1] + centre[2]))
+            return false;
+        D3DXMATRIX view, projection, viewProjection;
+        std::memcpy(&view, viewport->mViewMatrix, sizeof(view));
+        std::memcpy(&projection, viewport->mProjectionMatrix, sizeof(projection));
+        D3DXMatrixMultiply(&viewProjection, &view, &projection);
+        const auto& inverse = viewport->mViewInverseMatrix;
+        const float nearClip = viewport->mNearClip, farClip = viewport->mFarClip;
+        if (!(farClip > nearClip) || !std::isfinite(farClip))
+            return false;
+        auto inside = [&](const D3DXVECTOR3& p)
+        {
+            D3DXVECTOR4 clip;
+            D3DXVec3Transform(&clip, &p, &viewProjection);
+            return clip.w > 0.0f && std::abs(clip.x) < clip.w && std::abs(clip.y) < clip.w && clip.z > 0.0f && clip.z < clip.w;
+        };
+        for (float side : { 1.0f, -1.0f })
+            for (float share : { 0.5f, 0.25f, 0.75f, 0.1f, 0.9f })
+            {
+                const float distance = nearClip + share * (farClip - nearClip);
+                const D3DXVECTOR3 p(inverse[3][0] + side * distance * inverse[2][0], inverse[3][1] + side * distance * inverse[2][1],
+                                    inverse[3][2] + side * distance * inverse[2][2]);
+                // The sphere's reach along the view's own axes (its rows in the inverse)
+                bool all = inside(p);
+                for (int axis = 0; all && axis < 3; ++axis)
+                    for (float sign : { 1.0f, -1.0f })
+                    {
+                        const float r = sign * radius * 1.1f;
+                        all = all && inside(D3DXVECTOR3(p.x + r * inverse[axis][0], p.y + r * inverse[axis][1], p.z + r * inverse[axis][2]));
+                    }
+                if (all)
+                {
+                    origin[0] = p.x - centre[0], origin[1] = p.y - centre[1], origin[2] = p.z - centre[2];
+                    return true;
+                }
+            }
+        return false;
+    }
+
+    static bool SampleOrigin(uint16_t model, float origin[3])
+    {
+        if (!bCascadePass)
+            return GroupOrigin(model, origin);
+        if (ViewportOrigin(model, origin))
+            return true;
+        logCascadeNoSample++;
+        return false;
+    }
+
+    // In a cascade: the sample drew nothing, or failed, where its copies are executed one by one. Given up on there only
+    static void CascadeMiss(uint16_t model, uint8_t bit, uint32_t drawn, const char* why)
+    {
+        if (why || (drawn != 0 && ++cascadeMisses[model] >= kMissesToGiveUp))
+        {
+            cascadeGivenUp[model] |= bit;
+            if (bLog)
+            {
+                const auto info = EntityClass::ModelInfo(model);
+                FusionLog::Write("FarPropInstancing", "Model", "%s model %u (hash %08x) drawn the game's way in the cascades: %s\n",
+                    bit == 2 ? "fragment" : "prop", model, info ? *reinterpret_cast<const uint32_t*>(info + 0x3c) : 0u,
+                    why ? why : "the sample drew nothing where its copies did");
+            }
+        }
+    }
+
     static void Flush()
     {
         bInScene = false;
         passCount++;
         if (groups.empty() && fragGroups.empty())
         {
+            bCascadePass = false;
             copies.clear();
             stateSets.clear();
             return;
         }
         auto device = RageDirect3DDevice9::GetRuntimeDevice();
         float origin[3];
-        const bool ready = device && InstallDrawHooks(device) && SamplePoint(kSampleDistance, origin);
+        const bool ready = device && InstallDrawHooks(device) && (bCascadePass || SamplePoint(kSampleDistance, origin));
+        const auto before = std::make_tuple(logInstances, logGroups, logDraws, logOneByOne);
         for (auto& [groupKey, items] : groups)
         {
             const uint64_t key = groupKey.a;
@@ -1083,12 +1179,20 @@ class FarPropInstancing
                 ExecuteOneByOne(items);
                 continue;
             }
-            if (!ready || modelState[model] != 1 || !GroupOrigin(model, origin) || !Upload(device, items, origin))
+            if (!ready || modelState[model] != 1 || !SampleOrigin(model, origin) || !Upload(device, items, origin))
             {
                 ExecuteOneByOne(items);
                 continue;
             }
             ExecuteSample(items, origin);
+            if (bCascadePass)
+            {
+                if (batch.failed || batch.draws == 0)
+                    CascadeMiss(model, 1, ExecuteOneByOne(items), batch.failed ? batch.reason : nullptr);
+                else
+                    cascadeMisses[model] = 0;
+                continue;
+            }
             if (batch.failed)
             {
                 GiveUp(model, batch.reason);
@@ -1118,12 +1222,20 @@ class FarPropInstancing
             logInstances += items.size();
             logFragInstances += items.size();
             logGroups++;
-            if (!ready || fragState[model] != 1 || !GroupOrigin(model, origin) || !Upload(device, items, origin))
+            if (!ready || fragState[model] != 1 || !SampleOrigin(model, origin) || !Upload(device, items, origin))
             {
                 ExecuteOneByOne(items);
                 continue;
             }
             ExecuteSample(items, origin);
+            if (bCascadePass)
+            {
+                if (batch.failed || batch.draws == 0)
+                    CascadeMiss(model, 2, ExecuteOneByOne(items), batch.failed ? batch.reason : nullptr);
+                else
+                    cascadeMisses[model] = 0;
+                continue;
+            }
             if (batch.failed)
             {
                 GiveUp(model, batch.reason, true);
@@ -1143,6 +1255,30 @@ class FarPropInstancing
         copies.clear();
         stateSets.clear();
 
+        // A cascade's counts are its own: the G-buffer's line stays a G-buffer pass's
+        if (bCascadePass)
+        {
+            bCascadePass = false;
+            const auto [instances, groupCount, draws, oneByOne] = before;
+            logCascadeInstances += logInstances - instances, logCascadeGroups += logGroups - groupCount;
+            logCascadeDraws += logDraws - draws, logCascadeOneByOne += logOneByOne - oneByOne;
+            logInstances = instances, logGroups = groupCount, logDraws = draws, logOneByOne = oneByOne;
+            if (bLog && ++logCascadePasses >= kLogPasses)
+            {
+                uint32_t givenUp = 0;
+                for (auto bits : cascadeGivenUp)
+                    givenUp += bits != 0;
+                const double n = double(logCascadePasses);
+                FusionLog::Write("FarPropInstancing", "Cascades", "%u cascade passes; per pass: %.0f instances in %.1f groups, %.1f instanced draws, "
+                    "%.1f copies executed one by one, %.1f groups with no sample place in the cascade; models given up on there %u\n",
+                    logCascadePasses, logCascadeInstances / n, logCascadeGroups / n, logCascadeDraws / n, logCascadeOneByOne / n,
+                    logCascadeNoSample / n, givenUp);
+                logCascadePasses = 0;
+                logCascadeInstances = logCascadeGroups = logCascadeDraws = logCascadeOneByOne = logCascadeNoSample = 0;
+            }
+            return;
+        }
+
         if (bLog && ++logPasses >= kLogPasses)
         {
             uint32_t givenUp = 0;
@@ -1159,6 +1295,22 @@ class FarPropInstancing
             logPasses = 0;
             logInstances = logGroups = logDraws = logOneByOne = logCapped = logEmptyDropped = logPropInstances = logNoMeshList = logFragInstances = logAnyInstances = logAnySingle = 0;
         }
+    }
+
+    // A cascade of the sun's locked: its commands are taken as the G-buffer's are (RenderSkip's lock hooks), executed
+    // as it is about to be unlocked
+    static void BeginCascade()
+    {
+        if (!bEnabled || !bCascades || bInScene)
+            return;
+        BeginScene();
+        bCascadePass = bInScene;
+    }
+
+    static void EndCascade()
+    {
+        if (bCascadePass)
+            Flush();
     }
 
     static void BeginScene()
@@ -1214,6 +1366,8 @@ public:
             EntityClass::SetEntityCommandHook(&OnCommand);
             EntityClass::SetFragTypeCommandHook(&OnFragTypeCommand);
             ProceduralGround::DrawnInstanced = &DrawnInstanced;
+            RenderSkip::pCascadeLocked = &BeginCascade;
+            RenderSkip::pBeforeCascadeUnlock = &EndCascade;
             // The pass state setter (CE 0x437140): mov eax, [esp+4] / mov edx, [esp+8] / push esi / mov esi, [types + eax*4] /
             // mov [values + eax*4], edx / cmp esi, -1 / je; without it nothing is taken
             if (auto passState = hook::pattern("8B 44 24 04 8B 54 24 08 56 8B 34 85 ? ? ? ? 89 14 85 ? ? ? ? 83 FE FF 74"); !passState.empty())
@@ -1253,6 +1407,7 @@ public:
         FusionFix::onBeforeReset() += []()
         {
             bInScene = false;
+            bCascadePass = false;
             bInstancing = false;
             bExecuting = false;
             groups.clear();
