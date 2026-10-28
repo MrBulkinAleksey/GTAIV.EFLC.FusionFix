@@ -230,9 +230,8 @@ class FarPropInstancing
         return uint8_t(stateSets.size() - 1);
     }
 
-    // Not the pass states in a cascade: its list sets the device's states past the cache, which keeps an earlier pass's
-    // (blending and alpha test on), and the copies set from it drew depths blended and alpha tested, with the alpha
-    // test's shaders (vs 850 / ps 98 for the game's 7D1 / 5, capture 2026-10-28): shadows missing in places and flickering
+    // Not the pass states in a cascade: its forced shader's passes set the device's states past the cache, which keeps an
+    // earlier pass's (blending and alpha test on)
     static void SetStates(const States& states)
     {
         if (!bCascadePass)
@@ -1326,6 +1325,20 @@ class FarPropInstancing
             Flush();
     }
 
+    // A cascade's entities are drawn through its forced depth shader ([0x17f59d4]), a pass of it bound for each run of
+    // buckets (0xaebd90(technique, alpha test)) and the shader let go after them (0x62bf30(0)). Copies executed later drew
+    // with the last pass bound, the alpha test's (vs 850 / ps 98, vs 96E / ps 1AD for the game's 7D1 / 5, capture
+    // 2026-10-28): shadows missing in places and flickering. So the copies taken are executed before either, in the pass
+    // they were taken in
+    static void FlushCascadePart()
+    {
+        if (!bCascadePass || bExecuting || (groups.empty() && fragGroups.empty()))
+            return;
+        Flush();
+        BeginScene();
+        bCascadePass = bInScene;
+    }
+
     static inline void(__cdecl* AddEntities)(void* list, int32_t a, int32_t b) = nullptr;
 
     // Main thread, as the cascades' list is made
@@ -1415,7 +1428,23 @@ public:
             {
                 const auto setter = *modeReset.get_first<const uint8_t*>(3);
                 if (setter[0] == 0x8B && setter[1] == 0x44 && setter[2] == 0x24 && setter[3] == 0x04 && setter[4] == 0xA3 && setter[9] == 0xC3)
+                {
                     drawMode = *reinterpret_cast<int32_t* const*>(setter + 5);
+                    static auto ForcedShaderSet = safetyhook::create_mid(setter, [](SafetyHookContext& regs)
+                    {
+                        if (*reinterpret_cast<const int32_t*>(regs.esp + 4) == 0)
+                            FlushCascadePart();
+                    });
+                }
+            }
+            // The forced shader's pass for a run of buckets (CE 0xaebd90): push esi / call 0x444940 / cmp [esp+8], 3 /
+            // mov esi, eax / mov ecx, esi / ja
+            if (auto forcedPass = hook::pattern("56 E8 ? ? ? ? 83 7C 24 08 03 8B F0 8B CE 77"); !forcedPass.empty())
+            {
+                static auto ForcedPassBind = safetyhook::create_mid(forcedPass.get_first(0), [](SafetyHookContext&)
+                {
+                    FlushCascadePart();
+                });
             }
         };
 
