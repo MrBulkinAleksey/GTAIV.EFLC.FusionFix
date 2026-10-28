@@ -98,6 +98,7 @@ namespace FirstPerson
     static SafetyHookInline aimUpdateHook;
     static SafetyHookMid aimShoulderHook;
     static SafetyHookMid swayHook;
+    static SafetyHookInline idleHook;
     static uintptr_t aimCamera = 0;   // the aim camera being updated in first person
     static uint32_t aimFrame = 0;     // the frame it put the eye
     static SafetyHookMid lookClampHook;
@@ -386,6 +387,16 @@ namespace FirstPerson
         if (EyeCurrent() && CPlayer::getLocalPlayerPed &&
             *reinterpret_cast<const uintptr_t*>(regs.edi + TargetOffset) == CPlayer::getLocalPlayerPed())
             regs.xmm0.f32[0] = 0.0f;
+    }
+
+    // Whether the game camera may go to its idle camera (CCamIdle, type 12), asked each frame by the
+    // camera that makes it once the player is idle long enough (CE 0xB08AF7): not in first person. On
+    // no that camera also drops an idle camera already made, so the view comes back at once.
+    static bool __fastcall MayGoIdle(uintptr_t camera, void*)
+    {
+        if (active || vehicleActive)
+            return false;
+        return idleHook.unsafe_thiscall<bool>(camera);
     }
 
     // Before the vehicle camera steps its view on a press (movsx eax, byte [esi+22C]), esi the camera.
@@ -779,6 +790,11 @@ public:
                     FirstPerson::lookClampHook = safetyhook::create_mid(clamp.get_first(0), FirstPerson::ClampLook);
                 }
             }
+
+            // push ebp / mov ebp, esp / and esp, -10 / sub esp, 18 / cmp dword [..], 1 / push esi / push edi / mov esi, ecx / je
+            auto idle = hook::pattern("55 8B EC 83 E4 F0 83 EC 18 83 3D ? ? ? ? 01 56 57 8B F1 0F 84");
+            if (!idle.empty())
+                FirstPerson::idleHook = safetyhook::create_inline(idle.get_first(0), FirstPerson::MayGoIdle);
 
             // cmp ecx, 10 / jae / mov dl, [ecx+150E0DC] / jmp / mov dl, 1 / mov al, [edi+ecx+30] / and al, 7F / shl dl, 7
             auto copy = hook::pattern("83 F9 10 73 08 8A 91 ? ? ? ? EB 02 B2 01 8A 44 0F 30 24 7F C0 E2 07");
