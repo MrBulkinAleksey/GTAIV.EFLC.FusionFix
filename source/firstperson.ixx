@@ -97,6 +97,7 @@ namespace FirstPerson
     static SafetyHookMid lookTakeHook;
     static SafetyHookInline aimUpdateHook;
     static SafetyHookMid aimShoulderHook;
+    static SafetyHookMid swayHook;
     static uintptr_t aimCamera = 0;   // the aim camera being updated in first person
     static uint32_t aimFrame = 0;     // the frame it put the eye
     static SafetyHookMid lookClampHook;
@@ -374,6 +375,17 @@ namespace FirstPerson
     {
         if (aimCamera && regs.edi == aimCamera)
             regs.xmm6.f32[0] = 0.0f;
+    }
+
+    // Where the follow camera hands its hand-held shake strength to its CHandShaker (CE 0xA20E7B, the
+    // strength in xmm0, eased per the ped's motion from the table at 0xE9B270), edi the camera. The shake
+    // turns the game camera's view, the sway seen standing still; in first person it is held at 0 (the
+    // shaker runs on, so the shake eases back in behind the player).
+    static void HoldSway(SafetyHookContext& regs)
+    {
+        if (EyeCurrent() && CPlayer::getLocalPlayerPed &&
+            *reinterpret_cast<const uintptr_t*>(regs.edi + TargetOffset) == CPlayer::getLocalPlayerPed())
+            regs.xmm0.f32[0] = 0.0f;
     }
 
     // Before the vehicle camera steps its view on a press (movsx eax, byte [esi+22C]), esi the camera.
@@ -738,6 +750,11 @@ public:
                         FirstPerson::aimUpdateHook = safetyhook::create_inline(aim.get_first(0), FirstPerson::AimUpdate);
                         FirstPerson::aimShoulderHook = safetyhook::create_mid(shoulder.get_first(9), FirstPerson::HoldShoulder);
                     }
+
+                    // movss xmm0, [edi+2D8] / push ecx / mov ecx, esi / movss [esp], xmm0 / call CHandShaker::Process
+                    auto sway = hook::pattern("F3 0F 10 87 D8 02 00 00 51 8B CE F3 0F 11 04 24 E8");
+                    if (!sway.empty())
+                        FirstPerson::swayHook = safetyhook::create_mid(sway.get_first(11), FirstPerson::HoldSway);
                 }
             }
 
