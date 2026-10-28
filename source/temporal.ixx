@@ -367,6 +367,7 @@ public:
         destroy(HistoryRT[0]);
         destroy(HistoryRT[1]);
         destroy(BoneRT);
+        SAFE_RELEASE(BoneUpload);
         destroy(DepthRT);
         destroy(OpaqueRT);
         destroy(ReactiveRT);
@@ -1244,64 +1245,49 @@ public:
         device->SetTexture(0, nullptr);
     }
 
+    // The previous bones go to BoneRT from a system memory copy (UpdateSurface), a row of BoneTexels for each skinned
+    // capture: a point list of BoneTexels vertices a capture, made and sent through DrawPrimitiveUP each frame, was 2.3%
+    // of the render thread looking at a busy street (profile at Firefly Island, 2026-10-28)
+    static inline IDirect3DSurface9* BoneUpload = nullptr;
+
     static void UploadPreviousBones(IDirect3DDevice9* device)
     {
         if (!BoneRT || !BoneRT->mD3DTexture || !bVertexTextureSupported)
             return;
 
-        struct BoneVertex
+        if (!BoneUpload && FAILED(device->CreateOffscreenPlainSurface(BoneTexels, BoneRows, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &BoneUpload, nullptr)))
         {
-            float position[4];
-            float value[4];
-        };
+            BoneUpload = nullptr;
+            return;
+        }
 
-        static std::vector<BoneVertex> vertices;
-        vertices.clear();
-
-        int32_t row = 0;
+        int32_t rows = 0;
+        D3DLOCKED_RECT locked{};
         for (auto& capture : Captures)
         {
             if (!capture.Skinned || capture.PrevBones < 0)
                 continue;
-            if (row >= BoneRows)
+            if (rows >= BoneRows)
                 break;
+            if (!rows && FAILED(BoneUpload->LockRect(&locked, nullptr, 0)))
+                return;
 
-            capture.BoneRow = row;
-            auto y = 1.0f - 2.0f * static_cast<float>(row) / static_cast<float>(BoneRows);
-            for (int32_t i = 0; i < BoneTexels; ++i)
-            {
-                // D3D9 maps pixel centers to integer screen coordinates
-                BoneVertex v;
-                v.position[0] = 2.0f * static_cast<float>(i) / static_cast<float>(BoneTexels) - 1.0f;
-                v.position[1] = y;
-                v.position[2] = 0.0f;
-                v.position[3] = 1.0f;
-                std::memcpy(v.value, &BonesPrevious[capture.PrevBones + i * 4], sizeof(v.value));
-                vertices.push_back(v);
-            }
-            ++row;
+            capture.BoneRow = rows;
+            std::memcpy(static_cast<uint8_t*>(locked.pBits) + rows * locked.Pitch, &BonesPrevious[capture.PrevBones], BoneTexels * 4 * sizeof(float));
+            ++rows;
         }
 
-        if (vertices.empty())
+        if (!rows)
             return;
+        BoneUpload->UnlockRect();
 
         IDirect3DSurface9* boneSurface = nullptr;
         BoneRT->mD3DTexture->GetSurfaceLevel(0, &boneSurface);
         if (!boneSurface)
             return;
-
-        device->SetRenderTarget(0, boneSurface);
-        device->SetDepthStencilSurface(nullptr);
-        device->SetRenderState(D3DRS_ZENABLE, FALSE);
-        device->SetRenderState(D3DRS_COLORWRITEENABLE, 0x0F);
-        device->SetRenderState(D3DRS_POINTSIZE, 0x3F800000);
-        device->SetRenderState(D3DRS_POINTSCALEENABLE, FALSE);
-        device->SetRenderState(D3DRS_POINTSPRITEENABLE, FALSE);
-        device->SetVertexDeclaration(BoneWriteDecl);
-        device->SetVertexShader(BoneWriteVS);
-        device->SetPixelShader(BoneWritePS);
-        device->DrawPrimitiveUP(D3DPT_POINTLIST, static_cast<UINT>(vertices.size()), vertices.data(), sizeof(BoneVertex));
-
+        const RECT rect = { 0, 0, BoneTexels, rows };
+        const POINT origin = { 0, 0 };
+        device->UpdateSurface(BoneUpload, &rect, boneSurface, &origin);
         boneSurface->Release();
     }
 
