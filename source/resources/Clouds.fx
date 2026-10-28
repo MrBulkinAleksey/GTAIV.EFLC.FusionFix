@@ -118,6 +118,7 @@ float fDebug;             // VolumetricCloudsDebug + 1, the numbers in the comme
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
 float fDetailFlow;        // VolumetricCloudsDetailFlow: how far up, in billows, the heap's density pushes its billows
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
+float fLump;              // how far, in coverage texture units, the outline bulges by billows, both ways together
 float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach
 
 // How far the scene is along the view ray at uv, the nearest of the full size pixels around it (a
@@ -260,6 +261,17 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
         float3 w = p * (vec4Shape.y * 0.35) + float3(vec4Wind.zw, fEvolution);
         wander = tex3Dlod(DetailTex, float4(w, 0)).rg - 0.5;
         uv += wander * fWarp;
+        // And bulges and dents by billows, a third of DetailScale across, fLump either way: the outline
+        // moves whatever the density's slope there. The billows' erosion below is a fixed subtraction, and
+        // towards the tops the dome's stretch makes the density rise steeply at the edge, so it barely
+        // moved the outline there: the sides and tops seen from afar came out smooth as plastic while
+        // the bases seen from below were ragged. More erosion up there ate the tops away instead.
+        // The reflections leave it out, for the slots.
+        if (full)
+        {
+            float3 l = p * (vec4Shape.y * 3.0) + float3(vec4Wind.zw + float2(0.13, 0.71), fEvolution);
+            uv += (tex3Dlod(DetailTex, float4(l, 0)).rg - 0.5) * fLump;
+        }
     }
     // Filtered with a quintic curve between texels: linear filtering's kinks at the texel edges stood
     // out as creases down the clouds' sides.

@@ -738,6 +738,14 @@ public:
     uint32_t nCloudAccumFrame = 0; // FrameHistory::Frame() of the accumulation, 0 if none
     IDirect3DVolumeTexture9* CloudDetailTexture = nullptr;
     IDirect3DVolumeTexture9* CloudDetailTex();
+    // [WEATHER] VolumetricCloudsPerlinWorley: the detail volume as Perlin-Worley noise (Perlin lifted by the
+    // Worley billows, as in Horizon Zero Dawn's clouds): billows joined by wisps and ragged plumes instead of
+    // round billows alone. Off, the plain Worley billows. The texture is built again when it changes.
+    bool bVolumetricCloudsPerlinWorley = true;
+    // [WEATHER] VolumetricCloudsLumps: how far, in metres either way, the clouds' outline bulges and dents by
+    // billows, so the sides and tops seen from afar are lumpy rather than smooth (Clouds.fx's fLump). 0: off.
+    float fVolumetricCloudsLumps = 50.0f;
+    bool bCloudDetailPerlinWorley = false; // what CloudDetailTexture was built with
     // Volumetric Clouds in the graphics menu (PREF_VOLUMETRIC_CLOUDS, the same VolumetricClouds key)
     // turns them on and off at once; the game's flat clouds and the cloud shadows follow.
     bool VolumetricCloudsEnabled() const
@@ -2109,6 +2117,8 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsMinLight", &PostFxResource::fVolumetricCloudsMinLight, 0.25f, 0.0f, 0.9f),
             IniFloat("WEATHER", "VolumetricCloudsSkyMatch", &PostFxResource::fVolumetricCloudsSkyMatch, 2.0f, 0.0f, 20.0f),
             IniFlag("WEATHER", "VolumetricCloudsWeather", &PostFxResource::bVolumetricCloudsWeather, 1),
+            IniFlag("WEATHER", "VolumetricCloudsPerlinWorley", &PostFxResource::bVolumetricCloudsPerlinWorley, 1),
+            IniFloat("WEATHER", "VolumetricCloudsLumps", &PostFxResource::fVolumetricCloudsLumps, 50.0f, 0.0f, 1000.0f),
             IniFlag("WEATHER", "PbrSkyHorizonHue", &PostFxResource::bPbrSkyHorizonHue, 0),
             IniFloat("WEATHER", "VolumetricCloudsVanilla", &PostFxResource::fVolumetricCloudsVanilla, 0.0f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsTranslucency", &PostFxResource::fVolumetricCloudsTranslucency, 0.25f, 0.0f, 0.9f),
@@ -2417,14 +2427,20 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
 
 // The volumetric clouds' detail: 64 x 64 x 64, tiling, three octaves of inverted Worley noise
 // (4, 8 and 16 cells a tile), which reads as round billows when it erodes a cloud's edge, in two
-// channels from different points. Managed, so it survives device resets.
+// channels from different points. Managed, so it survives device resets. With
+// VolumetricCloudsPerlinWorley, Perlin-Worley noise in its place (below).
 IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 {
-    if (CloudDetailTexture)
+    if (CloudDetailTexture && bCloudDetailPerlinWorley == bVolumetricCloudsPerlinWorley)
         return CloudDetailTexture;
     auto pDevice = rage::grcDevice::GetD3DDevice();
     if (!pDevice)
-        return nullptr;
+        return CloudDetailTexture;
+    if (CloudDetailTexture)
+    {
+        CloudDetailTexture->Release();
+        CloudDetailTexture = nullptr;
+    }
 
     constexpr int size = 64;
     auto hash = [](int x, int y, int z, int seed) {
@@ -2475,6 +2491,55 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
         const float minValue = *lo, range = (std::max)(*hi - *lo, 1e-5f);
         for (auto& v : value[channel])
             v = (v - minValue) / range;
+
+        if (!bVolumetricCloudsPerlinWorley)
+            continue;
+        // Perlin-Worley: three octaves of tiling Perlin noise (4, 8 and 16 cells a tile, as the Worley's),
+        // lifted by the Worley billows, remap(perlin, 0, 1, worley, 1): where the Perlin is high the gaps
+        // between billows fill in, so the billows join up into plumes with wisps between them. Then given
+        // the Worley's own spread of values, rank for rank, so the clouds' erosion eats as much as before
+        // and only its shape changes.
+        std::vector<float> lifted(value[channel].size());
+        for (int z = 0; z < size; ++z)
+            for (int y = 0; y < size; ++y)
+                for (int x = 0; x < size; ++x)
+                {
+                    float perlin = 0.0f, amplitude = 1.0f, total = 0.0f;
+                    for (int octave = 0; octave < 3; ++octave, amplitude *= 0.5f)
+                    {
+                        const int cells = cellCounts[octave];
+                        const float cell = static_cast<float>(size) / cells;
+                        const float fx = (x + 0.5f) / cell, fy = (y + 0.5f) / cell, fz = (z + 0.5f) / cell;
+                        const int cx = static_cast<int>(fx), cy = static_cast<int>(fy), cz = static_cast<int>(fz);
+                        const float tx = fx - cx, ty = fy - cy, tz = fz - cz;
+                        // One of the cube's twelve edge directions at each corner.
+                        auto corner = [&](int dx, int dy, int dz) {
+                            static constexpr int8_t kGradients[12][3] = { { 1, 1, 0 }, { -1, 1, 0 }, { 1, -1, 0 }, { -1, -1, 0 },
+                                                                          { 1, 0, 1 }, { -1, 0, 1 }, { 1, 0, -1 }, { -1, 0, -1 },
+                                                                          { 0, 1, 1 }, { 0, -1, 1 }, { 0, 1, -1 }, { 0, -1, -1 } };
+                            const auto& g = kGradients[hash((cx + dx) % cells, (cy + dy) % cells, (cz + dz) % cells, seeds[channel] + 100 + octave) % 12];
+                            return g[0] * (tx - dx) + g[1] * (ty - dy) + g[2] * (tz - dz);
+                        };
+                        auto fade = [](float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); };
+                        auto mix = [](float a, float b, float t) { return a + (b - a) * t; };
+                        const float ux = fade(tx), uy = fade(ty), uz = fade(tz);
+                        const float n = mix(mix(mix(corner(0, 0, 0), corner(1, 0, 0), ux), mix(corner(0, 1, 0), corner(1, 1, 0), ux), uy),
+                                            mix(mix(corner(0, 0, 1), corner(1, 0, 1), ux), mix(corner(0, 1, 1), corner(1, 1, 1), ux), uy), uz);
+                        perlin += amplitude * (0.5f + 0.5f * n);
+                        total += amplitude;
+                    }
+                    perlin = std::clamp(perlin / total, 0.0f, 1.0f);
+                    const size_t i = (z * size + y) * size + x;
+                    lifted[i] = value[channel][i] + perlin * (1.0f - value[channel][i]);
+                }
+        std::vector<float> spread = value[channel];
+        std::sort(spread.begin(), spread.end());
+        std::vector<int> order(lifted.size());
+        for (size_t i = 0; i < order.size(); ++i)
+            order[i] = static_cast<int>(i);
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return lifted[a] < lifted[b]; });
+        for (size_t rank = 0; rank < order.size(); ++rank)
+            value[channel][order[rank]] = spread[rank];
     }
 
     // 16 bits a channel for the same reason as the coverage; 8 where G16R16 volumes are missing.
@@ -2513,6 +2578,7 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
             }
         CloudDetailTexture->UnlockBox(0);
     }
+    bCloudDetailPerlinWorley = bVolumetricCloudsPerlinWorley;
     return CloudDetailTexture;
 }
 
