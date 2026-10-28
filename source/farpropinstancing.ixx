@@ -7,6 +7,7 @@ module;
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -86,7 +87,7 @@ class FarPropInstancing
         bool operator==(const FragKey&) const = default;
     };
     struct FragKeyHash { size_t operator()(const FragKey& k) const { return std::hash<uint64_t>()(k.a ^ (k.b * 0x9E3779B97F4A7C15ull)); } };
-    struct Batch { UINT count = 0; UINT offset = 0; int draws = 0; bool failed = false; };
+    struct Batch { UINT count = 0; UINT offset = 0; int draws = 0; bool failed = false; const char* reason = ""; };
 
     static inline bool bEnabled = true;
     static inline bool bProps = true;
@@ -539,6 +540,8 @@ class FarPropInstancing
             return it->second;
         shader->AddRef();
         IDirect3DVertexShader9* made = nullptr;
+        const char* why = "its code could not be read";
+        std::string inputs;
         UINT size = 0;
         if (SUCCEEDED(shader->GetFunction(nullptr, &size)) && size)
         {
@@ -551,8 +554,23 @@ class FarPropInstancing
                 while (!source.empty() && source.back() == '\0')
                     source.pop_back();
                 std::string patched;
+                why = "its text could not be patched";
+                // Its version, inputs and any relative input, for the log
+                for (size_t at = 0; bLog && at < source.size();)
+                {
+                    size_t end = source.find('\n', at);
+                    if (end == std::string::npos)
+                        end = source.size();
+                    const std::string line = source.substr(at, (std::min)(end, source.find("//", at)) - at);
+                    const size_t first = line.find_first_not_of(" \t");
+                    if (first != std::string::npos && (line.compare(first, 3, "vs_") == 0 || line.compare(first, 4, "dcl_") == 0 ||
+                                                       line.find("v[", first) != std::string::npos))
+                        inputs += (inputs.empty() ? "" : "; ") + line.substr(first);
+                    at = end + 1;
+                }
                 if (PatchShaderText(source, patched))
                 {
+                    why = "the copy could not be made";
                     ID3DXBuffer* binary = nullptr;
                     ID3DXBuffer* errors = nullptr;
                     if (SUCCEEDED(D3DXAssembleShader(patched.c_str(), UINT(patched.size()), nullptr, nullptr, 0, &binary, &errors)) && binary)
@@ -563,12 +581,16 @@ class FarPropInstancing
                     else if (bLog)
                         FusionLog::Write("FarPropInstancing", "Shader", "assembling the copy failed: %s\n",
                             errors ? static_cast<const char*>(errors->GetBufferPointer()) : "no error text");
+                    if (!made)
+                        why = "assembling or creating the copy failed";
                     SAFE_RELEASE(binary);
                     SAFE_RELEASE(errors);
                 }
             }
         }
         (made ? logShadersMade : logShadersFailed)++;
+        if (!made && bLog)
+            FusionLog::Write("FarPropInstancing", "Shader", "no instanced copy of vertex shader %p: %s (%s)\n", static_cast<void*>(shader), why, inputs.c_str());
         shaders[shader] = made;
         return made;
     }
@@ -588,8 +610,14 @@ class FarPropInstancing
                 while (!elements.empty() && elements.back().Stream == 0xFF)
                     elements.pop_back();
                 bool usable = true;
+                std::string list;
                 for (const auto& e : elements)
+                {
                     usable &= e.Stream == 0 && !(e.Usage == D3DDECLUSAGE_TEXCOORD && e.UsageIndex >= kInstanceUsage);
+                    list += std::format("{}s{} u{}.{} t{}", list.empty() ? "" : ", ", e.Stream, e.Usage, e.UsageIndex, e.Type);
+                }
+                if (!usable && bLog)
+                    FusionLog::Write("FarPropInstancing", "Declaration", "no instanced copy of a declaration (stream, usage.index, type): %s\n", list.c_str());
                 if (usable)
                 {
                     for (BYTE k = 0; k < 3; ++k)
@@ -629,7 +657,10 @@ class FarPropInstancing
         auto instancedDecl = decl ? InstancedDecl(device, decl) : nullptr;
         HRESULT result = S_OK;
         if (!instancedShader || !instancedDecl)
+        {
             batch.failed = true;
+            batch.reason = !instancedShader ? "its vertex shader has no instanced copy" : "its declaration has no instanced copy";
+        }
         else
         {
             UINT frequency0 = 1, offset1 = 0, stride1 = 0;
@@ -663,6 +694,7 @@ class FarPropInstancing
             return RealDrawPrimitive(device, type, start, count);
         }
         batch.failed = true;
+        batch.reason = "a draw is not indexed";
         return S_OK;
     }
 
@@ -674,6 +706,7 @@ class FarPropInstancing
             return RealDrawPrimitiveUP(device, type, count, data, stride);
         }
         batch.failed = true;
+        batch.reason = "a draw is from user memory";
         return S_OK;
     }
 
@@ -686,6 +719,7 @@ class FarPropInstancing
             return RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
         }
         batch.failed = true;
+        batch.reason = "a draw is from user memory";
         return S_OK;
     }
 
@@ -789,6 +823,7 @@ class FarPropInstancing
         }
         batch.draws = 0;
         batch.failed = false;
+        batch.reason = "";
         instancingThread = GetCurrentThreadId();
         bExecuting = true;
         bInstancing = true;
@@ -832,7 +867,7 @@ class FarPropInstancing
             ExecuteSample(items, origin);
             if (batch.failed)
             {
-                GiveUp(model, "a draw could not be instanced");
+                GiveUp(model, batch.reason);
                 ExecuteOneByOne(items);
             }
             else if (batch.draws == 0)
@@ -867,7 +902,7 @@ class FarPropInstancing
             ExecuteSample(items, origin);
             if (batch.failed)
             {
-                GiveUp(model, "a draw could not be instanced", true);
+                GiveUp(model, batch.reason, true);
                 ExecuteOneByOne(items);
             }
             else if (batch.draws == 0)
