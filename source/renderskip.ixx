@@ -87,10 +87,6 @@ export namespace RenderSkip
     // Render thread: called as the water's reflection target is unlocked, before the game resolves it, with whether its
     // draws were left out (Water Far Layer's composite); set once at init
     void (*pBeforeWaterUnlock)(bool leftOut) = nullptr;
-    // Render thread: called as a cascade of the sun's (CASCADE_TARGET_R32) is locked, after the game's lock, and as it is
-    // about to be unlocked (Far Prop Instancing's cascades); set once at init
-    void (*pCascadeLocked)() = nullptr;
-    void (*pBeforeCascadeUnlock)() = nullptr;
 }
 
 namespace RenderSkip
@@ -657,8 +653,6 @@ namespace RenderSkip
                     drop == Drop::Nothing ? "" : drop == Drop::Draws ? ", draws left out" : ", left out"));
         }
         pfnLock(factory, index, color, depthTarget, a5, a6, mip);
-        if (pCascadeLocked && index == 0 && depth > 0 && stack[depth - 1].kind == CascadeTarget)
-            pCascadeLocked();
         // The night's quarter of the atlas, bound now: 1.0 in it, which the lighting takes as lit for any depth. The atlas
         // holds 0.5 - 0.0005 z of the casters (cascadeConvert) and a point is lit where that is no less than its own; the
         // cascade cleared to 1.0 and copied there as before was a caster at z 1, which shadowed everything on one side of
@@ -694,8 +688,6 @@ namespace RenderSkip
     {
         if (pBeforeWaterUnlock && index == 0 && depth > 0 && stack[depth - 1].kind == WaterReflection)
             pBeforeWaterUnlock(stack[depth - 1].drop != Drop::Nothing);
-        if (pBeforeCascadeUnlock && index == 0 && depth > 0 && stack[depth - 1].kind == CascadeTarget)
-            pBeforeCascadeUnlock();
         pfnUnlock(factory, index, resolveFlags, unused);
         if (index != 0 || depth == 0)
             return;

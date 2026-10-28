@@ -26,7 +26,6 @@ import framegeneration;
 import framehistory;
 import grasswind;
 import procedural;
-import renderskip;
 import temporal;
 import vtablepatch;
 
@@ -45,13 +44,15 @@ import vtablepatch;
 // copy executed as it was, trees and bushes left out (GrassShared::SwaysByPlace): at night looking down a street 1360 building draws took 3.9 ms of a 6 ms G-buffer, one
 // model of 2.4 m 115 times (two draws each).
 //
-// CascadeInstancing = 1 ([PERFORMANCE], off by default: broken): the same in each of the sun's cascades (CASCADE_TARGET_R32,
-// RenderSkip's lock hooks): the copies taken while a cascade is locked are executed as it is about to be unlocked, each
-// group's sample where its model's sphere is wholly inside the cascade's own view (ViewportOrigin), not before the
-// camera. A model that fails there is given up on in the cascades alone. By day props took 290 draws and 0.7 ms of the
-// cascades' 2.1 ms of CPU, buildings 516 and 1.0 ms. Broken as it is (2026-10-28 test): by the unlock the current viewport
-// is no longer the cascade's (37 of 46 groups found no sample place, none were instanced), and the copies executed there
-// one by one cast shadows of the wrong shape that flickered: the copies have to be executed inside the cascade's list.
+// CascadeInstancing = 1 ([PERFORMANCE]): the same in each of the sun's cascades. CRenderPhaseCascadeShadows' list
+// (vtable 0xe866ac slot 7, CE 0x928ac0) is made for the four cascades in a loop: its viewport, the lock of
+// CASCADE_TARGET_R32, the entities (CE 0xb1e480(list, -1, 0), cdecl), the unlock and the copy into the atlas. The call
+// is taken (AddCascadeEntities) to put a command before the entities that starts taking copies and one after that
+// executes them, inside the cascade with its viewport current; each group's sample goes where its model's sphere is
+// wholly inside that orthographic view (ViewportOrigin), not before the camera. A model that fails there is given up
+// on in the cascades alone. By day props took 290 draws and 0.7 ms of the cascades' 2.1 ms of CPU, buildings 516 and
+// 1.0 ms. Taken first at the target's unlock instead (2026-10-28), when the viewport was no longer the cascade's: 37 of
+// 46 groups found no sample place and the copies executed there one by one cast flickering shadows of the wrong shape.
 //
 // The game's draw command for them, CDrawEntityDC, keeps the entity's place as a quaternion (+0x10, x y z w) and a
 // position (+0x20); its execute (CE 0x8dcbf0) makes the matrix from them (0x6708d0, rows at +0, +0x10, +0x20) and has
@@ -119,7 +120,7 @@ class FarPropInstancing
     static inline bool bProps = true;
     static inline bool bAnyModel = true;               // FarPropInstancing 3
     static inline bool bFragments = true;
-    static inline bool bCascades = false;              // CascadeInstancing
+    static inline bool bCascades = true;               // CascadeInstancing
     static inline volatile bool bStatesStale = false;  // FarPropInstancing's mode changed: models looked at again
     static inline bool bLog = false;
 
@@ -241,7 +242,7 @@ class FarPropInstancing
         bProps = mode >= 2;
         bAnyModel = mode == 3;
         bFragments = iniReader.ReadInteger("PERFORMANCE", "FragmentInstancing", 1) != 0;
-        bCascades = iniReader.ReadInteger("PERFORMANCE", "CascadeInstancing", 0) != 0;
+        bCascades = iniReader.ReadInteger("PERFORMANCE", "CascadeInstancing", 1) != 0;
         bLog = iniReader.ReadInteger("DEBUG", "FarPropInstancingLog", 0) != 0;
     }
 
@@ -1299,8 +1300,7 @@ class FarPropInstancing
         }
     }
 
-    // A cascade of the sun's locked: its commands are taken as the G-buffer's are (RenderSkip's lock hooks), executed
-    // as it is about to be unlocked
+    // Commands in a cascade's list around its entities: they are taken as the G-buffer's are, executed after them
     static void BeginCascade()
     {
         if (!bEnabled || !bCascades || bInScene)
@@ -1313,6 +1313,18 @@ class FarPropInstancing
     {
         if (bCascadePass)
             Flush();
+    }
+
+    static inline void(__cdecl* AddEntities)(void* list, int32_t a, int32_t b) = nullptr;
+
+    // Main thread, as the cascades' list is made
+    static void __cdecl AddCascadeEntities(void* list, int32_t a, int32_t b)
+    {
+        if (auto cb = new T_CB_Generic_NoArgs(BeginCascade))
+            cb->Append();
+        AddEntities(list, a, b);
+        if (auto cb = new T_CB_Generic_NoArgs(EndCascade))
+            cb->Append();
     }
 
     static void BeginScene()
@@ -1368,8 +1380,13 @@ public:
             EntityClass::SetEntityCommandHook(&OnCommand);
             EntityClass::SetFragTypeCommandHook(&OnFragTypeCommand);
             ProceduralGround::DrawnInstanced = &DrawnInstanced;
-            RenderSkip::pCascadeLocked = &BeginCascade;
-            RenderSkip::pBeforeCascadeUnlock = &EndCascade;
+            // push 0x92c740 / call / push 0 / push -1 / push [edi+938h] / call AddEntities: CRenderPhaseCascadeShadows'
+            // list, for each cascade
+            if (auto entities = hook::pattern("68 ? ? ? ? E8 ? ? ? ? 6A 00 6A FF FF B7 ? ? ? ? E8"); !entities.empty())
+            {
+                AddEntities = injector::GetBranchDestination(entities.get_first(20)).get<void(__cdecl)(void*, int32_t, int32_t)>();
+                injector::MakeCALL(entities.get_first(20), AddCascadeEntities, true);
+            }
             // The pass state setter (CE 0x437140): mov eax, [esp+4] / mov edx, [esp+8] / push esi / mov esi, [types + eax*4] /
             // mov [values + eax*4], edx / cmp esi, -1 / je; without it nothing is taken
             if (auto passState = hook::pattern("8B 44 24 04 8B 54 24 08 56 8B 34 85 ? ? ? ? 89 14 85 ? ? ? ? 83 FE FF 74"); !passState.empty())
