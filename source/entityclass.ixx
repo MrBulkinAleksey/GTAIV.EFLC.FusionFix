@@ -377,7 +377,7 @@ namespace
                 int64_t all = 0;
                 for (auto& [model, m] : top)
                     all += m.ticks;
-                text += std::format("    {} models; the costliest (name hash, radius, kind, draws, ms, us a draw, mean distance{}):\n",
+                text += std::format("    {} models; the costliest (name hash, radius, kind, draws, ms, us a draw, mean distance{}, device draws an entity in the G-buffer):\n",
                     top.size(), s.lamp ? " from the lamp" : "");
                 int64_t shown = 0;
                 for (size_t i = 0; i < top.size() && i < 20; ++i)
@@ -386,12 +386,28 @@ namespace
                     const auto info = modelInfos ? *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4) : 0;
                     const uint32_t hash = info ? *reinterpret_cast<const uint32_t*>(info + 0x3c) : 0;
                     const float radius = info ? *reinterpret_cast<const float*>(info + 0x1c) : 0.0f;
-                    text += std::format("      {:08X} {:6.1f} m {:<9} {:7.2f} {:6.3f} ms {:6.2f} {:6.1f} m\n", hash, radius, KindNames[size_t(m.kind)],
+                    text += std::format("      {:08X} {:6.1f} m {:<9} {:7.2f} {:6.3f} ms {:6.2f} {:6.1f} m {:4}\n", hash, radius, KindNames[size_t(m.kind)],
                         m.draws * perFrame, m.ticks * msPerFrame, m.draws ? m.ticks * 1e6 / double(qpcFrequency) / m.draws : 0.0,
-                        m.placed ? m.distance / double(m.placed) : 0.0);
+                        m.placed ? m.distance / double(m.placed) : 0.0, uint32_t(modelDraws[model]));
                     shown += m.ticks;
                 }
                 text += std::format("      the top 20 take {:.0f}% of the models' time\n", all ? 100.0 * shown / all : 0.0);
+                // The models of many device draws an entity (a breakable bench: a geometry for each slat, 48), by those
+                // draws a frame: what instancing them would save
+                std::sort(top.begin(), top.end(), [](auto& a, auto& b) { return a.second.draws * modelDraws[a.first] > b.second.draws * modelDraws[b.first]; });
+                text += "    the most device draws (name hash, radius, kind, entity draws, device draws an entity, device draws, ms):\n";
+                for (size_t i = 0, listed = 0; i < top.size() && listed < 10; ++i)
+                {
+                    const auto& [model, m] = top[i];
+                    if (modelDraws[model] <= 1)
+                        continue;
+                    ++listed;
+                    const auto info = modelInfos ? *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4) : 0;
+                    const uint32_t hash = info ? *reinterpret_cast<const uint32_t*>(info + 0x3c) : 0;
+                    const float radius = info ? *reinterpret_cast<const float*>(info + 0x1c) : 0.0f;
+                    text += std::format("      {:08X} {:6.1f} m {:<9} {:7.2f} {:4} {:8.1f} {:6.3f} ms\n", hash, radius, KindNames[size_t(m.kind)],
+                        m.draws * perFrame, uint32_t(modelDraws[model]), m.draws * perFrame * modelDraws[model], m.ticks * msPerFrame);
+                }
             }
         }
         FusionLog::WriteText("EntityClass", "Draws", text);
