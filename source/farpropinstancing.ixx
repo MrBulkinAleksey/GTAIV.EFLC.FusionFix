@@ -162,11 +162,16 @@ class FarPropInstancing
     // blended its G-buffer into the scene's (capture 2026-10-28: blend 1 5/6), and every fire hydrant and bin drawn from
     // it looked see-through. Each group's set goes on for its sample and its copies, and the pass's comes back after.
     static constexpr uint32_t kStateTypes[] = { 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 23 };
+    // With them the technique group the shaders draw with (CE [0x106B308], -1 the default; its setter 0x42F0A0): the list
+    // changes it for its last buckets, and a street lamp's sample drew with another technique (vs 945 / ps 188 for the
+    // game's 947 / 189, other samplers): its albedo 0, black (capture 2026-10-28)
     struct States
     {
         uint32_t values[std::size(kStateTypes)];
+        int32_t group;
         bool operator==(const States&) const = default;
     };
+    static inline int32_t* techniqueGroup = nullptr;
     static inline void(__cdecl* setPassState)(uint32_t type, uint32_t value) = nullptr;
     static inline const uint32_t* passStateCache = nullptr;
     static inline std::vector<States> stateSets;    // this pass's
@@ -176,13 +181,14 @@ class FarPropInstancing
         States now{};
         for (size_t i = 0; i < std::size(kStateTypes); ++i)
             now.values[i] = passStateCache[kStateTypes[i]];
+        now.group = *techniqueGroup;
         return now;
     }
 
     // The index of the states where a command stands now, 0xFF when they cannot be kept (the copy is not taken then)
     static uint8_t StatesHere()
     {
-        if (!passStateCache || !setPassState)
+        if (!passStateCache || !setPassState || !techniqueGroup)
             return 0xFF;
         const States now = CurrentStates();
         for (size_t i = 0; i < stateSets.size(); ++i)
@@ -199,6 +205,7 @@ class FarPropInstancing
         for (size_t i = 0; i < std::size(kStateTypes); ++i)
             if (passStateCache[kStateTypes[i]] != states.values[i])
                 setPassState(kStateTypes[i], states.values[i]);
+        *techniqueGroup = states.group;
     }
 
     static void ReadIni(CIniReader& iniReader)
@@ -1186,6 +1193,10 @@ public:
                 setPassState = passState.get_first<void(__cdecl)(uint32_t, uint32_t)>(0);
                 passStateCache = *passState.get_first<const uint32_t*>(19);
             }
+            // The technique group's setter: mov eax, [esp+4] / mov [group], eax / ret / int3 x6 / mov eax, [group] / ret
+            if (auto groupSetter = hook::pattern("8B 44 24 04 A3 ? ? ? ? C3 CC CC CC CC CC CC A1 ? ? ? ? C3");
+                !groupSetter.empty() && *groupSetter.get_first<int32_t*>(5) == *groupSetter.get_first<int32_t*>(17))
+                techniqueGroup = *groupSetter.get_first<int32_t*>(5);
         };
 
         FusionFix::onGameInitEvent() += []()
