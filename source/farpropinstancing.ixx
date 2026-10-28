@@ -1078,7 +1078,11 @@ class FarPropInstancing
     }
 
     // A cascade's sample: its model's bounding sphere wholly inside the viewport drawn now (the cascade's, orthographic),
-    // where the drawables test their parts. Along the light's axis through the middle of the view, at a few depths
+    // where the drawables test their parts: at the middle of the view's box, as its projection gives it (the point that
+    // lands on the clip's centre at half depth), taken back to the world by the view's inverse. The cascades' viewports
+    // are made by hand (CE 0x928c15: camera 0x4319b0, projection 0x4317e0) and their near and far clips are not their
+    // box's, likely why a sample at depths between them found no place (2026-10-28: about half the groups had none,
+    // none were given up on, nothing was instanced)
     static bool ViewportOrigin(uint16_t model, float origin[3])
     {
         const auto viewport = rage::GetCurrentViewport();
@@ -1090,41 +1094,50 @@ class FarPropInstancing
         const float radius = *reinterpret_cast<const float*>(info + 0x1c);
         if (!(radius > 0.0f && radius < 200.0f) || !std::isfinite(centre[0] + centre[1] + centre[2]))
             return false;
-        D3DXMATRIX view, projection, viewProjection;
-        std::memcpy(&view, viewport->mViewMatrix, sizeof(view));
-        std::memcpy(&projection, viewport->mProjectionMatrix, sizeof(projection));
-        D3DXMatrixMultiply(&viewProjection, &view, &projection);
+        const auto& p = viewport->mProjectionMatrix;
         const auto& inverse = viewport->mViewInverseMatrix;
-        const float nearClip = viewport->mNearClip, farClip = viewport->mFarClip;
-        if (!(farClip > nearClip) || !std::isfinite(farClip))
-            return false;
-        auto inside = [&](const D3DXVECTOR3& p)
+        // Orthographic only: w stays 1
+        if (p[0][3] != 0.0f || p[1][3] != 0.0f || p[2][3] != 0.0f || p[3][3] != 1.0f || p[0][0] == 0.0f || p[1][1] == 0.0f || p[2][2] == 0.0f)
         {
-            D3DXVECTOR4 clip;
-            D3DXVec3Transform(&clip, &p, &viewProjection);
-            return clip.w > 0.0f && std::abs(clip.x) < clip.w && std::abs(clip.y) < clip.w && clip.z > 0.0f && clip.z < clip.w;
-        };
-        for (float side : { 1.0f, -1.0f })
-            for (float share : { 0.5f, 0.25f, 0.75f, 0.1f, 0.9f })
+            LogViewport(viewport, "not orthographic");
+            return false;
+        }
+        const float middle[3] = { -p[3][0] / p[0][0], -p[3][1] / p[1][1], (0.5f - p[3][2]) / p[2][2] };
+        // The sphere's reach along the view's own axes, in the view's space
+        const float r = radius * 1.1f;
+        for (int axis = -1; axis < 3; ++axis)
+            for (float sign : { 1.0f, -1.0f })
             {
-                const float distance = nearClip + share * (farClip - nearClip);
-                const D3DXVECTOR3 p(inverse[3][0] + side * distance * inverse[2][0], inverse[3][1] + side * distance * inverse[2][1],
-                                    inverse[3][2] + side * distance * inverse[2][2]);
-                // The sphere's reach along the view's own axes (its rows in the inverse)
-                bool all = inside(p);
-                for (int axis = 0; all && axis < 3; ++axis)
-                    for (float sign : { 1.0f, -1.0f })
-                    {
-                        const float r = sign * radius * 1.1f;
-                        all = all && inside(D3DXVECTOR3(p.x + r * inverse[axis][0], p.y + r * inverse[axis][1], p.z + r * inverse[axis][2]));
-                    }
-                if (all)
+                float v[3] = { middle[0], middle[1], middle[2] };
+                if (axis >= 0)
+                    v[axis] += sign * r;
+                float clip[3];
+                for (int k = 0; k < 3; ++k)
+                    clip[k] = v[0] * p[0][k] + v[1] * p[1][k] + v[2] * p[2][k] + p[3][k];
+                if (!(std::abs(clip[0]) < 1.0f && std::abs(clip[1]) < 1.0f && clip[2] > 0.0f && clip[2] < 1.0f))
                 {
-                    origin[0] = p.x - centre[0], origin[1] = p.y - centre[1], origin[2] = p.z - centre[2];
-                    return true;
+                    LogViewport(viewport, "the sphere is wider than the view");
+                    return false;
                 }
             }
-        return false;
+        for (int k = 0; k < 3; ++k)
+            origin[k] = middle[0] * inverse[0][k] + middle[1] * inverse[1][k] + middle[2] * inverse[2][k] + inverse[3][k] - centre[k];
+        return std::isfinite(origin[0] + origin[1] + origin[2]);
+    }
+
+    // FarPropInstancingLog: the first cascade viewport a sample found no place in, once
+    static void LogViewport(const rage::grcViewport* viewport, const char* why)
+    {
+        static bool logged = false;
+        if (!bLog || logged)
+            return;
+        logged = true;
+        const auto& p = viewport->mProjectionMatrix;
+        const auto& i = viewport->mViewInverseMatrix;
+        FusionLog::Write("FarPropInstancing", "Cascades", "no sample place (%s): projection rows (%g %g %g %g) (%g %g %g %g) "
+            "(%g %g %g %g) (%g %g %g %g), view's place %g %g %g, its axis %g %g %g, near %g far %g\n", why,
+            p[0][0], p[0][1], p[0][2], p[0][3], p[1][0], p[1][1], p[1][2], p[1][3], p[2][0], p[2][1], p[2][2], p[2][3],
+            p[3][0], p[3][1], p[3][2], p[3][3], i[3][0], i[3][1], i[3][2], i[2][0], i[2][1], i[2][2], viewport->mNearClip, viewport->mFarClip);
     }
 
     static bool SampleOrigin(uint16_t model, float origin[3])
