@@ -587,6 +587,10 @@ public:
     // The clouds' sunlit side against the sky behind them, in times its brightness.
     float fVolumetricCloudsSkyMatch = 2.0f;
     bool bVolumetricCloudsWeather = true;
+    // [DEBUG] MoonOnScreenTest: the moon pass also needs the box round the moon's centre on the screen (0: only the
+    // centre in front of the camera); MoonLog: each change of that decision to GTAIV.EFLC.FusionFix.Moon.log.
+    bool bMoonOnScreenTest = true;
+    bool bMoonLog = false;
     // [WEATHER] PbrSkyHorizonHue: the Physical Sky takes the timecycle's hue (fPalette of it) down to the horizon, as
     // before; off, only its brightness within 10 degrees of the horizon, and the hue there is the air's own.
     bool bPbrSkyHorizonHue = false;
@@ -2034,6 +2038,8 @@ public:
             IniFlag("NIGHTSHADOWS", "VehicleBoxShadowsLive", &PostFxResource::bVehicleBoxShadowsLive, 0),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsLeadFrames", &PostFxResource::fVehicleBoxShadowLeadFrames, -1.0f, -3.0f, 5.0f),
             IniFlag("DEBUG", "VehicleBoxShadowsLog", &PostFxResource::bVehicleBoxShadowsLog, 0),
+            IniFlag("DEBUG", "MoonOnScreenTest", &PostFxResource::bMoonOnScreenTest, 1),
+            IniFlag("DEBUG", "MoonLog", &PostFxResource::bMoonLog, 0),
             IniFlag("NIGHTSHADOWS", "PedCapsuleShadows", &PostFxResource::bPedCapsuleShadows, 1),
             IniFloat("NIGHTSHADOWS", "PedCapsuleRadius", &PostFxResource::fPedCapsuleRadius, 0.25f, 0.05f, 1.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleHeight", &PostFxResource::fPedCapsuleHeight, 1.75f, 0.5f, 3.0f),
