@@ -133,6 +133,10 @@ export namespace EntityClass
     // hook may keep a copy and execute it later through its vtable). Set at init.
     using EntityCommandHook = bool (*)(Kind kind, void* dc);
     void SetEntityCommandHook(EntityCommandHook hook);
+    // The same for each CDrawFragTypeDC (0x60 bytes, CE ctor 0x8dae60: matrix rows +0x10, +0x20, +0x30, position +0x40,
+    // +0x50 and +0x54 to 0x15dbdc0/4, model +0x58, +0x5a, +0x5b, +0x5c to 0xac6ef0, 0xac6fb0, 0xac7050): an object
+    // with fragments drawn whole without a cache entry, each of its parts one drawable (CE 0x5fd190)
+    void SetFragTypeCommandHook(EntityCommandHook hook);
 
     // The model's rmcDrawable as CDrawEntityDC's execute (CE 0x8dcbf0) takes it: a fragment type's (+8) at +0xb4, else
     // the one +0xc points to; 0 while it is not loaded. Its grmShaderGroup is at +8 (shaders +8, their count +0xc).
@@ -157,6 +161,7 @@ namespace
     void* currentDc = nullptr;
     EntityClass::CommandHook commandHook = nullptr;
     EntityClass::EntityCommandHook entityCommandHook = nullptr;
+    EntityClass::EntityCommandHook fragTypeCommandHook = nullptr;
 
     std::vector<std::pair<EntityClass::DrawHook, EntityClass::DrawHook>>& Hooks()
     {
@@ -899,6 +904,8 @@ namespace
 
         if (entityCommandHook && source == FromEntity && !entityCommandHook(kind, dc))
             return;
+        if (fragTypeCommandHook && source == FromFragType && !fragTypeCommandHook(kind, dc))
+            return;
 
         if (commandHook && (source == FromEntity || source == FromFrag || source == FromFragType))
         {
@@ -1247,6 +1254,11 @@ namespace EntityClass
     void SetEntityCommandHook(EntityCommandHook hook)
     {
         entityCommandHook = hook;
+    }
+
+    void SetFragTypeCommandHook(EntityCommandHook hook)
+    {
+        fragTypeCommandHook = hook;
     }
 
     uintptr_t ModelInfo(uint16_t model)
