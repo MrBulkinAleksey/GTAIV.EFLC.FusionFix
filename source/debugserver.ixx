@@ -588,7 +588,8 @@ namespace DebugServer
         const auto& f = report.frames;
         return Object({{"frames", std::to_string(f.count)}, {"frame_ms", number(f.mean)}, {"p50_ms", number(f.p50)},
             {"p95_ms", number(f.p95)}, {"p99_ms", number(f.p99)}, {"max_ms", number(f.max)},
-            {"main_frame_ms", number(f.mainMean)}, {"main_max_ms", number(f.mainMax)}, {"rows", Array(rows)}});
+            {"main_frame_ms", number(f.mainMean)}, {"main_max_ms", number(f.mainMax)},
+            {"main_thread", std::to_string(report.mainThread)}, {"render_thread", std::to_string(report.renderThread)}, {"rows", Array(rows)}});
     }
 
     // ---- the sampling profiler (Profiler): a session of some seconds, its report as text

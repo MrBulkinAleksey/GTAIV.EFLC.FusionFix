@@ -70,6 +70,7 @@ export namespace CpuScopes
     struct Report
     {
         Frames frames;
+        DWORD mainThread = 0, renderThread = 0;
         std::vector<Row> rows;  // the busiest first
     };
 
@@ -216,6 +217,8 @@ namespace CpuScopes
         }
         // The render thread adds nothing more once the frames are done
         Report report;
+        report.mainThread = mainThread;
+        report.renderThread = renderThread;
         const double count = double(nFramesDone.load());
         auto ms = sums.frameMs;
         std::sort(ms.begin(), ms.end());
