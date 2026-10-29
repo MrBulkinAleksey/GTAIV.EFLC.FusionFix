@@ -3,6 +3,8 @@ module;
 #include <common.hxx>
 #include <algorithm>
 #include <cstring>
+#include <format>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include "FusionLog.hpp"
@@ -96,7 +98,11 @@ namespace ShadowMerge
         uint64_t drawn = 0, saved = 0, built = 0, noGain = 0, failed = 0, letGo = 0;
         // models of buildings and props in a shadow pass drawn the game's way, and why
         uint64_t skinned = 0, instancing = 0, single = 0, budget = 0;
+        // all model draws, those outside an entity's draw, of another kind, outside a shadow pass
+        uint64_t calls = 0, outside = 0, otherKind = 0, otherPass = 0;
     } stats;
+    // The targets model draws of buildings and props were seen in, for the log (render thread)
+    std::unordered_map<std::string, uint64_t> targetsSeen;
 
     template <typename T> T Read(uintptr_t address, size_t offset) { return *reinterpret_cast<const T*>(address + offset); }
 
@@ -344,10 +350,24 @@ namespace ShadowMerge
     {
         const uintptr_t m = reinterpret_cast<uintptr_t>(model);
         auto original = [&] { shModelDraw.unsafe_fastcall(model, edx, group, bucket, flag); };
-        if (!bEnabled || !m || !inEntity || (currentKind != EntityClass::Kind::Building && currentKind != EntityClass::Kind::Prop))
+        if (!bEnabled || !m)
             return original();
+        ++stats.calls;
+        if (!inEntity || (currentKind != EntityClass::Kind::Building && currentKind != EntityClass::Kind::Prop))
+        {
+            ++(inEntity ? stats.otherKind : stats.outside);
+            return original();
+        }
+        if (bLog && targetsSeen.size() < 64)
+        {
+            const char* target = RenderSkip::CurrentTarget();
+            ++targetsSeen[target ? target : "(no lock hooks)"];
+        }
         if (!ShadowPass())
+        {
+            ++stats.otherPass;
             return original();
+        }
         const uint16_t count = Read<uint16_t>(m, 0x1a);
         const uintptr_t geometries = Read<uintptr_t>(m, 4);
         uint64_t* reason = (pSkinning && *pSkinning) ? &stats.skinned
@@ -418,6 +438,13 @@ namespace ShadowMerge
                 "nothing to merge %llu, failed %llu, let go %llu; cache %zu models, %.1f MB\n", kLogFrames, stats.drawn / n, stats.saved / n,
                 stats.skinned / n, stats.instancing / n, stats.single / n, stats.budget / n,
                 stats.built, stats.noGain, stats.failed, stats.letGo, entries.size(), totalBytes / 1048576.0);
+            std::string targets;
+            for (auto& [name, count] : targetsSeen)
+                targets += std::format("{} {:.1f}, ", name, count / n);
+            FusionLog::Write("ShadowMerge", "Calls", "per frame: %.1f model draws, %.1f outside an entity's draw, %.1f of vehicles and people, "
+                "%.1f outside a shadow pass; buildings' and props' by target: %s\n", stats.calls / n, stats.outside / n, stats.otherKind / n,
+                stats.otherPass / n, targets.c_str());
+            targetsSeen.clear();
             stats = {};
         }
     }
