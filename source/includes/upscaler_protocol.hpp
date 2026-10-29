@@ -31,6 +31,12 @@
 // (PresentFenceHandle) once it is done with Present and HudLess, which the game's next copy into them waits for. With
 // AmdPacing, AMD's frame generation swap chain generates the frame in its Present and paces both (PresentDelay unused).
 //
+// Vulkan (ConfigureFlags::Vulkan, FSR with DXVK only): the helper runs FSR through AMD's Vulkan runtime on a Vulkan device of
+// its own. The shared textures are Vulkan images exported as opaque Win32 handles with VulkanImageUsage, which the game's
+// imports repeat, and the fences are the game's timeline semaphores (GameFence) as under Wine, or without them both sides
+// wait on the CPU. No presentation and no compute queue there. Where the helper can't (no Vulkan 1.3, no Vulkan runtime of
+// AMD's), it clears Vulkan, and GameFence too outside Wine, and goes on with D3D12.
+//
 // Frame generation (ConfigureFlags::FrameGeneration, FSR only): Evaluate also prepares the frame generation with
 // the depth and motion vectors of the frame. Generate then takes the finished frame (Present, the size of the
 // output) and writes the frame between it and the previous one into Generated, synchronized like Evaluate.
@@ -40,7 +46,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 17;
+    constexpr uint32_t Version = 18;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -112,6 +118,15 @@ namespace UpscalerProtocol
         constexpr uint32_t AsyncGeneration = 1 << 6;  // Generate runs on a compute queue of the helper; cleared if it has none
         constexpr uint32_t HelperPresent = 1 << 7;    // the helper presents the frames, with the frame generation too; cleared if it can't
         constexpr uint32_t AmdPacing = 1 << 8;        // with HelperPresent and the frame generation, AMD's swap chain generates and paces the frames; cleared if it can't
+        constexpr uint32_t Vulkan = 1 << 9;           // FSR on the helper's Vulkan device; cleared if it can't, with GameFence outside Wine
+    }
+
+    // ConfigureFlags::Vulkan: the usage the helper makes a shared image with, which the game's import of it repeats, as
+    // VkImageUsageFlags (transfer source 0x1, transfer destination 0x2, sampled 0x4, storage 0x8): the upscaler and the
+    // frame generation write Output and Generated
+    constexpr uint32_t VulkanImageUsage(Texture texture)
+    {
+        return 0x1u | 0x2u | 0x4u | (texture == Texture::Output || texture == Texture::Generated ? 0x8u : 0u);
     }
 
 #pragma pack(push, 8)

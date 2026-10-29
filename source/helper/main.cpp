@@ -13,12 +13,16 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
+#define VK_NO_PROTOTYPES
+#define VK_USE_PLATFORM_WIN32_KHR
+#include <vulkan/vulkan.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -36,6 +40,12 @@
 #include <ffx_framegeneration.h>
 #include <dx12/ffx_api_dx12.h>
 #include <dx12/ffx_api_framegeneration_dx12.h>
+// The Vulkan header names its allocation callbacks as the D3D12 one does, with other types
+#define PfnFfxResourceAllocatorFunc PfnFfxResourceAllocatorFuncVK
+#define PfnFfxResourceDeallocatorFunc PfnFfxResourceDeallocatorFuncVK
+#include <vk/ffx_api_vk.h>
+#undef PfnFfxResourceAllocatorFunc
+#undef PfnFfxResourceDeallocatorFunc
 
 #include "upscaler_protocol.hpp"
 
@@ -821,6 +831,30 @@ namespace
     // -----------------------------------------------------------------------------------------------
     // AMD FSR, through the FidelityFX API runtime supplied by the user
 
+    // The first of names found in the search paths
+    HMODULE LoadFidelityFX(const std::vector<std::wstring>& searchPaths, std::initializer_list<const wchar_t*> names)
+    {
+        for (auto& dir : searchPaths)
+        {
+            for (auto name : names)
+            {
+                auto path = std::filesystem::path(dir) / name;
+                if (!std::filesystem::exists(path))
+                    continue;
+                // The loader loads amd_fidelityfx_upscaler_dx12.dll by name later, which has to find it next to the
+                // loader and not only in the helper's folder
+                SetDllDirectoryW(dir.c_str());
+                AddDllDirectory(dir.c_str());
+                if (auto module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS))
+                {
+                    Log("FidelityFX runtime: %ls", path.c_str());
+                    return module;
+                }
+            }
+        }
+        return nullptr;
+    }
+
     class FSR
     {
         HMODULE module = nullptr;
@@ -869,28 +903,7 @@ namespace
             device = d3d;
 
             // FidelityFX SDK 2.x ships a small loader next to the effect libraries, 1.1 a single library
-            for (auto& dir : searchPaths)
-            {
-                for (auto name : { L"amd_fidelityfx_loader_dx12.dll", L"amd_fidelityfx_dx12.dll" })
-                {
-                    auto path = std::filesystem::path(dir) / name;
-                    if (!std::filesystem::exists(path))
-                        continue;
-                    // The loader loads amd_fidelityfx_upscaler_dx12.dll by name later, which has to find it next to the
-                    // loader and not only in the helper's folder
-                    SetDllDirectoryW(dir.c_str());
-                    AddDllDirectory(dir.c_str());
-                    module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-                    if (module)
-                    {
-                        Log("FidelityFX runtime: %ls", path.c_str());
-                        break;
-                    }
-                }
-                if (module)
-                    break;
-            }
-
+            module = LoadFidelityFX(searchPaths, { L"amd_fidelityfx_loader_dx12.dll", L"amd_fidelityfx_dx12.dll" });
             if (!module)
             {
                 message = "FSR is not available: amd_fidelityfx_loader_dx12.dll not found";
@@ -1289,6 +1302,979 @@ namespace
             if (module)
                 FreeLibrary(module);
             module = nullptr;
+        }
+    };
+
+    // -----------------------------------------------------------------------------------------------
+    // Vulkan (ConfigureFlags::Vulkan)
+    //
+    // FSR through AMD's Vulkan runtime (amd_fidelityfx_loader_vk.dll) on a Vulkan 1.3 device of its own on the game's
+    // adapter, with every feature the GPU has and the extensions AMD's samples give the ML upscaler where they exist. The
+    // shared textures are images exported as opaque Win32 handles (Protocol::VulkanImageUsage), the fences the game's
+    // timeline semaphores, or without them the GPU work is waited for on the CPU (cpuSync). One queue: Evaluate and
+    // Generate in the order asked, both signalling the output semaphore. Between the requests the images belong to the
+    // external queue family (the game's) in the general layout.
+
+#define HELPER_VK_INSTANCE(X) \
+    X(vkDestroyInstance) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties2) X(vkGetPhysicalDeviceQueueFamilyProperties) \
+    X(vkGetPhysicalDeviceFeatures2) X(vkEnumerateDeviceExtensionProperties) X(vkGetPhysicalDeviceMemoryProperties) \
+    X(vkGetPhysicalDeviceFormatProperties) X(vkCreateDevice) X(vkGetDeviceProcAddr)
+#define HELPER_VK_DEVICE(X) \
+    X(vkDestroyDevice) X(vkGetDeviceQueue) X(vkDeviceWaitIdle) X(vkCreateImage) X(vkDestroyImage) X(vkGetImageMemoryRequirements) \
+    X(vkAllocateMemory) X(vkFreeMemory) X(vkBindImageMemory) X(vkGetMemoryWin32HandleKHR) X(vkCreateSemaphore) X(vkDestroySemaphore) \
+    X(vkImportSemaphoreWin32HandleKHR) X(vkWaitSemaphores) X(vkCreateCommandPool) X(vkDestroyCommandPool) X(vkResetCommandPool) \
+    X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCmdPipelineBarrier) X(vkQueueSubmit) \
+    X(vkCreateQueryPool) X(vkDestroyQueryPool) X(vkCmdResetQueryPool) X(vkCmdWriteTimestamp) X(vkGetQueryPoolResults)
+#define HELPER_VK_DECLARE(name) PFN_##name name = nullptr;
+
+    class VulkanFSR
+    {
+        HMODULE vulkanModule = nullptr;
+        HMODULE module = nullptr;
+        ffxFunctions functions{};
+        ffxContext context = nullptr;
+        ffxContext frameGeneration = nullptr;
+        uint32_t displayWidth = 0;
+        uint32_t displayHeight = 0;
+
+        PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = nullptr;
+        HELPER_VK_INSTANCE(HELPER_VK_DECLARE)
+        HELPER_VK_DEVICE(HELPER_VK_DECLARE)
+
+        VkInstance instance = VK_NULL_HANDLE;
+        VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+        VkDevice device = VK_NULL_HANDLE;
+        VkQueue queue = VK_NULL_HANDLE;
+        uint32_t queueFamily = 0;
+        VkDeviceContext deviceContext{};
+        VkPhysicalDeviceMemoryProperties memoryProperties{};
+
+        VkSemaphore localSemaphore = VK_NULL_HANDLE;    // this process's, the command buffers' and the CPU's waits
+        uint64_t localValue = 0;
+        VkSemaphore inputSemaphore = VK_NULL_HANDLE;    // the game's: signalled once the inputs are copied
+        VkSemaphore outputSemaphore = VK_NULL_HANDLE;   // the game's: signalled here once the output is ready
+
+        // Command buffers of the requests, each reused once the GPU is past it, and their timestamps: Evaluate has start,
+        // upscaled, prepared; Generate start, generated
+        static constexpr uint32_t Slots = 6;
+        static constexpr uint32_t StampsPerSlot = 4;
+        struct Slot
+        {
+            VkCommandPool pool = VK_NULL_HANDLE;
+            VkCommandBuffer cmd = VK_NULL_HANDLE;
+            uint64_t value = 0;     // of the local semaphore once the GPU is done with it
+            uint32_t stamps = 0;
+            bool generate = false;
+        };
+        std::array<Slot, Slots> slots{};
+        uint32_t slot = 0;
+        VkQueryPool queryPool = VK_NULL_HANDLE;
+        double msPerTick = 0.0;
+        struct GpuStats
+        {
+            uint32_t evaluates = 0, prepares = 0, generates = 0;
+            double upscale = 0.0, upscaleMax = 0.0, prepare = 0.0, generate = 0.0, generateMax = 0.0;
+        } gpuStats;
+
+        struct Image
+        {
+            VkImage image = VK_NULL_HANDLE;
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            VkImageCreateInfo info{};
+            HANDLE handle = nullptr;
+            uint64_t size = 0;
+        };
+        std::array<Image, static_cast<size_t>(Protocol::Texture::Count)> images{};
+        bool hudLess = false;       // the frame generation reads HudLess, as configured last
+        bool tried = false;
+        bool initialized = false;
+
+        uint64_t LogVersions(uint64_t createDescType, const char* effect)
+        {
+            uint64_t count = 0;
+            ffxQueryDescGetVersions versions{};
+            versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+            versions.createDescType = createDescType;
+            versions.device = &deviceContext;
+            versions.outputCount = &count;
+            if (functions.Query(nullptr, &versions.header) != FFX_API_RETURN_OK || count == 0)
+                return 0;
+
+            std::vector<uint64_t> ids(count);
+            std::vector<const char*> names(count);
+            versions.versionIds = ids.data();
+            versions.versionNames = names.data();
+            if (functions.Query(nullptr, &versions.header) == FFX_API_RETURN_OK)
+                for (uint64_t i = 0; i < count; ++i)
+                    Log("%s version available (Vulkan): %s", effect, names[i] ? names[i] : "?");
+            return count;
+        }
+
+        bool CreateDevice(LUID luid)
+        {
+            vulkanModule = LoadLibraryW(L"vulkan-1.dll");
+            vkGetInstanceProcAddr = vulkanModule ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(vulkanModule, "vkGetInstanceProcAddr")) : nullptr;
+            if (!vkGetInstanceProcAddr)
+            {
+                Log("Vulkan: no vulkan-1.dll");
+                return false;
+            }
+            auto enumerateVersion = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion"));
+            auto createInstance = reinterpret_cast<PFN_vkCreateInstance>(vkGetInstanceProcAddr(nullptr, "vkCreateInstance"));
+            uint32_t version = VK_API_VERSION_1_0;
+            if (enumerateVersion)
+                enumerateVersion(&version);
+            if (!createInstance || version < VK_API_VERSION_1_3)
+            {
+                Log("Vulkan: the loader is %u.%u, 1.3 is needed", VK_API_VERSION_MAJOR(version), VK_API_VERSION_MINOR(version));
+                return false;
+            }
+
+            VkApplicationInfo app{ VK_STRUCTURE_TYPE_APPLICATION_INFO };
+            app.pApplicationName = "GTAIV.EFLC.FusionFix upscaler helper";
+            app.apiVersion = VK_API_VERSION_1_3;
+            VkInstanceCreateInfo instanceInfo{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
+            instanceInfo.pApplicationInfo = &app;
+            if (auto vr = createInstance(&instanceInfo, nullptr, &instance); vr != VK_SUCCESS)
+            {
+                Log("Vulkan: vkCreateInstance %d", vr);
+                instance = VK_NULL_HANDLE;
+                return false;
+            }
+#define HELPER_VK_LOAD_INSTANCE(name) \
+            name = reinterpret_cast<PFN_##name>(vkGetInstanceProcAddr(instance, #name)); \
+            if (!name) { Log("Vulkan: no %s", #name); return false; }
+            HELPER_VK_INSTANCE(HELPER_VK_LOAD_INSTANCE)
+#undef HELPER_VK_LOAD_INSTANCE
+
+            // The game's adapter, by its LUID
+            uint32_t count = 0;
+            vkEnumeratePhysicalDevices(instance, &count, nullptr);
+            std::vector<VkPhysicalDevice> physicalDevices(count);
+            vkEnumeratePhysicalDevices(instance, &count, physicalDevices.data());
+            VkPhysicalDeviceProperties2 properties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+            VkPhysicalDeviceIDProperties id{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES };
+            VkPhysicalDeviceDriverProperties driver{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES };
+            for (auto candidate : physicalDevices)
+            {
+                properties.pNext = &id;
+                id.pNext = &driver;
+                vkGetPhysicalDeviceProperties2(candidate, &properties);
+                if (id.deviceLUIDValid && std::memcmp(id.deviceLUID, &luid, sizeof(luid)) == 0)
+                {
+                    physicalDevice = candidate;
+                    break;
+                }
+            }
+            if (!physicalDevice)
+            {
+                Log("Vulkan: none of the %u devices is the game's adapter", count);
+                return false;
+            }
+            auto apiVersion = properties.properties.apiVersion;
+            Log("Vulkan device: %s, Vulkan %u.%u.%u, driver %s %s", properties.properties.deviceName, VK_API_VERSION_MAJOR(apiVersion),
+                VK_API_VERSION_MINOR(apiVersion), VK_API_VERSION_PATCH(apiVersion), driver.driverName, driver.driverInfo);
+            if (apiVersion < VK_API_VERSION_1_3)
+            {
+                Log("Vulkan: the device is not Vulkan 1.3");
+                return false;
+            }
+            msPerTick = properties.properties.limits.timestampPeriod / 1000000.0;
+
+            // A queue for graphics and compute
+            vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &count, nullptr);
+            std::vector<VkQueueFamilyProperties> families(count);
+            vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &count, families.data());
+            queueFamily = UINT32_MAX;
+            for (uint32_t i = 0; i < count && queueFamily == UINT32_MAX; ++i)
+            {
+                constexpr VkQueueFlags wanted = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
+                if ((families[i].queueFlags & wanted) == wanted)
+                {
+                    queueFamily = i;
+                    if (!families[i].timestampValidBits)
+                        msPerTick = 0.0;
+                }
+            }
+            if (queueFamily == UINT32_MAX)
+            {
+                Log("Vulkan: no graphics queue");
+                return false;
+            }
+
+            vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &count, nullptr);
+            std::vector<VkExtensionProperties> available(count);
+            vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &count, available.data());
+            auto has = [&](const char* name)
+            {
+                return std::any_of(available.begin(), available.end(), [&](auto& e) { return std::strcmp(e.extensionName, name) == 0; });
+            };
+            std::vector<const char*> extensions;
+            for (auto name : { VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME, VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME })
+            {
+                if (!has(name))
+                {
+                    Log("Vulkan: no %s", name);
+                    return false;
+                }
+                extensions.push_back(name);
+            }
+
+            // Every feature the GPU has, robustness aside, as AMD's samples enable them for the upscaler's shaders
+            VkPhysicalDeviceFeatures2 features{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+            VkPhysicalDeviceVulkan11Features vulkan11{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
+            VkPhysicalDeviceVulkan12Features vulkan12{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+            VkPhysicalDeviceVulkan13Features vulkan13{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
+            VkPhysicalDeviceCooperativeMatrixFeaturesKHR cooperativeMatrix{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR };
+            VkPhysicalDeviceShaderFloat8FeaturesEXT float8{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT8_FEATURES_EXT };
+            VkPhysicalDeviceShaderBfloat16FeaturesKHR bfloat16{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR };
+            VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR derivatives{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR };
+            features.pNext = &vulkan11;
+            vulkan11.pNext = &vulkan12;
+            vulkan12.pNext = &vulkan13;
+            void** next = &vulkan13.pNext;
+            std::string optional;
+            auto chain = [&](const char* name, auto& feature)
+            {
+                if (!has(name))
+                    return;
+                extensions.push_back(name);
+                *next = &feature;
+                next = &feature.pNext;
+                optional += std::string(" ") + name;
+            };
+            chain(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME, cooperativeMatrix);
+            chain(VK_EXT_SHADER_FLOAT8_EXTENSION_NAME, float8);
+            chain(VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME, bfloat16);
+            chain(VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME, derivatives);
+            vkGetPhysicalDeviceFeatures2(physicalDevice, &features);
+            features.features.robustBufferAccess = VK_FALSE;
+            vulkan13.robustImageAccess = VK_FALSE;
+            Log("Vulkan: extensions for the upscaler:%s", optional.empty() ? " none" : optional.c_str());
+
+            float priority = 1.0f;
+            VkDeviceQueueCreateInfo queueInfo{ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
+            queueInfo.queueFamilyIndex = queueFamily;
+            queueInfo.queueCount = 1;
+            queueInfo.pQueuePriorities = &priority;
+            VkDeviceCreateInfo deviceInfo{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
+            deviceInfo.pNext = &features;
+            deviceInfo.queueCreateInfoCount = 1;
+            deviceInfo.pQueueCreateInfos = &queueInfo;
+            deviceInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+            deviceInfo.ppEnabledExtensionNames = extensions.data();
+            if (auto vr = vkCreateDevice(physicalDevice, &deviceInfo, nullptr, &device); vr != VK_SUCCESS)
+            {
+                Log("Vulkan: vkCreateDevice %d", vr);
+                device = VK_NULL_HANDLE;
+                return false;
+            }
+#define HELPER_VK_LOAD_DEVICE(name) \
+            name = reinterpret_cast<PFN_##name>(vkGetDeviceProcAddr(device, #name)); \
+            if (!name) { Log("Vulkan: no %s", #name); return false; }
+            HELPER_VK_DEVICE(HELPER_VK_LOAD_DEVICE)
+#undef HELPER_VK_LOAD_DEVICE
+            vkGetDeviceQueue(device, queueFamily, 0, &queue);
+            vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+            deviceContext = { device, physicalDevice, vkGetDeviceProcAddr };
+
+            VkSemaphoreTypeCreateInfo type{ VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
+            type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+            VkSemaphoreCreateInfo semaphoreInfo{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+            semaphoreInfo.pNext = &type;
+            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &localSemaphore) != VK_SUCCESS)
+                return false;
+
+            for (auto& s : slots)
+            {
+                VkCommandPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
+                poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+                poolInfo.queueFamilyIndex = queueFamily;
+                if (vkCreateCommandPool(device, &poolInfo, nullptr, &s.pool) != VK_SUCCESS)
+                    return false;
+                VkCommandBufferAllocateInfo allocate{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+                allocate.commandPool = s.pool;
+                allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+                allocate.commandBufferCount = 1;
+                if (vkAllocateCommandBuffers(device, &allocate, &s.cmd) != VK_SUCCESS)
+                    return false;
+            }
+
+            if (msPerTick > 0.0)
+            {
+                VkQueryPoolCreateInfo queryInfo{ VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+                queryInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+                queryInfo.queryCount = Slots * StampsPerSlot;
+                if (vkCreateQueryPool(device, &queryInfo, nullptr, &queryPool) != VK_SUCCESS)
+                    queryPool = VK_NULL_HANDLE;
+            }
+            return true;
+        }
+
+        bool LoadRuntime(const std::vector<std::wstring>& searchPaths)
+        {
+            module = LoadFidelityFX(searchPaths, { L"amd_fidelityfx_loader_vk.dll" });
+            if (!module)
+            {
+                Log("Vulkan: amd_fidelityfx_loader_vk.dll not found");
+                return false;
+            }
+            ffxLoadFunctions(&functions, module);
+            if (!functions.CreateContext || !functions.DestroyContext || !functions.Query || !functions.Dispatch || !functions.Configure)
+            {
+                Log("Vulkan: amd_fidelityfx_loader_vk.dll has no FidelityFX API exports");
+                return false;
+            }
+            if (LogVersions(FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE, "FSR") == 0)
+            {
+                Log("Vulkan: the FidelityFX runtime has no upscaler for this GPU");
+                return false;
+            }
+            frameGenerationAvailable = LogVersions(FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION, "Frame generation") != 0;
+            return true;
+        }
+
+        bool WaitLocal(uint64_t value, uint64_t ms)
+        {
+            if (!value)
+                return true;
+            VkSemaphoreWaitInfo wait{ VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
+            wait.semaphoreCount = 1;
+            wait.pSemaphores = &localSemaphore;
+            wait.pValues = &value;
+            return vkWaitSemaphores(device, &wait, ms * 1000000ull) == VK_SUCCESS;
+        }
+
+        void ReadStamps(Slot& s, uint32_t index)
+        {
+            uint64_t t[StampsPerSlot]{};
+            if (vkGetQueryPoolResults(device, queryPool, index * StampsPerSlot, s.stamps, sizeof(t), t, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
+                return;
+            auto ms = [&](uint32_t from, uint32_t to) { return t[to] > t[from] ? static_cast<double>(t[to] - t[from]) * msPerTick : 0.0; };
+            auto& g = gpuStats;
+            if (s.generate)
+            {
+                ++g.generates;
+                g.generate += ms(0, 1);
+                g.generateMax = std::max(g.generateMax, ms(0, 1));
+                return;
+            }
+            ++g.evaluates;
+            g.upscale += ms(0, 1);
+            g.upscaleMax = std::max(g.upscaleMax, ms(0, 1));
+            if (s.stamps >= 3)
+            {
+                ++g.prepares;
+                g.prepare += ms(1, 2);
+            }
+            if (g.evaluates >= 300)
+            {
+                Log("GPU milliseconds of the helper's work over %u frames (Vulkan): upscaler %.3f (%.3f at most)", g.evaluates,
+                    g.upscale / g.evaluates, g.upscaleMax);
+                if (g.prepares)
+                    Log("  frame generation: prepare %.3f over %u frames, generate %.3f (%.3f at most) over %u frames", g.prepare / g.prepares,
+                        g.prepares, g.generates ? g.generate / g.generates : 0.0, g.generateMax, g.generates);
+                g = {};
+            }
+        }
+
+        // The command buffer of a request, once the GPU is past its previous use
+        VkCommandBuffer Begin(bool generate)
+        {
+            slot = (slot + 1) % Slots;
+            auto& s = slots[slot];
+            if (WaitLocal(s.value, 1000) && queryPool && s.stamps >= 2)
+                ReadStamps(s, slot);
+            s.stamps = 0;
+            s.generate = generate;
+            vkResetCommandPool(device, s.pool, 0);
+            VkCommandBufferBeginInfo begin{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+            begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            vkBeginCommandBuffer(s.cmd, &begin);
+            if (queryPool)
+                vkCmdResetQueryPool(s.cmd, queryPool, slot * StampsPerSlot, StampsPerSlot);
+            return s.cmd;
+        }
+
+        void Stamp(VkCommandBuffer cmd)
+        {
+            auto& s = slots[slot];
+            if (queryPool && s.stamps < StampsPerSlot)
+                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, queryPool, slot * StampsPerSlot + s.stamps++);
+        }
+
+        // The request's command buffer once the game's copies are in (waitValue on its input semaphore), signalling
+        // signalValue on its output semaphore, both 0 for neither; with cpuSync waited for here instead. Without execute only
+        // the semaphores, so the values the game waits for always come.
+        bool Submit(uint64_t waitValue, uint64_t signalValue, bool execute)
+        {
+            auto& s = slots[slot];
+            vkEndCommandBuffer(s.cmd);
+            if (!execute)
+                s.stamps = 0;
+            bool external = !cpuSync && signalValue;
+            VkSemaphore signals[2] = { localSemaphore, outputSemaphore };
+            uint64_t signalValues[2] = { ++localValue, signalValue };
+            VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            VkTimelineSemaphoreSubmitInfo timeline{ VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
+            timeline.waitSemaphoreValueCount = external ? 1 : 0;
+            timeline.pWaitSemaphoreValues = &waitValue;
+            timeline.signalSemaphoreValueCount = external ? 2 : 1;
+            timeline.pSignalSemaphoreValues = signalValues;
+            VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+            submit.pNext = &timeline;
+            submit.waitSemaphoreCount = timeline.waitSemaphoreValueCount;
+            submit.pWaitSemaphores = &inputSemaphore;
+            submit.pWaitDstStageMask = &waitStage;
+            submit.commandBufferCount = execute ? 1 : 0;
+            submit.pCommandBuffers = &s.cmd;
+            submit.signalSemaphoreCount = timeline.signalSemaphoreValueCount;
+            submit.pSignalSemaphores = signals;
+            s.value = localValue;
+            if (auto vr = vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE); vr != VK_SUCCESS)
+            {
+                static uint32_t reported = 0;
+                if (reported++ < 5)
+                    Log("Vulkan: vkQueueSubmit %d", vr);
+                return false;
+            }
+            // Answered once the output is in the shared image
+            return !cpuSync || WaitLocal(localValue, 2000);
+        }
+
+        // The images of a pass from the external queue family to this one's and their layout for it, or back
+        void Hand(VkCommandBuffer cmd, bool acquire, std::initializer_list<Protocol::Texture> indices)
+        {
+            VkImageMemoryBarrier barriers[static_cast<size_t>(Protocol::Texture::Count)]{};
+            uint32_t count = 0;
+            for (auto index : indices)
+            {
+                auto& image = images[static_cast<size_t>(index)];
+                if (!image.image)
+                    continue;
+                bool written = index == Protocol::Texture::Output || index == Protocol::Texture::Generated;
+                auto layout = written ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                VkAccessFlags access = written ? VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_SHADER_READ_BIT;
+                auto& barrier = barriers[count++];
+                barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                barrier.srcAccessMask = acquire ? 0 : access;
+                barrier.dstAccessMask = acquire ? access : 0;
+                barrier.oldLayout = acquire ? VK_IMAGE_LAYOUT_GENERAL : layout;
+                barrier.newLayout = acquire ? layout : VK_IMAGE_LAYOUT_GENERAL;
+                barrier.srcQueueFamilyIndex = acquire ? VK_QUEUE_FAMILY_EXTERNAL : queueFamily;
+                barrier.dstQueueFamilyIndex = acquire ? queueFamily : VK_QUEUE_FAMILY_EXTERNAL;
+                barrier.image = image.image;
+                barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+            }
+            if (count)
+                vkCmdPipelineBarrier(cmd, acquire ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    acquire ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, count, barriers);
+        }
+
+        FfxApiResource Resource(Protocol::Texture index, uint32_t state)
+        {
+            auto& image = images[static_cast<size_t>(index)];
+            return ffxApiGetResourceVK(reinterpret_cast<void*>(image.image), ffxApiGetImageResourceDescriptionVK(image.image, image.info, 0), state);
+        }
+
+        bool ImportSemaphore(VkSemaphore& semaphore, HANDLE handle)
+        {
+            if (!handle)
+                return false;
+            VkSemaphoreTypeCreateInfo type{ VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
+            type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+            VkSemaphoreCreateInfo info{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+            info.pNext = &type;
+            if (vkCreateSemaphore(device, &info, nullptr, &semaphore) != VK_SUCCESS)
+            {
+                semaphore = VK_NULL_HANDLE;
+                return false;
+            }
+            // The handle stays this process's: closed by the caller
+            VkImportSemaphoreWin32HandleInfoKHR import{ VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR };
+            import.semaphore = semaphore;
+            import.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+            import.handle = handle;
+            return vkImportSemaphoreWin32HandleKHR(device, &import) == VK_SUCCESS;
+        }
+
+        void DestroySemaphores()
+        {
+            for (auto semaphore : { &inputSemaphore, &outputSemaphore })
+            {
+                if (*semaphore)
+                    vkDestroySemaphore(device, *semaphore, nullptr);
+                *semaphore = VK_NULL_HANDLE;
+            }
+        }
+
+        bool CanStore(VkFormat format)
+        {
+            VkFormatProperties properties{};
+            vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &properties);
+            return (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
+        }
+
+        // A shared image, its memory exported to a handle for the game
+        bool CreateImage(Protocol::Texture index, uint32_t width, uint32_t height, VkFormat format)
+        {
+            auto& image = images[static_cast<size_t>(index)];
+            VkExternalMemoryImageCreateInfo external{ VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO };
+            external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+            image.info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+            image.info.pNext = &external;
+            image.info.imageType = VK_IMAGE_TYPE_2D;
+            image.info.format = format;
+            image.info.extent = { width, height, 1 };
+            image.info.mipLevels = 1;
+            image.info.arrayLayers = 1;
+            image.info.samples = VK_SAMPLE_COUNT_1_BIT;
+            image.info.tiling = VK_IMAGE_TILING_OPTIMAL;
+            image.info.usage = Protocol::VulkanImageUsage(index);
+            image.info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            image.info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            auto vr = vkCreateImage(device, &image.info, nullptr, &image.image);
+            image.info.pNext = nullptr;
+            if (vr != VK_SUCCESS)
+            {
+                Log("Vulkan: vkCreateImage %d for texture %u (%ux%u, format %d)", vr, static_cast<uint32_t>(index), width, height, int(format));
+                image.image = VK_NULL_HANDLE;
+                return false;
+            }
+
+            // Device local, plain where there is such a type: the game's import picks the same
+            VkMemoryRequirements requirements{};
+            vkGetImageMemoryRequirements(device, image.image, &requirements);
+            uint32_t typeIndex = UINT32_MAX;
+            for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; ++i)
+            {
+                auto flags = memoryProperties.memoryTypes[i].propertyFlags;
+                if (!(requirements.memoryTypeBits & (1u << i)) || !(flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
+                    continue;
+                if (typeIndex == UINT32_MAX || flags == VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+                    typeIndex = i;
+                if (flags == VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+                    break;
+            }
+            if (typeIndex == UINT32_MAX)
+            {
+                Log("Vulkan: no device local memory type in %08x", requirements.memoryTypeBits);
+                return false;
+            }
+
+            VkExportMemoryWin32HandleInfoKHR win32{ VK_STRUCTURE_TYPE_EXPORT_MEMORY_WIN32_HANDLE_INFO_KHR };
+            win32.dwAccess = GENERIC_ALL;
+            VkExportMemoryAllocateInfo exportInfo{ VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO };
+            exportInfo.pNext = &win32;
+            exportInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+            VkMemoryDedicatedAllocateInfo dedicated{ VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO };
+            dedicated.pNext = &exportInfo;
+            dedicated.image = image.image;
+            VkMemoryAllocateInfo allocate{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+            allocate.pNext = &dedicated;
+            allocate.allocationSize = requirements.size;
+            allocate.memoryTypeIndex = typeIndex;
+            if (vr = vkAllocateMemory(device, &allocate, nullptr, &image.memory); vr != VK_SUCCESS)
+            {
+                Log("Vulkan: vkAllocateMemory %d (size %llu, type %u)", vr, static_cast<unsigned long long>(requirements.size), typeIndex);
+                image.memory = VK_NULL_HANDLE;
+                return false;
+            }
+            if (vr = vkBindImageMemory(device, image.image, image.memory, 0); vr != VK_SUCCESS)
+            {
+                Log("Vulkan: vkBindImageMemory %d", vr);
+                return false;
+            }
+            VkMemoryGetWin32HandleInfoKHR get{ VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR };
+            get.memory = image.memory;
+            get.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+            if (vr = vkGetMemoryWin32HandleKHR(device, &get, &image.handle); vr != VK_SUCCESS || !image.handle)
+            {
+                Log("Vulkan: vkGetMemoryWin32HandleKHR %d", vr);
+                image.handle = nullptr;
+                return false;
+            }
+            image.size = requirements.size;
+            return true;
+        }
+
+        void ReleaseImage(Protocol::Texture index)
+        {
+            auto& image = images[static_cast<size_t>(index)];
+            if (image.handle)
+                CloseHandle(image.handle);
+            if (image.image)
+                vkDestroyImage(device, image.image, nullptr);
+            if (image.memory)
+                vkFreeMemory(device, image.memory, nullptr);
+            image = {};
+        }
+
+        // New images to the general layout, handed to the external queue family as the requests leave them
+        bool InitializeImages()
+        {
+            auto cmd = Begin(false);
+            VkImageMemoryBarrier barriers[static_cast<size_t>(Protocol::Texture::Count)]{};
+            uint32_t count = 0;
+            for (auto& image : images)
+            {
+                if (!image.image)
+                    continue;
+                auto& barrier = barriers[count++];
+                barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                barrier.srcQueueFamilyIndex = queueFamily;
+                barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+                barrier.image = image.image;
+                barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+            }
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, count, barriers);
+            return Submit(0, 0, true) && WaitLocal(localValue, 2000);
+        }
+
+        bool CreateUpscaler(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight)
+        {
+            ffxCreateBackendVKDesc backend{};
+            backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
+            backend.deviceContext = deviceContext;
+
+            ffxCreateContextDescUpscale create{};
+            create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+            create.header.pNext = &backend.header;
+            create.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+            create.maxRenderSize = { width, height };
+            create.maxUpscaleSize = { outputWidth, outputHeight };
+            if (auto result = functions.CreateContext(&context, &create.header, nullptr); result != FFX_API_RETURN_OK)
+            {
+                Log("FSR context creation failed on Vulkan: %u", result);
+                context = nullptr;
+                return false;
+            }
+
+            ffxQueryGetProviderVersion provider{};
+            provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
+            if (functions.Query(&context, &provider.header) == FFX_API_RETURN_OK && provider.versionName)
+                Log("FSR provider (Vulkan): %s", provider.versionName);
+            return true;
+        }
+
+        bool CreateFrameGeneration(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, bool hdr, bool eightBit)
+        {
+            ffxCreateBackendVKDesc backend{};
+            backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
+            backend.deviceContext = deviceContext;
+
+            ffxCreateContextDescFrameGenerationVersion version{};
+            version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_VERSION;
+            version.header.pNext = &backend.header;
+            version.version = FFX_FRAMEGENERATION_VERSION;
+
+            ffxCreateContextDescFrameGeneration create{};
+            create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
+            create.header.pNext = &version.header;
+            create.flags = hdr ? FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE : 0;
+            create.displaySize = { outputWidth, outputHeight };
+            create.maxRenderSize = { width, height };
+            create.backBufferFormat = eightBit ? FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM : FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT;
+            if (auto result = functions.CreateContext(&frameGeneration, &create.header, nullptr); result != FFX_API_RETURN_OK)
+            {
+                Log("Frame generation context creation failed on Vulkan: %u", result);
+                frameGeneration = nullptr;
+                return false;
+            }
+            displayWidth = outputWidth;
+            displayHeight = outputHeight;
+
+            ffxQueryGetProviderVersion provider{};
+            provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
+            if (functions.Query(&frameGeneration, &provider.header) == FFX_API_RETURN_OK && provider.versionName)
+                Log("Frame generation provider (Vulkan): %s", provider.versionName);
+            return true;
+        }
+
+        void ReleaseFrameGeneration()
+        {
+            if (frameGeneration)
+                functions.DestroyContext(&frameGeneration, nullptr);
+            frameGeneration = nullptr;
+        }
+
+        // The configuration and the preparation of one frame, with its depth and motion vectors
+        bool PrepareFrame(VkCommandBuffer cmd, const FrameParams& frame)
+        {
+            ffxConfigureDescFrameGeneration configure{};
+            configure.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
+            configure.frameGenerationEnabled = true;
+            configure.allowAsyncWorkloads = false;
+            configure.flags = FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY;
+            configure.generationRect = { 0, 0, static_cast<int32_t>(displayWidth), static_cast<int32_t>(displayHeight) };
+            configure.frameID = frame.frameId;
+            hudLess = frame.hudLess;
+            if (hudLess)
+                configure.HUDLessColor = Resource(Protocol::Texture::HudLess, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+            if (auto result = functions.Configure(&frameGeneration, &configure.header); result != FFX_API_RETURN_OK)
+            {
+                static uint32_t reported = 0;
+                if (reported++ < 5)
+                    Log("Frame generation configure failed on Vulkan: %u", result);
+                return false;
+            }
+
+            ffxDispatchDescFrameGenerationPrepareV2 prepare{};
+            prepare.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2;
+            prepare.frameID = frame.frameId;
+            prepare.flags = FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY;
+            prepare.commandList = cmd;
+            prepare.renderSize = { frame.width, frame.height };
+            prepare.jitterOffset = { frame.jitterX, frame.jitterY };
+            prepare.motionVectorScale = { frame.motionScaleX, frame.motionScaleY };
+            prepare.frameTimeDelta = frame.frameTimeMs;
+            prepare.reset = frame.reset;
+            prepare.cameraNear = frame.cameraNear;
+            prepare.cameraFar = frame.cameraFar;
+            prepare.cameraFovAngleVertical = frame.cameraFovY;
+            prepare.viewSpaceToMetersFactor = 1.0f;
+            prepare.depth = Resource(Protocol::Texture::Depth, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+            prepare.motionVectors = Resource(Protocol::Texture::Motion, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+            for (int i = 0; i < 3; ++i)
+            {
+                prepare.cameraPosition[i] = frame.cameraPosition[i];
+                prepare.cameraUp[i] = frame.cameraUp[i];
+                prepare.cameraRight[i] = frame.cameraRight[i];
+                prepare.cameraForward[i] = frame.cameraForward[i];
+            }
+            if (auto result = functions.Dispatch(&frameGeneration, &prepare.header); result != FFX_API_RETURN_OK)
+            {
+                static uint32_t reported = 0;
+                if (reported++ < 5)
+                    Log("Frame generation prepare failed on Vulkan: %u", result);
+                return false;
+            }
+            return true;
+        }
+
+    public:
+        bool cpuSync = false;               // no game semaphores: the requests are answered once their GPU work is done
+        bool frameGenerationAvailable = false;
+
+        // Once: the device and AMD's Vulkan runtime. False leaves FSR to D3D12.
+        bool Init(LUID luid, const std::vector<std::wstring>& searchPaths)
+        {
+            if (!tried)
+            {
+                tried = true;
+                initialized = CreateDevice(luid) && LoadRuntime(searchPaths);
+            }
+            return initialized;
+        }
+
+        bool HasFrameGeneration() const
+        {
+            return frameGeneration != nullptr;
+        }
+
+        HANDLE Handle(Protocol::Texture index) const
+        {
+            return images[static_cast<size_t>(index)].handle;
+        }
+
+        uint64_t Size(Protocol::Texture index) const
+        {
+            return images[static_cast<size_t>(index)].size;
+        }
+
+        // A configuration: the game's semaphores (their handles closed here), the shared images, the upscaler and with
+        // FrameGeneration the frame generation. flags as asked, the ones it can't do cleared.
+        bool Configure(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, uint32_t& flags, HANDLE input, HANDLE output)
+        {
+            namespace F = Protocol::ConfigureFlags;
+            using T = Protocol::Texture;
+            Release();
+
+            bool gameFence = (flags & F::GameFence) && ImportSemaphore(inputSemaphore, input) && ImportSemaphore(outputSemaphore, output);
+            for (auto handle : { input, output })
+                if (handle)
+                    CloseHandle(handle);
+            if (!gameFence)
+            {
+                if (flags & F::GameFence)
+                    Log("Vulkan: the game's semaphores could not be imported: waiting on the CPU");
+                DestroySemaphores();
+                flags &= ~F::GameFence;
+            }
+            cpuSync = !gameFence;
+            // One queue
+            flags &= ~F::AsyncGeneration;
+
+            if (!CreateImage(T::Color, width, height, VK_FORMAT_R16G16B16A16_SFLOAT) ||
+                !CreateImage(T::Depth, width, height, VK_FORMAT_R32_SFLOAT) ||
+                !CreateImage(T::Motion, width, height, VK_FORMAT_R16G16_SFLOAT) ||
+                !CreateImage(T::Reactive, width, height, VK_FORMAT_R16_SFLOAT) ||
+                !CreateImage(T::Output, outputWidth, outputHeight, VK_FORMAT_R16G16B16A16_SFLOAT) ||
+                !CreateUpscaler(width, height, outputWidth, outputHeight))
+                return false;
+
+            if (flags & F::FrameGeneration)
+            {
+                bool hdr = (flags & F::HighDynamicRange) != 0;
+                if ((flags & F::EightBitFrames) && (hdr || !CanStore(VK_FORMAT_B8G8R8A8_UNORM)))
+                {
+                    Log("Vulkan: B8G8R8A8_UNORM can't be a storage image on this GPU: the frame generation's textures stay 16-bit float");
+                    flags &= ~F::EightBitFrames;
+                }
+                bool eightBit = (flags & F::EightBitFrames) != 0;
+                auto format = eightBit ? VK_FORMAT_B8G8R8A8_UNORM : VK_FORMAT_R16G16B16A16_SFLOAT;
+                bool generation = frameGenerationAvailable && CreateFrameGeneration(width, height, outputWidth, outputHeight, hdr, eightBit) &&
+                    CreateImage(T::Present, outputWidth, outputHeight, format) && CreateImage(T::Generated, outputWidth, outputHeight, format) &&
+                    CreateImage(T::HudLess, outputWidth, outputHeight, format);
+                if (!generation)
+                {
+                    Log("Frame generation could not be set up on Vulkan at %ux%u -> %ux%u", width, height, outputWidth, outputHeight);
+                    ReleaseFrameGeneration();
+                    for (auto index : { T::Present, T::Generated, T::HudLess })
+                        ReleaseImage(index);
+                    flags &= ~(F::FrameGeneration | F::EightBitFrames);
+                }
+            }
+            return InitializeImages();
+        }
+
+        // Upscales the frame, and with the frame generation prepares it (prepared); the game's semaphores as for D3D12
+        bool Evaluate(const FrameParams& frame, uint64_t waitValue, uint64_t signalValue, bool& prepared)
+        {
+            using T = Protocol::Texture;
+            prepared = false;
+            if (!context)
+                return false;
+            auto cmd = Begin(false);
+            Hand(cmd, true, { T::Color, T::Depth, T::Motion, T::Output });
+            if (frame.reactive)
+                Hand(cmd, true, { T::Reactive });
+            Stamp(cmd);
+
+            ffxDispatchDescUpscale dispatch{};
+            dispatch.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
+            dispatch.commandList = cmd;
+            dispatch.color = Resource(T::Color, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+            dispatch.depth = Resource(T::Depth, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+            dispatch.motionVectors = Resource(T::Motion, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+            if (frame.reactive)
+                dispatch.reactive = Resource(T::Reactive, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+            dispatch.output = Resource(T::Output, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
+            dispatch.jitterOffset = { frame.jitterX, frame.jitterY };
+            dispatch.motionVectorScale = { frame.motionScaleX, frame.motionScaleY };
+            dispatch.renderSize = { frame.width, frame.height };
+            dispatch.upscaleSize = { frame.outputWidth, frame.outputHeight };
+            dispatch.enableSharpening = frame.sharpness > 0.0f;
+            dispatch.sharpness = frame.sharpness;
+            dispatch.frameTimeDelta = frame.frameTimeMs;
+            dispatch.preExposure = 1.0f;
+            dispatch.reset = frame.reset;
+            dispatch.cameraNear = frame.cameraNear;
+            dispatch.cameraFar = frame.cameraFar;
+            dispatch.cameraFovAngleVertical = frame.cameraFovY;
+            dispatch.viewSpaceToMetersFactor = 1.0f;
+            auto result = functions.Dispatch(&context, &dispatch.header);
+            bool evaluated = result == FFX_API_RETURN_OK;
+            if (!evaluated)
+                Log("FSR dispatch failed on Vulkan: %u", result);
+            Stamp(cmd);
+
+            // Recorded into the same command buffer, which is not executed when the upscaler failed
+            if (frameGeneration)
+            {
+                prepared = PrepareFrame(cmd, frame) && evaluated;
+                Stamp(cmd);
+            }
+
+            Hand(cmd, false, { T::Color, T::Depth, T::Motion, T::Output });
+            if (frame.reactive)
+                Hand(cmd, false, { T::Reactive });
+            // The semaphores advance in any case, so the game can rely on the values it waits for
+            return Submit(waitValue, signalValue, evaluated) && evaluated;
+        }
+
+        // The frame between the previous Present and this one into Generated, after the preparation of the same frame
+        bool Generate(bool prepared, uint64_t frameId, bool reset, bool hdr, float maxLuminance, uint64_t waitValue, uint64_t signalValue)
+        {
+            using T = Protocol::Texture;
+            auto cmd = Begin(true);
+            bool generated = false;
+            if (prepared && frameGeneration)
+            {
+                Hand(cmd, true, { T::Present, T::Generated });
+                if (hudLess)
+                    Hand(cmd, true, { T::HudLess });
+                Stamp(cmd);
+
+                ffxDispatchDescFrameGeneration dispatch{};
+                dispatch.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION;
+                dispatch.commandList = cmd;
+                dispatch.presentColor = Resource(T::Present, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+                dispatch.outputs[0] = Resource(T::Generated, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
+                dispatch.numGeneratedFrames = 1;
+                dispatch.reset = reset;
+                dispatch.backbufferTransferFunction = hdr ? FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SCRGB : FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
+                dispatch.minMaxLuminance[0] = 0.0f;
+                dispatch.minMaxLuminance[1] = maxLuminance;
+                dispatch.generationRect = { 0, 0, static_cast<int32_t>(displayWidth), static_cast<int32_t>(displayHeight) };
+                dispatch.frameID = frameId;
+                auto result = functions.Dispatch(&frameGeneration, &dispatch.header);
+                generated = result == FFX_API_RETURN_OK;
+                static uint32_t reported = 0;
+                if (!generated && reported++ < 5)
+                    Log("Frame generation dispatch failed on Vulkan: %u", result);
+                Stamp(cmd);
+
+                Hand(cmd, false, { T::Present, T::Generated });
+                if (hudLess)
+                    Hand(cmd, false, { T::HudLess });
+            }
+            return Submit(waitValue, signalValue, generated) && generated;
+        }
+
+        // The GPU idle, the contexts, images and the game's semaphores gone
+        void Release()
+        {
+            if (!device)
+                return;
+            vkDeviceWaitIdle(device);
+            ReleaseFrameGeneration();
+            if (context)
+                functions.DestroyContext(&context, nullptr);
+            context = nullptr;
+            for (size_t i = 0; i < images.size(); ++i)
+                ReleaseImage(static_cast<Protocol::Texture>(i));
+            DestroySemaphores();
+            cpuSync = false;
+            hudLess = false;
+        }
+
+        void Shutdown()
+        {
+            Release();
+            if (device)
+            {
+                for (auto& s : slots)
+                    if (s.pool)
+                        vkDestroyCommandPool(device, s.pool, nullptr);
+                slots = {};
+                if (queryPool)
+                    vkDestroyQueryPool(device, queryPool, nullptr);
+                if (localSemaphore)
+                    vkDestroySemaphore(device, localSemaphore, nullptr);
+                vkDestroyDevice(device, nullptr);
+            }
+            if (instance && vkDestroyInstance)
+                vkDestroyInstance(instance, nullptr);
+            device = VK_NULL_HANDLE;
+            instance = VK_NULL_HANDLE;
+            if (module)
+                FreeLibrary(module);
+            if (vulkanModule)
+                FreeLibrary(vulkanModule);
+            module = vulkanModule = nullptr;
         }
     };
 
@@ -1869,7 +2855,11 @@ namespace
         Device device;
         DLSS dlss;
         FSR fsr;
+        VulkanFSR vulkan;
+        bool onVulkan = false;              // ConfigureFlags::Vulkan: the configuration is the Vulkan device's
         Display display;
+        LUID adapterLuid{};
+        std::vector<std::wstring> searchPaths;  // of the runtimes
         Protocol::Backend backend = Protocol::Backend::None;
         uint32_t width = 0;
         uint32_t height = 0;
@@ -1932,6 +2922,8 @@ namespace
             display.Drain();
             display.Bind(nullptr, nullptr, nullptr, nullptr, nullptr);
             device.Flush();
+            vulkan.Release();
+            onVulkan = false;
             dlss.Release();
             fsr.Release();
             fsr.ReleaseFrameGeneration();
@@ -1948,6 +2940,18 @@ namespace
             if (width == 0 || height == 0 || outputWidth > 16384 || outputHeight > 16384 || outputWidth < width || outputHeight < height)
                 return false;
             device.wine = (flags & Protocol::ConfigureFlags::Wine) != 0;
+            // FSR on the Vulkan device, or on the D3D12 one where it can't be
+            if (flags & Protocol::ConfigureFlags::Vulkan)
+            {
+                if (shared.ConfigureBackend == Protocol::Backend::FSR && vulkan.Init(adapterLuid, searchPaths))
+                    return ConfigureVulkan();
+                Log("FSR can't run on Vulkan here: on D3D12");
+                flags &= ~Protocol::ConfigureFlags::Vulkan;
+                // The game's semaphores were for the Vulkan device: outside Wine the D3D12 fences are the helper's own
+                if (!device.wine)
+                    flags &= ~Protocol::ConfigureFlags::GameFence;
+                shared.Flags = flags;
+            }
             OpenGameFence();
             device.cpuSync = device.wine && !(flags & Protocol::ConfigureFlags::GameFence);
 
@@ -2093,10 +3097,46 @@ namespace
             return true;
         }
 
+        // ConfigureFlags::Vulkan: FSR on the Vulkan device; the game presents, and the frame generation runs on its one queue
+        bool ConfigureVulkan()
+        {
+            auto& shared = *connection.shared;
+            display.Stop();
+            flags &= ~(Protocol::ConfigureFlags::HelperPresent | Protocol::ConfigureFlags::AmdPacing);
+            auto input = reinterpret_cast<HANDLE>(shared.InputFenceHandle);
+            auto output = reinterpret_cast<HANDLE>(shared.OutputFenceHandle);
+            shared.InputFenceHandle = shared.OutputFenceHandle = shared.PresentFenceHandle = 0;
+            shared.ChildWindow = 0;
+            bool configured = vulkan.Configure(width, height, outputWidth, outputHeight, flags, input, output);
+            shared.Flags = flags;
+            if (!configured)
+            {
+                vulkan.Release();
+                connection.Message("FSR could not be set up on Vulkan at %ux%u -> %ux%u", width, height, outputWidth, outputHeight);
+                return false;
+            }
+
+            using T = Protocol::Texture;
+            for (size_t i = 0; i < static_cast<size_t>(T::Count); ++i)
+            {
+                shared.TextureSizes[i] = vulkan.Size(static_cast<T>(i));
+                shared.TextureHandles[i] = 0;
+                if (auto handle = vulkan.Handle(static_cast<T>(i)); handle && !Duplicate(handle, shared.TextureHandles[i]))
+                    return false;
+            }
+            backend = Protocol::Backend::FSR;
+            onVulkan = true;
+            device.asyncGeneration = false;
+            connection.Message("FSR on Vulkan ready at %ux%u -> %ux%u%s%s", width, height, outputWidth, outputHeight,
+                !vulkan.HasFrameGeneration() ? "" : (flags & Protocol::ConfigureFlags::EightBitFrames) ? ", with frame generation (8-bit frames)" :
+                ", with frame generation (16-bit frames)", vulkan.cpuSync ? ", waiting on the CPU" : "");
+            return true;
+        }
+
         bool Evaluate()
         {
             auto& shared = *connection.shared;
-            if (backend == Protocol::Backend::None || (!device.cpuSync && (!device.inputFence || !device.outputFence)))
+            if (backend == Protocol::Backend::None || (!onVulkan && !device.cpuSync && (!device.inputFence || !device.outputFence)))
                 return false;
 
             FrameParams frame;
@@ -2126,17 +3166,28 @@ namespace
             frame.hudLess = shared.HudLess != 0;
 
             using T = Protocol::Texture;
-            auto cmd = device.BeginFrame(Device::Work::Evaluate);
-            device.Transition(cmd, true, { T::Color, T::Depth, T::Motion, T::Reactive, T::Output });
-            device.Stamp(cmd);
-            bool evaluated = backend == Protocol::Backend::DLSS ? dlss.Evaluate(cmd, device, frame) : fsr.Evaluate(cmd, device, frame);
-            device.Stamp(cmd);
-            // A failed preparation leaves the upscaled frame: Generate of this frame fails instead
-            // Recorded into the same command list, which is not executed when the upscaler failed
-            preparedFrame = fsr.HasFrameGeneration() && fsr.PrepareFrame(cmd, device, frame) && evaluated;
-            if (fsr.HasFrameGeneration())
+            ID3D12GraphicsCommandList* cmd = nullptr;
+            bool evaluated = false;
+            bool generation = onVulkan ? vulkan.HasFrameGeneration() : fsr.HasFrameGeneration();
+            if (onVulkan)
+            {
+                // Submitted, or waited for with cpuSync
+                evaluated = vulkan.Evaluate(frame, shared.WaitValue, shared.SignalValue, preparedFrame);
+            }
+            else
+            {
+                cmd = device.BeginFrame(Device::Work::Evaluate);
+                device.Transition(cmd, true, { T::Color, T::Depth, T::Motion, T::Reactive, T::Output });
                 device.Stamp(cmd);
-            if (fsr.HasFrameGeneration())
+                evaluated = backend == Protocol::Backend::DLSS ? dlss.Evaluate(cmd, device, frame) : fsr.Evaluate(cmd, device, frame);
+                device.Stamp(cmd);
+                // A failed preparation leaves the upscaled frame: Generate of this frame fails instead
+                // Recorded into the same command list, which is not executed when the upscaler failed
+                preparedFrame = generation && fsr.PrepareFrame(cmd, device, frame) && evaluated;
+                if (generation)
+                    device.Stamp(cmd);
+            }
+            if (generation)
             {
                 ++generationStats.prepares;
                 generationStats.prepareFailed += !preparedFrame;
@@ -2146,6 +3197,8 @@ namespace
             }
             preparedFrameId = frame.frameId;
             preparedHudLess = frame.hudLess;
+            if (onVulkan)
+                return evaluated;
             device.Transition(cmd, false, { T::Color, T::Depth, T::Motion, T::Reactive, T::Output });
 
             if (device.wine)
@@ -2175,7 +3228,7 @@ namespace
         bool Generate()
         {
             auto& shared = *connection.shared;
-            if (!fsr.HasFrameGeneration() || (!device.cpuSync && (!device.inputFence || !device.outputFence)))
+            if (onVulkan ? !vulkan.HasFrameGeneration() : !fsr.HasFrameGeneration() || (!device.cpuSync && (!device.inputFence || !device.outputFence)))
                 return false;
 
             // Only after the preparation of the same frame
@@ -2190,9 +3243,17 @@ namespace
             g.lastId = shared.FrameId;
 
             using T = Protocol::Texture;
-            auto cmd = device.BeginFrame(Device::Work::Generate);
+            ID3D12GraphicsCommandList* cmd = nullptr;
             bool generated = false;
-            if (prepared)
+            if (onVulkan)
+            {
+                generated = vulkan.Generate(prepared, shared.FrameId, shared.GenerateReset != 0, (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0,
+                    shared.MaxLuminance, shared.WaitValue, shared.SignalValue);
+                g.failed += prepared && !generated;
+            }
+            else
+                cmd = device.BeginFrame(Device::Work::Generate);
+            if (prepared && !onVulkan)
             {
                 device.Transition(cmd, true, { T::Present, T::Generated, T::HudLess });
                 device.Stamp(cmd);
@@ -2217,6 +3278,8 @@ namespace
                 g.lastId = lastId;
             }
 
+            if (onVulkan)
+                return generated;
             if (device.cpuSync)
                 return device.SubmitFrameAndWait() && generated;
 
@@ -2342,6 +3405,7 @@ namespace
             Log("Priority %s", raised ? "raised: above normal, highest thread" : "could not be raised");
 
             LUID luid{ shared.AdapterLuidLow, shared.AdapterLuidHigh };
+            adapterLuid = luid;
             if (!device.Create(luid))
             {
                 connection.Message("D3D12 device could not be created on the game's adapter");
@@ -2354,7 +3418,7 @@ namespace
             Log("Adapter: %ls", adapterDesc.Description);
 
             // The runtimes are shipped in the game folder, next to vulkan.dll
-            std::vector<std::wstring> searchPaths = { shared.GameDirectory, shared.PluginsDirectory };
+            searchPaths = { shared.GameDirectory, shared.PluginsDirectory };
             std::string dlssMessage;
             std::string fsrMessage;
             if (adapterDesc.VendorId == 0x10DE)
@@ -2437,6 +3501,7 @@ namespace
             // Both queues done before their work's resources go
             display.Release();
             device.Flush();
+            vulkan.Shutdown();
             dlss.Shutdown();
             fsr.Shutdown();
             device.ReleaseTextures();

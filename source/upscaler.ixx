@@ -168,7 +168,8 @@ namespace
 // - DXVK: the shared textures and the fence are imported into DXVK's Vulkan device, the copies are
 //   submitted to DXVK's queue. Under Wine (Proton) the textures are imported as opaque handles and both
 //   sides wait for their GPU work on the CPU: Wine crashes importing a D3D12 fence of another process, and
-//   older Proton can't import D3D12 resource handles.
+//   older Proton can't import D3D12 resource handles. With FSR on the helper's Vulkan device (ConfigureFlags::Vulkan) the
+//   same: opaque handles of Vulkan images, the game's semaphores.
 // - D3D9on12 (Graphics API "DirectX 12"): the shared textures and the fence are opened on the D3D12 device
 //   of D3D9on12, the game's textures are unwrapped to their D3D12 resources and copied on a queue of the
 //   plugin.
@@ -248,14 +249,15 @@ namespace
         bool frameGeneration = false; // Present and Generated were imported
         bool eightBitFrames = false;  // ConfigureFlags::EightBitFrames: the frame generation's textures are B8G8R8A8
         bool wine = false;            // ConfigureFlags::Wine
-        bool gameFence = false;       // Wine: the helper opened the game's semaphores, else both sides wait on the CPU
+        bool vulkanHelper = false;    // ConfigureFlags::Vulkan: asked for before Configure, as answered after it
+        bool gameFence = false;       // Wine or Vulkan: the helper opened the game's semaphores, else both sides wait on the CPU
 
         virtual ~Bridge() = default;
-        // Wine: semaphores of the game for the helper's fences, their handles duplicated into the helper. Before Configure.
+        // Wine or Vulkan: semaphores of the game for the helper's fences, their handles duplicated into the helper. Before Configure.
         virtual bool PrepareGameFence(Protocol::Shared& shared, HANDLE helperProcess) { return false; }
         // Opens the shared textures and the fence of a configuration, and closes their handles
         virtual bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) = 0;
-        bool WaitOnCpu() const { return wine && !gameFence; }
+        bool WaitOnCpu() const { return (wine || vulkanHelper) && !gameFence; }
         virtual void ReleaseImports() = 0;
         // Game textures -> shared textures, then the input fence reaches signalValue. Null inputs are skipped, a texture
         // given twice is copied from once into both. waitValue: of the present fence, the helper done with the textures
@@ -540,9 +542,11 @@ namespace
 
         // Windows: a D3D12 resource handle. Wine: the same as an opaque handle, which is what vkd3d-proton exports
         // and every winevulkan imports; the image then has the usage vkd3d-proton gives a texture without flags.
-        bool ImportImage(SharedImage& target, HANDLE handle, VkFormat format, uint32_t w, uint32_t h)
+        // Vulkan: an opaque handle of the helper's image, with its usage.
+        bool ImportImage(SharedImage& target, HANDLE handle, VkFormat format, uint32_t w, uint32_t h, Protocol::Texture index)
         {
-            auto handleType = wine ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT : VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
+            bool opaque = wine || vulkanHelper;
+            auto handleType = opaque ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT : VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
             VkExternalMemoryImageCreateInfo external{ VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO };
             external.handleTypes = handleType;
 
@@ -555,7 +559,8 @@ namespace
             info.arrayLayers = 1;
             info.samples = VK_SAMPLE_COUNT_1_BIT;
             info.tiling = VK_IMAGE_TILING_OPTIMAL;
-            info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | (wine ? VK_IMAGE_USAGE_SAMPLED_BIT : 0);
+            info.usage = vulkanHelper ? Protocol::VulkanImageUsage(index) :
+                VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | (wine ? VK_IMAGE_USAGE_SAMPLED_BIT : 0);
             info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             if (auto vr = vk.vkCreateImage(device, &info, nullptr, &target.image); vr != VK_SUCCESS)
@@ -570,7 +575,7 @@ namespace
 
             // Opaque handles have no handle properties: the exporter's memory is plain device local memory
             auto types = requirements.memoryTypeBits;
-            if (!wine)
+            if (!opaque)
             {
                 VkMemoryWin32HandlePropertiesKHR handleProperties{ VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR };
                 if (auto vr = vk.vkGetMemoryWin32HandlePropertiesKHR(device, handleType, handle, &handleProperties); vr != VK_SUCCESS)
@@ -660,7 +665,7 @@ namespace
 
         bool PrepareGameFence(Protocol::Shared& shared, HANDLE helperProcess) override
         {
-            if (!wine || !vk.vkGetSemaphoreWin32HandleKHR || !helperProcess)
+            if ((!wine && !vulkanHelper) || !vk.vkGetSemaphoreWin32HandleKHR || !helperProcess)
                 return false;
             if (ExportSemaphore(inputSemaphore, helperProcess, shared.InputFenceHandle) &&
                 ExportSemaphore(outputSemaphore, helperProcess, shared.OutputFenceHandle))
@@ -704,7 +709,7 @@ namespace
                     continue;
                 auto iw = Protocol::IsOutputSize(static_cast<Protocol::Texture>(i)) ? ow : w;
                 auto ih = Protocol::IsOutputSize(static_cast<Protocol::Texture>(i)) ? oh : h;
-                ok = handle && ImportImage(images[i], handle, Format(i), iw, ih);
+                ok = handle && ImportImage(images[i], handle, Format(i), iw, ih, static_cast<Protocol::Texture>(i));
                 if (!ok)
                 {
                     Log("import: shared texture %zu (%ux%u) failed, handle %p", i, iw, ih, handle);
@@ -712,7 +717,7 @@ namespace
                 }
             }
 
-            if (ok && wine)
+            if (ok && (wine || vulkanHelper))
             {
                 // The game's own semaphores, or without them the CPU waits
                 if (!gameFence)
@@ -720,6 +725,8 @@ namespace
             }
             else if (ok)
             {
+                // Made for FSR on Vulkan, which the helper could not do
+                DestroySemaphores();
                 ok = ImportFence(inputSemaphore, reinterpret_cast<HANDLE>(shared.InputFenceHandle)) &&
                     ImportFence(outputSemaphore, reinterpret_cast<HANDLE>(shared.OutputFenceHandle)) &&
                     (!shared.PresentFenceHandle || ImportFence(presentSemaphore, reinterpret_cast<HANDLE>(shared.PresentFenceHandle)));
@@ -1655,6 +1662,7 @@ export namespace Upscaler
         bool HelperPresent = false;       // the helper presents the frames (PostPresent), not with FrameGeneration
         HWND PresentWindow = nullptr;     // the game's window, for HelperPresent
         bool AmdPacing = false;           // with HelperPresent and FrameGeneration: AMD's swap chain generates and paces the frames
+        bool VulkanHelper = false;        // FSR on the helper's Vulkan device (DXVK only), the game presents
         float CameraPosition[3]{};        // world space
         float CameraUp[3]{};
         float CameraRight[3]{};
@@ -1768,8 +1776,11 @@ export namespace Upscaler
             flags |= Protocol::ConfigureFlags::FrameGeneration |
                 (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : Protocol::ConfigureFlags::EightBitFrames) |
                 (frame.AsyncGeneration ? Protocol::ConfigureFlags::AsyncGeneration : 0u);
-        // Not under Wine: the game's own semaphores would be three, and Wine's child windows of another process are unknown
-        if (frame.HelperPresent && frame.PresentWindow && !bridge->wine)
+        if (frame.VulkanHelper && backend == Backend::FSR && bridge == &dxvkBridge)
+            flags |= Protocol::ConfigureFlags::Vulkan;
+        // Not under Wine: the game's own semaphores would be three, and Wine's child windows of another process are unknown.
+        // Nor on Vulkan, which has no presentation.
+        if (frame.HelperPresent && frame.PresentWindow && !bridge->wine && !(flags & Protocol::ConfigureFlags::Vulkan))
             flags |= Protocol::ConfigureFlags::HelperPresent | (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : 0u) |
                 (frame.AmdPacing && (flags & Protocol::ConfigureFlags::FrameGeneration) ? Protocol::ConfigureFlags::AmdPacing : 0u);
         auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
@@ -1813,6 +1824,7 @@ export namespace Upscaler
             shared.PresentWindow = reinterpret_cast<uint64_t>(frame.PresentWindow);
             shared.ChildWindow = 0;
             shared.PresentFenceHandle = 0;
+            bridge->vulkanHelper = (flags & Protocol::ConfigureFlags::Vulkan) != 0;
             if (bridge->PrepareGameFence(shared, helper.process))
                 shared.Flags |= Protocol::ConfigureFlags::GameFence;
             const auto configureStart = GetTickCount64();
@@ -1826,7 +1838,10 @@ export namespace Upscaler
                 return false;
             }
             bridge->gameFence = (shared.Flags & Protocol::ConfigureFlags::GameFence) != 0;
-            if (bridge->wine)
+            bridge->vulkanHelper = (shared.Flags & Protocol::ConfigureFlags::Vulkan) != 0;
+            if ((flags & Protocol::ConfigureFlags::Vulkan) && !bridge->vulkanHelper)
+                Log("FSR could not run on the helper's Vulkan device, it runs on D3D12");
+            if (bridge->wine || bridge->vulkanHelper)
                 Log("Synchronization: %s", bridge->gameFence ? "the game's semaphore, on the GPU" : "on the CPU");
             if ((flags & Protocol::ConfigureFlags::FrameGeneration) && !(shared.Flags & Protocol::ConfigureFlags::FrameGeneration))
                 Log("Frame generation could not be set up, the upscaler works without it");
