@@ -7,7 +7,7 @@ and 1.4 GB (DLSS SDK) per checkout, almost entirely prebuilt libraries for other
 | Folder | Source | Version | Commit |
 |---|---|---|---|
 | `dlss` | https://github.com/NVIDIA/DLSS | v310.9.1 | 374959484e79a640feaba44c93ac8cfb0a03f5b5 |
-| `fidelityfx` | https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK (`Kits/FidelityFX`) | v2.3.0 | 60f4ea81909200d8542eca14dccb2628b763a9a3 |
+| `fidelityfx` | https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK (`Kits/FidelityFX`) | v2.4.0 | 7539ae8b6568ad29ed78a753404351daf3b5cca7 |
 
 - `dlss`: the NGX headers used for D3D12 and `lib/Windows_x86_64/x64/nvsdk_ngx_s.lib`, NVIDIA's static
   loader for the NGX runtime installed with the driver. License: `dlss/LICENSE.txt`.

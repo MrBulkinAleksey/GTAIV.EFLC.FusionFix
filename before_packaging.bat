@@ -7,7 +7,7 @@ rem - NVIDIA DLSS and AMD FidelityFX runtimes for DLAA and FSR, in the game fold
 rem   plugins\GTAIV.EFLC.FusionFix.exe. Their versions match the SDK headers the helper is built with, see external\README.md.
 set "DXVK_VERSION=v3.1.1"
 set "DLSS_VERSION=v310.9.1"
-set "FIDELITYFX_VERSION=v2.3.0"
+set "FIDELITYFX_VERSION=v2.4.0"
 
 cd /d "%~dp0"
 set "TAR=%SystemRoot%\System32\tar.exe"

@@ -1197,18 +1197,21 @@ namespace
             create.fullscreenDesc = nullptr;
             create.dxgiFactory = factory;
             create.gameQueue = queue;
-            // A runtime refuses an API version newer than its own (3.1.6 ships with SDK 2.1 and 2.2): down to 3.1.5, the
-            // first with a stable ABI
+            // A runtime refuses an API version newer than its own (3.1.6 ships with SDK 2.1 and 2.2, 3.1.7 with 2.3): from
+            // 4.0.0 (SDK 2.4; without RDNA 4 the runtime falls back to 3.1.7 itself) down to 3.1.5, the first with a stable ABI
+            static constexpr uint32_t versions[] = {
+                FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION, FFX_FRAMEGENERATION_SWAPCHAIN_DX12_MAKE_VERSION(3, 1, 7),
+                FFX_FRAMEGENERATION_SWAPCHAIN_DX12_MAKE_VERSION(3, 1, 6), FFX_FRAMEGENERATION_SWAPCHAIN_DX12_MAKE_VERSION(3, 1, 5) };
             ffxReturnCode_t result = FFX_API_RETURN_ERROR_PARAMETER;
-            for (uint32_t patch = FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_PATCH; patch >= 5; --patch)
+            for (uint32_t v : versions)
             {
-                version.version = FFX_FRAMEGENERATION_SWAPCHAIN_DX12_MAKE_VERSION(3, 1, patch);
+                version.version = v;
                 created = nullptr;
                 swapChainContext = nullptr;
                 result = functions.CreateContext(&swapChainContext, &create.header, nullptr);
                 if (result == FFX_API_RETURN_OK && created)
                 {
-                    Log("AMD's frame generation swap chain, API version 3.1.%u", patch);
+                    Log("AMD's frame generation swap chain, API version %u.%u.%u", v >> 22, (v >> 12) & 0x3FF, v & 0xFFF);
                     break;
                 }
                 // Only a refused version is worth another try
