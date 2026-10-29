@@ -18,6 +18,7 @@ module;
 export module farpropinstancing;
 
 import common;
+import cpuscopes;
 import comvars;
 import d3dx9_43;
 import inireload;
@@ -469,6 +470,8 @@ class FarPropInstancing
 
     static void Execute(void* dc)
     {
+        static const CpuScopes::Id kCpuScope("Instancing.Execute");
+        CpuScopes::Scope cpuScope(kCpuScope);
         using Exec = void(__fastcall*)(void*, void*);
         (*reinterpret_cast<Exec**>(dc))[1](dc, nullptr);
     }
@@ -1137,6 +1140,8 @@ class FarPropInstancing
 
     static void Flush()
     {
+        static const CpuScopes::Id kCpuScope("Instancing.Flush");
+        CpuScopes::Scope cpuScope(kCpuScope);
         bInScene = false;
         passCount++;
         if (groups.empty() && fragGroups.empty())
@@ -1315,6 +1320,8 @@ class FarPropInstancing
     // they were taken in
     static void FlushCascadePart()
     {
+        static const CpuScopes::Id kCpuScope("Instancing.FlushCascadePart");
+        CpuScopes::Scope cpuScope(kCpuScope);
         if (!bCascadePass || bExecuting || (groups.empty() && fragGroups.empty()))
             return;
         Flush();

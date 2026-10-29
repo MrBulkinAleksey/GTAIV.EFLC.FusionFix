@@ -22,6 +22,7 @@ module;
 export module vehicleboxshadows;
 
 import common;
+import cpuscopes;
 import comvars;
 import d3dx9_43;
 import framegeneration;
@@ -1269,6 +1270,8 @@ export struct VehicleBoxShadows
     // the camera sees, the arm of the lamp's own post, a shape the light stands in.
     static int ShapesForLight(const rage::CLightSource& light, bool hasMap, Shape (&shapes)[kShapesPerLight], int& bodyShapes)
     {
+        static const CpuScopes::Id kCpuScope("Shadows.ShapesForLight");
+        CpuScopes::Scope cpuScope(kCpuScope);
         bodyShapes = 0;
         const auto& R = PostFxResources;
         if (!drawn || (!drawn->propCount && !drawn->bodyCount))
@@ -1581,6 +1584,8 @@ export struct VehicleBoxShadows
 
     static float SetForLight(IDirect3DDevice9* pDevice, const rage::CLightSource& light, bool& mapHasCars)
     {
+        static const CpuScopes::Id kCpuScope("Shadows.SetForLight");
+        CpuScopes::Scope cpuScope(kCpuScope);
         auto& R = PostFxResources;
         const bool hasMap = mapHasCars;
         // The props' shapes near the light, on s7, their count in c115.x

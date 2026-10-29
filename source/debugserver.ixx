@@ -35,6 +35,7 @@ export module debugserver;
 
 import common;
 import comvars;
+import cpuscopes;
 import d3dx9_43;
 import framecapture;
 import inireload;
@@ -49,7 +50,8 @@ import profiler;
 // and the logs (and FusionFix's other files next to it: files, file), and over time: values read each frame (watch_start) and the hits of an instruction or a piece of
 // memory (trace_start: a mid-hook or a debug register, with registers, callers and reads; trace_read, trace_stop,
 // trace_list), the GPU time of FusionFix's passes and the game's (profiler: PostFxProfiler's next block), and where the
-// threads spend their CPU time (cpu_profile: a session of the sampling profiler, Profiler), and what a whole scene frame
+// threads spend their CPU time (cpu_profile: a session of the sampling profiler, Profiler), FusionFix's own work in
+// milliseconds a frame by scope and thread with the frames' times (cpu_scopes: CpuScopes), and what a whole scene frame
 // draws (frame_capture: Frame Capture with the request's options). One client at a time; a request is a JSON object on one line ({"id": 1, "cmd": "read", ...}), the
 // answer one line ({"id": 1, "ok": true, ...}), the same protocol as the recomp's debug server. Bytes travel as hex in
 // memory order (little-endian here), addresses as "0x..." strings.
@@ -557,11 +559,36 @@ namespace DebugServer
         std::vector<std::string> items;
         for (const auto& row : rows)
         {
-            char ms[32];
+            char ms[32], draws[32], primitives[32];
             snprintf(ms, sizeof(ms), "%.3f", row.ms);
-            items.push_back(Object({{"name", Quote(row.name)}, {"depth", std::to_string(row.depth)}, {"ms", ms}}));
+            snprintf(draws, sizeof(draws), "%.1f", row.draws);
+            snprintf(primitives, sizeof(primitives), "%.0f", row.primitives);
+            items.push_back(Object({{"name", Quote(row.name)}, {"depth", std::to_string(row.depth)}, {"ms", ms},
+                {"draws", draws}, {"primitives", primitives}}));
         }
         return Object({{"frames", std::to_string(frames)}, {"rows", Array(items)}});
+    }
+
+    // ---- CPU scopes (CpuScopes): FusionFix's own work in milliseconds a frame by scope and thread, and the frames' times
+
+    std::string CpuScopesRequest(const Request& request)
+    {
+        const int frames = std::clamp(int((std::min)(request.Number("frames", 240), uint64_t(5000))), 10, 5000);
+        const auto report = CpuScopes::Measure(frames, 10 + frames / 10);
+        auto number = [](double value, const char* format = "%.3f")
+        {
+            char text[32];
+            snprintf(text, sizeof(text), format, value);
+            return std::string(text);
+        };
+        std::vector<std::string> rows;
+        for (const auto& row : report.rows)
+            rows.push_back(Object({{"name", Quote(row.name)}, {"thread", Quote(row.thread)}, {"ms", number(row.mean)},
+                {"max_ms", number(row.max)}, {"calls", number(row.calls, "%.1f")}}));
+        const auto& f = report.frames;
+        return Object({{"frames", std::to_string(f.count)}, {"frame_ms", number(f.mean)}, {"p50_ms", number(f.p50)},
+            {"p95_ms", number(f.p95)}, {"p99_ms", number(f.p99)}, {"max_ms", number(f.max)},
+            {"main_frame_ms", number(f.mainMean)}, {"main_max_ms", number(f.mainMax)}, {"rows", Array(rows)}});
     }
 
     // ---- the sampling profiler (Profiler): a session of some seconds, its report as text
@@ -2470,6 +2497,7 @@ namespace DebugServer
         if (command == "nearby") return Nearby(request);
         if (command == "profiler") return GpuProfiler(request);
         if (command == "cpu_profile") return CpuProfile(request);
+        if (command == "cpu_scopes") return CpuScopesRequest(request);
         if (command == "frame_capture") return FrameCaptureRequest(request);
         throw std::runtime_error("unknown command '" + command + "'");
     }

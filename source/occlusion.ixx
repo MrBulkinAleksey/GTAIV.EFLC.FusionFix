@@ -16,6 +16,7 @@ module;
 export module occlusion;
 
 import common;
+import cpuscopes;
 import comvars;
 import framehistory;
 import inireload;
@@ -594,6 +595,8 @@ namespace Occlusion
     // The lists' entry: the phases to add the entity to
     uint32_t Phases(uintptr_t entity, uint32_t phases)
     {
+        static const CpuScopes::Id kCpuScope("Occlusion.Entities");
+        CpuScopes::Scope cpuScope(kCpuScope);
         if (!pScenePhase || !entity || !nMode)
             return phases;
         const uint32_t scene = *pScenePhase;
@@ -688,6 +691,8 @@ namespace Occlusion
     // The lists' thread, at the first entity of the next frame
     void EndFrame()
     {
+        static const CpuScopes::Id kCpuScope("Occlusion.EndFrame");
+        CpuScopes::Scope cpuScope(kCpuScope);
         ++stats.frames;
         ticks += frameTicks;
         maxFrameTicks = std::max(maxFrameTicks, frameTicks);
