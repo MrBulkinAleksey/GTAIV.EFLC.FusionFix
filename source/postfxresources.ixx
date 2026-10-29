@@ -648,6 +648,8 @@ public:
     // How far the wind has carried the coverage and the detail, in tiles, and how far the detail
     // has drifted up through itself; summed frame by frame, as the wind changes with the weather.
     double fCloudDrift = 0.0, fCloudDetailDrift = 0.0, fCloudEvolution = 0.0, fCloudLastSeconds = -1.0;
+    // The debug server's freeze: the drift, the evolution and the morph stand still, so two frames can be compared
+    bool bCloudsHeld = false;
     // The coverage map's slow morph (Clouds.fx's Morph): its phase in radians, which moves on by
     // VolumetricCloudsEvolution at 0.03 a second, kept within 10 pi, where both its waves repeat.
     double fCloudMorph = 0.0;
@@ -2663,7 +2665,7 @@ void PostFxResource::UpdateCloudLayer(double seconds)
     // The drift moves on by this frame's time at this frame's wind; across a jump of the clock (a
     // load, a cutscene) it stays where it was.
     double dt = fCloudLastSeconds >= 0.0 ? seconds - fCloudLastSeconds : 0.0;
-    if (dt < 0.0 || dt > 0.25)
+    if (dt < 0.0 || dt > 0.25 || bCloudsHeld)
         dt = 0.0;
     fCloudLastSeconds = seconds;
     const double wind = fCloudShadowsWind * Cloud.wind;

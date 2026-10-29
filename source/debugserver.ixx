@@ -40,6 +40,7 @@ import framecapture;
 import inireload;
 import natives;
 import postfxprofiler;
+import postfxresources;
 import profiler;
 
 // [DEBUG] DebugServerPort: a server on 127.0.0.1 that a tool (tools/gta4-live-mcp in the recomp's repository) reaches
@@ -715,9 +716,12 @@ namespace DebugServer
         }, 30); // (LoadScene streams the place in before it returns, which can take seconds)
     }
 
-    // Freeze's script camera and whether it stopped the clock (SetTime keeps it stopped).
+    // Freeze's script camera and whether it stopped the clock (SetTime keeps it stopped) and held the weather
+    // (SetWeather takes it over).
     static Camera frozenCamera = 0;
     static bool clockStopped = false;
+    static bool weatherHeld = false, weatherForced = false;
+    static bool timeScaled = false;
 
     std::string SetTime(const Request& request)
     {
@@ -772,12 +776,18 @@ namespace DebugServer
                 Natives::ReleaseWeather();
             else
                 Natives::ForceWeatherNow(uint32_t(std::stoul(weather)));
+            weatherForced = weather != "release";
+            weatherHeld = false;
             return Object({{"weather", Quote(weather)}});
         });
     }
 
     // A still scene for comparing frames: a script camera where the game camera is (or at x, y, z turned rx, ry, rz
-    // with fov, as given), the player frozen and without control, the clock stopped. "on": false gives all back.
+    // with fov, as given), the player frozen and without control, the clock stopped, the weather held as it is now
+    // (not one forced by set_weather), the volumetric clouds' drift and evolution stopped: they go by real time, not
+    // the clock, and the clouds moved and changed between two frames of a comparison. "time_scale" (default 0.01, 1 to
+    // leave it) slows the world, people, cars, water and all, to next to still: the game's own slow motion (SET_TIME_SCALE),
+    // not 0, which the steps of physics and animation are not made for. "on": false gives all back.
 
     std::string Freeze(const Request& request)
     {
@@ -791,6 +801,9 @@ namespace DebugServer
         }
         if (request.Has("fov"))
             fov = std::stof(request.Get("fov"));
+        const float timeScale = std::stof(request.Get("time_scale", "0.01"));
+        if (!(timeScale > 0.0f && timeScale <= 1.0f))
+            throw std::runtime_error("time_scale is more than 0, at most 1");
         return OnMainThread([=]() mutable
         {
             const Ped ped = PlayerPed();
@@ -810,6 +823,13 @@ namespace DebugServer
                 if (clockStopped)
                     Natives::ReleaseTimeOfDay();
                 clockStopped = false;
+                if (weatherHeld)
+                    Natives::ReleaseWeather();
+                weatherHeld = false;
+                PostFxResources.bCloudsHeld = false;
+                if (timeScaled)
+                    Natives::SetTimeScale(1.0f);
+                timeScaled = false;
                 FusionLog::Write("DebugServer", "Scene", "freeze off\n");
                 return Object({{"frozen", "false"}});
             }
@@ -843,9 +863,24 @@ namespace DebugServer
             Natives::GetTimeOfDay(&hour, &minute);
             Natives::ForceTimeOfDay(hour, minute);
             clockStopped = true;
-            FusionLog::Write("DebugServer", "Scene", "freeze at %.2f %.2f %.2f rot %.2f %.2f %.2f fov %.1f\n", x, y, z, rx, ry, rz, fov);
+            // (a change under way ends at once: it would go on otherwise)
+            if (!weatherHeld && !weatherForced)
+            {
+                uint32_t weather = 0;
+                Natives::GetCurrentWeather(&weather);
+                Natives::ForceWeatherNow(weather);
+                weatherHeld = true;
+            }
+            PostFxResources.bCloudsHeld = true;
+            if (timeScale < 1.0f || timeScaled)
+            {
+                Natives::SetTimeScale(timeScale);
+                timeScaled = timeScale < 1.0f;
+            }
+            FusionLog::Write("DebugServer", "Scene", "freeze at %.2f %.2f %.2f rot %.2f %.2f %.2f fov %.1f, time scale %.3f\n",
+                x, y, z, rx, ry, rz, fov, timeScale);
             return Object({{"frozen", "true"}, {"camera", Array({Float(x), Float(y), Float(z)})},
-                {"camera_rotation", Array({Float(rx), Float(ry), Float(rz)})}, {"fov", Float(fov)}});
+                {"camera_rotation", Array({Float(rx), Float(ry), Float(rz)})}, {"fov", Float(fov)}, {"time_scale", Float(timeScale)}});
         });
     }
 
