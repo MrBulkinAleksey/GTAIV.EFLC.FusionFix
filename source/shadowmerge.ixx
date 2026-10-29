@@ -21,9 +21,11 @@ import renderskip;
 // shaders (its technique group picks each shader's depth technique): a frame capture by day found one building of 306
 // draws in the cascades (about a hundred geometries, two textures) and 1703 draws there for 129 entities, 1565 in four
 // lamp maps for 65. The draws were most of the render thread's time, the bound of the frame. Here a model's geometries
-// that share a shader, a vertex declaration and a stride are put together into one vertex and index buffer (up to 65535
-// vertices each) the first time the model is drawn in such a pass, and the game draws those instead, its own code drawing
-// them with that shader as it does any geometry.
+// that draw alike in a depth pass (an opaque shader's effect, any other shader itself; ShaderKey) and share a vertex
+// declaration and a stride are put together into one vertex and index buffer (up to 65535 vertices each) the first time
+// the model is drawn in such a pass, and the game draws those instead, its own code drawing them with the first one's
+// shader as it does any geometry. By shader alone a second build merged 6 of 39 models (147 draws a frame saved): a
+// building's geometries mostly have shaders of their own, one material each.
 //
 // The game's pieces (CE): grmModel::Draw (0x444c50, thiscall, the shader group, the bucket and a flag; ret 0xc) walks the
 // model's geometries (+4 their array, +0x1a their count, +0x10 a u16 shader index each, +0xc a bounding sphere each after
@@ -130,7 +132,32 @@ namespace ShadowMerge
         return indices > 0 && indices % 3 == 0 && indices <= Read<uint32_t>(ib, 4);
     }
 
-    bool Build(uintptr_t model, Entry& entry)
+    // What a geometry's shader draws in a depth pass: an opaque one (bucket 0, +9) any shader of its effect alike (the effect
+    // name, +0x44, hashed), as its textures and colours do not touch the depth; any other its own shader (an alpha test
+    // reads its texture). Read under SEH: the pointers are the game's
+    uint64_t ShaderKey(uintptr_t group, uint16_t index)
+    {
+        __try
+        {
+            const auto shaders = *reinterpret_cast<const uintptr_t* const*>(group + 8);
+            const uintptr_t shader = shaders && index < *reinterpret_cast<const uint16_t*>(group + 0xc) ? shaders[index] : 0;
+            if (!shader)
+                return index;
+            const char* name = *reinterpret_cast<const char* const*>(shader + 0x44);
+            if (*reinterpret_cast<const uint8_t*>(shader + 9) != 0 || !name)
+                return index;
+            uint64_t hash = 0xcbf29ce484222325ull;
+            for (int i = 0; i < 64 && name[i]; ++i)
+                hash = (hash ^ uint8_t(name[i])) * 0x100000001b3ull;
+            return hash | (1ull << 63);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return index;
+        }
+    }
+
+    bool Build(uintptr_t model, uintptr_t shaderGroup, Entry& entry)
     {
         static const CpuScopes::Id kCpuScope("ShadowMerge.Build");
         CpuScopes::Scope cpuScope(kCpuScope);
@@ -141,9 +168,9 @@ namespace ShadowMerge
         const uintptr_t geometries = Read<uintptr_t>(model, 4);
         const uint16_t count = Read<uint16_t>(model, 0x1a);
         const uintptr_t shaderMap = Read<uintptr_t>(model, 0x10);
-        // Groups by shader, declaration and stride, in the model's order: a merged geometry is drawn with its group's
-        // shader, as each of them was
-        struct Group { uint16_t shader; uintptr_t declaration; uint32_t stride; std::vector<int> members; };
+        // Groups by what their shaders draw in a depth pass (ShaderKey), declaration and stride, in the model's order: a
+        // merged geometry is drawn with its first's shader
+        struct Group { uint64_t key; uint16_t shader; uintptr_t declaration; uint32_t stride; std::vector<int> members; };
         std::vector<Group> groups;
         std::vector<int> left;
         for (int i = 0; i < count; ++i)
@@ -155,12 +182,13 @@ namespace ShadowMerge
                 continue;
             }
             const uint16_t shader = shaderMap ? Read<uint16_t>(shaderMap, i * 2) : 0;
+            const uint64_t key = shaderGroup ? ShaderKey(shaderGroup, shader) : shader;
             const uintptr_t declaration = Read<uintptr_t>(g, 0x40);
             const uint32_t stride = Read<uint32_t>(Read<uintptr_t>(g, 0xc), 0xc);
             auto it = std::find_if(groups.begin(), groups.end(), [&](const Group& x)
-                { return x.shader == shader && x.declaration == declaration && x.stride == stride; });
+                { return x.key == key && x.declaration == declaration && x.stride == stride; });
             if (it == groups.end())
-                groups.push_back({ shader, declaration, stride, { i } });
+                groups.push_back({ key, shader, declaration, stride, { i } });
             else
                 it->members.push_back(i);
         }
@@ -352,7 +380,7 @@ namespace ShadowMerge
             entry.count = count;
             entry.firstGeometry = firstGeometry;
             entry.firstVertexBuffer = firstVertexBuffer;
-            if (!Build(m, entry))
+            if (!Build(m, reinterpret_cast<uintptr_t>(group), entry))
             {
                 ++stats.failed;
                 return original();
