@@ -58,6 +58,7 @@ namespace ShadowMerge
     constexpr size_t kDrawableCopy = 0x60, kModelCopy = 0x20, kGeometryCopy = 0x50, kVertexBufferCopy = 0x40, kIndexBufferCopy = 0x20;
     constexpr uint32_t kMaxVertices = 65535;
     constexpr int kBuildsPerFrame = 6;
+    constexpr double kBuildMsPerFrame = 0.5;      // no further build once a frame's builds took this long (the first one always)
     constexpr uint32_t kUnusedFrames = 1800;        // an entry not drawn this long is let go
     constexpr size_t kMaxBytes = 192u << 20;
     constexpr uint32_t kLogFrames = 600;
@@ -96,9 +97,15 @@ namespace ShadowMerge
     size_t totalBytes = 0;
     uint32_t frame = 0;
     int buildsThisFrame = 0;
+    int64_t buildTicksThisFrame = 0, buildBudgetTicks = 0;
+    LARGE_INTEGER frequency{};
     struct
     {
         uint64_t drawn = 0, saved = 0, built = 0, noGain = 0, failed = 0, letGo = 0;
+        // the longest build, its model's geometries and what it holds
+        int64_t slowestTicks = 0;
+        uint16_t slowestCount = 0;
+        size_t slowestBytes = 0;
         // models of buildings and props in a shadow pass drawn the game's way, and why
         uint64_t skinned = 0, instancing = 0, single = 0, budget = 0, nothing = 0;
         // all model draws, those outside an entity's draw, of another kind, outside a shadow pass
@@ -412,7 +419,7 @@ namespace ShadowMerge
         }
         if (it == entries.end())
         {
-            if (buildsThisFrame >= kBuildsPerFrame)
+            if (buildsThisFrame >= kBuildsPerFrame || (buildsThisFrame > 0 && buildTicksThisFrame >= buildBudgetTicks))
             {
                 ++stats.budget;
                 return nullptr;
@@ -423,7 +430,19 @@ namespace ShadowMerge
             entry.count = count;
             entry.firstGeometry = firstGeometry;
             entry.firstVertexBuffer = firstVertexBuffer;
-            if (!Build(m, group, byBucket, entry))
+            LARGE_INTEGER start, end;
+            QueryPerformanceCounter(&start);
+            const bool built = Build(m, group, byBucket, entry);
+            QueryPerformanceCounter(&end);
+            const int64_t ticks = end.QuadPart - start.QuadPart;
+            buildTicksThisFrame += ticks;
+            if (ticks > stats.slowestTicks)
+            {
+                stats.slowestTicks = ticks;
+                stats.slowestCount = count;
+                stats.slowestBytes = entry.bytes;
+            }
+            if (!built)
             {
                 ++stats.failed;
                 return nullptr;
@@ -526,6 +545,7 @@ namespace ShadowMerge
     {
         ++frame;
         buildsThisFrame = 0;
+        buildTicksThisFrame = 0;
         if (frame % 60 == 0)
             Trim();
         if (bLog && frame % kLogFrames == 0)
@@ -533,9 +553,10 @@ namespace ShadowMerge
             const double n = double(kLogFrames);
             FusionLog::Write("ShadowMerge", "Stats", "per frame over %u: %.1f merged models drawn, %.0f draws saved; drawn the game's way: "
                 "skinned %.1f, instanced sample %.1f, one geometry %.1f, nothing to merge %.1f, waiting to be built %.1f; built %llu, "
-                "nothing to merge %llu, failed %llu, let go %llu; cache %zu models, %.1f MB\n", kLogFrames, stats.drawn / n, stats.saved / n,
-                stats.skinned / n, stats.instancing / n, stats.single / n, stats.nothing / n, stats.budget / n,
-                stats.built, stats.noGain, stats.failed, stats.letGo, entries.size(), totalBytes / 1048576.0);
+                "nothing to merge %llu, failed %llu, let go %llu; slowest build %.2f ms (%u geometries, %.2f MB); cache %zu models, %.1f MB\n",
+                kLogFrames, stats.drawn / n, stats.saved / n, stats.skinned / n, stats.instancing / n, stats.single / n, stats.nothing / n,
+                stats.budget / n, stats.built, stats.noGain, stats.failed, stats.letGo, stats.slowestTicks * 1000.0 / double(frequency.QuadPart),
+                unsigned(stats.slowestCount), stats.slowestBytes / 1048576.0, entries.size(), totalBytes / 1048576.0);
             std::string targets;
             for (auto& [name, count] : targetsSeen)
                 targets += std::format("{} {:.1f}, ", name, count / n);
@@ -564,6 +585,8 @@ public:
         {
             CIniReader iniReader("");
             ReadIni(iniReader);
+            QueryPerformanceFrequency(&frequency);
+            buildBudgetTicks = int64_t(kBuildMsPerFrame * 0.001 * double(frequency.QuadPart));
             IniReload::Add(ReadIni);
             // grmModel::Draw (CE 0x444c50): push ebp / mov ebp, esp / and esp, -8 / sub esp, 20h / mov eax, [skinning] / push esi /
             // push edi / mov edi, ecx / mov [esp+24h], eax / mov eax, [edi+0Ch] / test eax, eax / jz / cmp byte [x], 0 / jz /
