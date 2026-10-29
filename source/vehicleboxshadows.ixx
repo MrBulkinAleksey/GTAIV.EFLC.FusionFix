@@ -1632,7 +1632,18 @@ export struct VehicleBoxShadows
         float peds[kPedsPerLight][4] = {};
         int pedsUsed = 0;
         float pedLightSize = 0.0f;
-        if (R.VehicleBoxShadowsEnabled() && lightListDrawn &&
+        // VehicleBoxShadowsMaxDistance: a light ending that far from the camera has no boxes, people nor props, so none
+        // of them is worked out for it (its boxes faded to nothing over the last 20 m, the props left out at once); each
+        // of some 640 lights a frame at night still took its cars and their fades
+        bool farAway = false;
+        if (R.fVehicleBoxShadowsMaxDistance > 0.0f)
+            if (auto* vp = rage::GetCurrentViewport())
+            {
+                const float* eye = vp->mCameraMatrix[3];
+                const float ex = light.mPosition.x - eye[0], ey = light.mPosition.y - eye[1], ez = light.mPosition.z - eye[2];
+                farAway = std::sqrt(ex * ex + ey * ey + ez * ez) - light.mRadius >= R.fVehicleBoxShadowsMaxDistance;
+            }
+        if (R.VehicleBoxShadowsEnabled() && lightListDrawn && !farAway &&
             (R.bVehicleBoxShadowsFromCarLights || !(light.mFlags & rage::LF_VEHICLE)) &&
             (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
         {
@@ -1991,7 +2002,7 @@ export struct VehicleBoxShadows
         }
         // Props for car lights too: a post's shadow from the headlights is the one most often seen; the player's bones
         // (PedBoneShadows) go with them
-        if (R.VehicleBoxShadowsEnabled() && (R.bPropShapeShadows || (R.bPedCapsuleShadows && R.bPedBoneShadows)) && lightListDrawn &&
+        if (R.VehicleBoxShadowsEnabled() && (R.bPropShapeShadows || (R.bPedCapsuleShadows && R.bPedBoneShadows)) && lightListDrawn && !farAway &&
             (light.mType == rage::LT_POINT || light.mType == rage::LT_SPOT || light.mType == rage::LT_CLAMPED))
         {
             FindDrawn();
