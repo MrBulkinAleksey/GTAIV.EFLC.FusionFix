@@ -470,7 +470,7 @@ class FarPropInstancing
 
     static void Execute(void* dc)
     {
-        static const CpuScopes::Id kCpuScope("Instancing.Execute");
+        static const CpuScopes::Id kCpuScope("Instancing.Execute (the game's draw inside)");
         CpuScopes::Scope cpuScope(kCpuScope);
         using Exec = void(__fastcall*)(void*, void*);
         (*reinterpret_cast<Exec**>(dc))[1](dc, nullptr);
