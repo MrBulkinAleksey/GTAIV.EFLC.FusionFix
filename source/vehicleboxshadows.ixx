@@ -120,6 +120,11 @@ export struct VehicleBoxShadows
     // lastFound's props' spheres (centre, reach) side by side: every light runs over all of them, and their Props,
     // 100 bytes each, took most of ShapesForLight's time in a profile, the most of ours on the render thread
     static inline float propSpheres[kProps][4] = {};
+    // Their order by the spheres' x and those x, and the largest reach: a light looks only at the props within its
+    // radius and that reach of its own x (the walk over all of them was most of ShapesForLight's time)
+    static inline uint16_t propOrder[kProps] = {};
+    static inline float propOrderX[kProps] = {};
+    static inline float propMaxReach = 0.0f;
     static inline uintptr_t drawnFor = 0;
     static inline std::atomic<uint32_t> latestHandOver{0}; // the last hand over's sequence, for the log
     static inline bool constantsOn = true;
@@ -1110,11 +1115,17 @@ export struct VehicleBoxShadows
             std::copy_n(&found->peds[0][0], found->pedCount * 3, &lastFound.peds[0][0]);
             lastFound.propCount = found->propCount;
             std::copy_n(found->props, found->propCount, lastFound.props);
+            propMaxReach = 0.0f;
             for (int i = 0; i < found->propCount; ++i)
             {
                 std::copy_n(found->props[i].centre, 3, propSpheres[i]);
                 propSpheres[i][3] = found->props[i].reach;
+                propMaxReach = (std::max)(propMaxReach, found->props[i].reach);
+                propOrder[i] = uint16_t(i);
             }
+            std::sort(propOrder, propOrder + found->propCount, [](uint16_t a, uint16_t b) { return propSpheres[a][0] < propSpheres[b][0]; });
+            for (int i = 0; i < found->propCount; ++i)
+                propOrderX[i] = propSpheres[propOrder[i]][0];
             lastFound.bodyCount = found->bodyCount;
             std::copy_n(found->body, found->bodyCount, lastFound.body);
             std::copy_n(found->bodyCentre, 3, lastFound.bodyCentre);
@@ -1285,9 +1296,21 @@ export struct VehicleBoxShadows
                 if (std::sqrt(ex * ex + ey * ey + ez * ez) - light.mRadius > R.fVehicleBoxShadowsMaxDistance)
                     return 0;
             }
-        float planes[5][4];
+        // The camera's planes once a frame (the lights of a frame are drawn with one camera): worked out for each
+        // light they took a tenth of ShapesForLight's time
+        static float planes[5][4];
+        static int planeCount = 0;
+        static uint32_t planesFrame = 0;
+        static const void* planesViewport = nullptr;
         const auto* viewport = rage::GetCurrentViewport();
-        const int planeCount = viewport && R.bPropShapeViewCulling ? FrustumPlanes(*viewport, planes) : 0;
+        if (!viewport || !R.bPropShapeViewCulling)
+            planeCount = 0, planesViewport = nullptr;
+        else if (planesFrame != TemporalAA::SceneFrame || planesViewport != viewport)
+        {
+            planeCount = FrustumPlanes(*viewport, planes);
+            planesFrame = TemporalAA::SceneFrame;
+            planesViewport = viewport;
+        }
         const uint64_t lightKey = LightKey(Cell(light.mPosition.x), Cell(light.mPosition.y), Cell(light.mPosition.z));
         if (heldProps.size() > 4096)
             heldProps.clear();
@@ -1323,10 +1346,16 @@ export struct VehicleBoxShadows
             bodiesWithShadows.fetch_add(used ? 1u : 0u, std::memory_order_relaxed);
         }
         const int most = (std::min)(std::clamp(R.nPropShapesPerLight, 1, kShapesPerLight), kShapesPerLight - used);
-        std::pair<float, const Prop*> chosen[kShapesPerLight] = {};
+        // (left as it is until filled: a std::pair's array was cleared for every light)
+        struct Chosen { float first; const Prop* second; } chosen[kShapesPerLight];
         int taken = 0;
-        for (int i = 0; i < (R.bPropShapeShadows ? drawn->propCount : 0); ++i)
+        const int propCount = R.bPropShapeShadows ? drawn->propCount : 0;
+        const float band = light.mRadius + propMaxReach;
+        const int first = int(std::lower_bound(propOrderX, propOrderX + propCount, at[0] - band) - propOrderX);
+        const int end = int(std::upper_bound(propOrderX, propOrderX + propCount, at[0] + band) - propOrderX);
+        for (int k = first; k < end; ++k)
         {
+            const int i = propOrder[k];
             // Outside its light, by the spheres alone: the most of them
             {
                 const float* s = propSpheres[i];
@@ -1588,8 +1617,8 @@ export struct VehicleBoxShadows
         CpuScopes::Scope cpuScope(kCpuScope);
         auto& R = PostFxResources;
         const bool hasMap = mapHasCars;
-        // The props' shapes near the light, on s7, their count in c115.x
-        Shape shapes[kShapesPerLight] = {};
+        // The props' shapes near the light, on s7, their count in c115.x (as many as ShapesForLight fills)
+        Shape shapes[kShapesPerLight];
         float shapeSpheres[kShapeGroups][4] = {}, shapeEnds[kShapeGroups] = {};
         int propsUsed = 0;
         // Boxes 0-2 at c143-c148 with the lamp's own at c149, boxes 3 and 4 at c121-c124.
