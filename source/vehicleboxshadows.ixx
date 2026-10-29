@@ -1716,10 +1716,14 @@ export struct VehicleBoxShadows
                 const auto& box = drawn->boxes[i];
                 const float dx = light.mPosition.x - box.centre[0], dy = light.mPosition.y - box.centre[1], dz = light.mPosition.z - box.centre[2];
                 // A car the lamp holds goes only a little further out, so one at the edge of its light is not taken
-                // and left frame by frame
-                const bool holding = std::find(last.begin(), last.end(), box.vehicle) != last.end();
-                const float reach = (light.mRadius + box.halfLength + box.halfWidth + box.halfHeight) * (holding ? 1.15f : 1.0f);
+                // and left frame by frame. (Out of even that reach first: most cars are far from most lamps, and the
+                // look among the lamp's last cars for each of them was much of this function's time a light)
+                const float reachFree = light.mRadius + box.halfLength + box.halfWidth + box.halfHeight, reachHeld = reachFree * 1.15f;
                 const float d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 > reachHeld * reachHeld)
+                    continue;
+                const bool holding = std::find(last.begin(), last.end(), box.vehicle) != last.end();
+                const float reach = holding ? reachHeld : reachFree;
                 if (d2 > reach * reach)
                     continue;
                 const float fx = box.centre[0] - drawn->focus[0], fy = box.centre[1] - drawn->focus[1], fz = box.centre[2] - drawn->focus[2];
@@ -1765,73 +1769,77 @@ export struct VehicleBoxShadows
             for (int i = 0; i < taken; ++i)
                 last[i] = nearest[i].second->vehicle;
             // The cars taken now come in, up to full strength, with their boxes as handed over now; those left fade
-            // out where they stood last, while there is room among the three.
-            std::array<Fading, kPerLight> next{};
+            // out where they stood last, while there is room among the three. (A lamp with none taken and none fading,
+            // most of them, has nothing to work out here)
             int nextCount = 0;
-            for (int i = 0; i < taken; ++i)
+            if (taken || state.count)
             {
-                auto& f = next[nextCount++];
-                f.box = *nearest[i].second;
-                f.chosen = true;
-                const Fading* before = nullptr;
-                for (int j = 0; j < state.count; ++j)
-                    if (state.boxes[j].box.vehicle == f.box.vehicle)
+                std::array<Fading, kPerLight> next{};
+                for (int i = 0; i < taken; ++i)
+                {
+                    auto& f = next[nextCount++];
+                    f.box = *nearest[i].second;
+                    f.chosen = true;
+                    const Fading* before = nullptr;
+                    for (int j = 0; j < state.count; ++j)
+                        if (state.boxes[j].box.vehicle == f.box.vehicle)
+                        {
+                            before = &state.boxes[j];
+                            std::copy_n(before->shape, 3, f.shape);
+                        }
+                    const float had = before ? before->strength : 0.0f;
+                    if (!until)
                     {
-                        before = &state.boxes[j];
-                        std::copy_n(before->shape, 3, f.shape);
+                        f.strength = (std::min)(had + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
+                        continue;
                     }
-                const float had = before ? before->strength : 0.0f;
-                if (!until)
-                {
-                    f.strength = (std::min)(had + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
-                    continue;
+                    f.latch = before ? before->latch : mapped ? kReal : kPending;
+                    f.takenTick = before ? before->takenTick : now;
+                    if (f.latch == kPending)
+                        f.latch = mapped ? kReal : now - f.takenTick >= kDecideMs ? kBox : kPending;
+                    if (f.latch == kReal && !mapped)
+                    {
+                        // The lamp lost its slot and with it the car's shadow: the box at once, and kept
+                        f.latch = kBox;
+                        f.strength = 1.0f;
+                    }
+                    else if (f.latch == kReal)
+                        f.strength = (std::max)(had - step(R.nVehicleBoxShadowSlotFadeMs), 0.0f);
+                    else
+                        f.strength = (std::min)(had + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
                 }
-                f.latch = before ? before->latch : mapped ? kReal : kPending;
-                f.takenTick = before ? before->takenTick : now;
-                if (f.latch == kPending)
-                    f.latch = mapped ? kReal : now - f.takenTick >= kDecideMs ? kBox : kPending;
-                if (f.latch == kReal && !mapped)
+                for (int j = 0; j < state.count && nextCount < perLamp; ++j)
                 {
-                    // The lamp lost its slot and with it the car's shadow: the box at once, and kept
-                    f.latch = kBox;
-                    f.strength = 1.0f;
-                }
-                else if (f.latch == kReal)
-                    f.strength = (std::max)(had - step(R.nVehicleBoxShadowSlotFadeMs), 0.0f);
-                else
-                    f.strength = (std::min)(had + step(R.nVehicleBoxShadowFadeInMs), 1.0f);
-            }
-            for (int j = 0; j < state.count && nextCount < perLamp; ++j)
-            {
-                const auto& old = state.boxes[j];
-                if (std::find(last.begin(), last.end(), old.box.vehicle) != last.end())
-                    continue;
-                // Under a lamp whose map leaves its boxed cars out, a car it leaves keeps its box this frame, as
-                // this frame's map left it out, and is in the map from the next on (BoxedCars takes only the
-                // chosen); faded out, it would have had both shadows at once after a frame without either.
-                if (until && mapped && old.latch == kBox)
-                {
-                    if (old.chosen)
+                    const auto& old = state.boxes[j];
+                    if (std::find(last.begin(), last.end(), old.box.vehicle) != last.end())
+                        continue;
+                    // Under a lamp whose map leaves its boxed cars out, a car it leaves keeps its box this frame, as
+                    // this frame's map left it out, and is in the map from the next on (BoxedCars takes only the
+                    // chosen); faded out, it would have had both shadows at once after a frame without either.
+                    if (until && mapped && old.latch == kBox)
+                    {
+                        if (old.chosen)
+                        {
+                            next[nextCount] = old;
+                            next[nextCount++].chosen = false;
+                        }
+                        continue;
+                    }
+                    const float left = old.strength - step(R.nVehicleBoxShadowFadeOutMs);
+                    if (left > 0.0f)
                     {
                         next[nextCount] = old;
+                        next[nextCount].strength = left;
                         next[nextCount++].chosen = false;
                     }
-                    continue;
                 }
-                const float left = old.strength - step(R.nVehicleBoxShadowFadeOutMs);
-                if (left > 0.0f)
-                {
-                    next[nextCount] = old;
-                    next[nextCount].strength = left;
-                    next[nextCount++].chosen = false;
-                }
+                state.boxes = next;
             }
-            state.boxes = next;
             state.count = nextCount;
             if (until)
                 for (int i = 0; i < nextCount; ++i)
-                    if (next[i].chosen && next[i].latch == kBox && pairsBuildingCount < kPairs)
-                        pairsBuilding[pairsBuildingCount++] = { { light.mPosition.x, light.mPosition.y, light.mPosition.z }, next[i].box.vehicle };
+                    if (state.boxes[i].chosen && state.boxes[i].latch == kBox && pairsBuildingCount < kPairs)
+                        pairsBuilding[pairsBuildingCount++] = { { light.mPosition.x, light.mPosition.y, light.mPosition.z }, state.boxes[i].box.vehicle };
             used = strength > 0.0f ? nextCount : 0;
             // PedCapsuleShadows: the people nearest the light, weighed by how near the player they stand, as the cars;
             // not under a light whose map is drawn this frame, which shows them
