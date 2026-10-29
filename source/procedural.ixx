@@ -17,6 +17,7 @@ module;
 export module procedural;
 
 import common;
+import cpuscopes;
 import comvars;
 import settings;
 import inireload;
@@ -418,6 +419,8 @@ namespace Procedural
 
     void UpdateCone()
     {
+        static const CpuScopes::Id kCpuScope("Procedural.UpdateCone");
+        CpuScopes::Scope cpuScope(kCpuScope);
         cone.active = cone.turning = false;
         if (fConeBack <= 0.0f || !pCamera)
             return;
@@ -1319,6 +1322,8 @@ namespace Procedural
     constexpr size_t ConeWalkUpdates = 8;
     void ReleaseOutsideCone(uint8_t* generator)
     {
+        static const CpuScopes::Id kCpuScope("Procedural.ReleaseOutsideCone");
+        CpuScopes::Scope cpuScope(kCpuScope);
         std::vector<Made> outside;
         const auto full = [&] { return outside.size() >= ReleasesPerUpdate || parked.size() + (outside.size() + 1) * QueueEntrySize > ParkedLimit * QueueEntrySize; };
         const auto going = [](const Made& m)

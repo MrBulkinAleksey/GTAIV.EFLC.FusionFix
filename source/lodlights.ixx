@@ -6,6 +6,7 @@ module;
 export module lodlights;
 
 import common;
+import cpuscopes;
 import comvars;
 import coronas;
 import natives;
@@ -446,6 +447,8 @@ WplInstance* PossiblyAddThisEntity(WplInstance* pInstance)
 
 void RegisterLODLights()
 {
+    static const CpuScopes::Id kCpuScope("LodLights.Register");
+    CpuScopes::Scope cpuScope(kCpuScope);
     static auto SolveEqSys = [](float a, float b, float c, float d, float value) -> float
     {
         float determinant = a - c;

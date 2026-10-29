@@ -11,6 +11,7 @@ module;
 export module coronas;
 
 import common;
+import cpuscopes;
 import settings;
 
 static constexpr auto NewLimitExponent = 14;
@@ -387,6 +388,8 @@ namespace CoronaRender
     // In place of CCoronas::Render; false when the game's own is to run
     export bool Draw()
     {
+        static const CpuScopes::Id kCpuScope("Coronas.Draw");
+        CpuScopes::Scope cpuScope(kCpuScope);
         if (!nMode || !pFunction)
             return false;
         if (pPassDropped && pPassDropped())

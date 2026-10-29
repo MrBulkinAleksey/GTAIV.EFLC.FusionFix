@@ -22,6 +22,7 @@ module;
 export module volumetricclouds;
 
 import common;
+import cpuscopes;
 import comvars;
 import d3dx9_43;
 import framegeneration;
@@ -123,6 +124,8 @@ static bool ReflectionHalfTarget(IDirect3DDevice9* pDevice, float width, float h
 export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* sceneBase, bool reflection = false,
                                    int reflectionSection = kProfCloudReflectionMap)
 {
+    static const CpuScopes::Id kCpuScope("Clouds.Render");
+    CpuScopes::Scope cpuScope(kCpuScope);
     ProfilerScope timedAll(pDevice, reflection ? kProfCloudReflection : -1);
     ProfilerScope timed(pDevice, reflection ? reflectionSection : kProfClouds);
     auto& R = PostFxResources;

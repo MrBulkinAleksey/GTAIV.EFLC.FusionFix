@@ -22,6 +22,7 @@ module;
 export module gpugrass;
 
 import common;
+import cpuscopes;
 import comvars;
 import d3dx9_43;
 import settings;
@@ -1302,6 +1303,8 @@ export namespace GpuGrass
     // the G-buffer.
     void Render(IDirect3DDevice9* pDevice)
     {
+        static const CpuScopes::Id kCpuScope("GpuGrass.Render");
+        CpuScopes::Scope cpuScope(kCpuScope);
         static auto pref = FusionFixSettings.GetRef("PREF_GPU_GRASS");
         static auto debugPref = FusionFixSettings.GetRef("PREF_GPU_GRASS_DEBUG");
         // GpuGrassLog: the last 600 frames, with how the last one went
