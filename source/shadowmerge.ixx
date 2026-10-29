@@ -301,6 +301,12 @@ namespace ShadowMerge
                 *reinterpret_cast<IDirect3DVertexBuffer9**>(m.vbObject + 0x1c) = m.vb;
                 *reinterpret_cast<uint32_t*>(m.ibObject + 4) = indices;
                 *reinterpret_cast<IDirect3DIndexBuffer9**>(m.ibObject + 0xc) = m.ib;
+                // No data in memory and not dirty: a buffer flagged dirty (vertex buffer +0x28 bit 0x100) is filled again
+                // at its draw from its data in memory (CE 0x446140 / 0x471fb0), which the copies' counts would overread
+                // (the first geometry's data, smaller than the merged buffer)
+                *reinterpret_cast<uintptr_t*>(m.vbObject + 0x20) = 0;
+                *reinterpret_cast<uint32_t*>(m.vbObject + 0x28) &= ~0x100u;
+                *reinterpret_cast<uintptr_t*>(m.ibObject + 0x10) = 0;
                 entry.bytes += size_t(vertices) * group.stride + size_t(indices) * 2;
                 entry.merged.push_back(m);
                 entry.shaders.push_back(group.shader);
