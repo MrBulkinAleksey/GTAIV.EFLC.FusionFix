@@ -8,6 +8,7 @@ export module lodlights;
 import common;
 import comvars;
 import natives;
+import occlusion;
 import settings;
 
 #define IDR_LODLIGHTS 777
@@ -510,6 +511,20 @@ void RegisterLODLights()
     }
     constexpr float kBehindSin = 0.17364818f; // sin 10 degrees
 
+    // CoronasOcclusion: a lamp whose corona lies wholly behind the world drawn into the occlusion grid is not registered.
+    // The game camera's corona pass tested them there on the render thread, the most of its time: of some 14800 coronas
+    // of a dawn 76% hidden, nearly all of them these. The ball is the one that pass takes, 1.5 times the size the game
+    // lists (the radius given times 0.0005, CE 0xc1ee40) and half a metre more.
+    const bool testHidden = Occlusion::nCoronas == 1;
+    const Occlusion::Probe probe = testHidden ? Occlusion::Take() : Occlusion::Probe{};
+    auto hidden = [&](const CLamppostInfo& lamppost, float size)
+    {
+        if (!testHidden || !probe.usable)
+            return false;
+        const float centre[3] = { lamppost.vecPos.x, lamppost.vecPos.y, lamppost.vecPos.z };
+        return Occlusion::SphereHidden(probe, centre, 1.5f * size * 0.0005f + 0.5f);
+    };
+
     for (const auto& lamppost : m_Lampposts)
     {
         // Check height bounds
@@ -578,6 +593,9 @@ void RegisterLODLights()
                 finalSize = fRadius * lamppost.fCustomSizeMult * fCoronaRadiusMultiplier * 1270.5f;
             }
 
+            if (hidden(lamppost, finalSize))
+                continue;
+
             DrawCorona2(reinterpret_cast<unsigned int>(&lamppost),
                 lamppost.colour.r, lamppost.colour.g, lamppost.colour.b,
                 finalAlpha,
@@ -618,7 +636,7 @@ void RegisterLODLights()
                 (isRed && redPhase) ||
                 ((isGreen || isGreenAlt) && greenPhase);
 
-            if (shouldDraw)
+            if (shouldDraw && !hidden(lamppost, finalSize))
             {
                 DrawCorona2(reinterpret_cast<unsigned int>(&lamppost),
                     lamppost.colour.r, lamppost.colour.g, lamppost.colour.b,
