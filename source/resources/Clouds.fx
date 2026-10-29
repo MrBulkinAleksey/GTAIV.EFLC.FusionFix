@@ -119,6 +119,9 @@ float fCurl;              // how far the billows are swept along the coarse nois
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
 float fDebug;             // VolumetricCloudsDebug + 1, the numbers in the comments here:2 the sky brightness matched to, 3 to 11 one term of the light alone (Light)
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
+float fFrameShift;        // pixels the noise's pattern slides by this frame (5.588238 a frame, 64 frames round), so
+                          // the pattern itself changes too: slid by fFrameJitter alone each pixel kept its place in
+                          // it, and what the accumulation left of the noise stood still as a fine grid of dots
 float fDetailFlow;        // VolumetricCloudsDetailFlow: how far up, in billows, the heap's density pushes its billows
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
 float fLump;              // how far, in coverage texture units, the outline bulges by billows, both ways together
@@ -430,14 +433,14 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
     // clouds came out smeared down the screen.
     // Each pixel starts up to a coarse step later: with the same coarse steps for every pixel,
     // thin cloud between two of them went missing in whole bands across the screen.
-    float jitter = frac(PixelJitter(vpos) + fFrameJitter);
+    float jitter = frac(PixelJitter(vpos + fFrameShift) + fFrameJitter);
     // The steps towards the sun, each twice the last, sample the cloud at fixed distances: as a sample point
     // moved down through a cloud, each of them in turn left its top and the light jumped by its whole step,
     // and the body came out in layers, each a copy of the top's outline (by up to a fifth of the sun's
     // light per few metres where the even steps gave at most half that). The scene's clouds slide the whole
     // series by up to a step, 2^u for u from a pixel's own noise that changes every frame, and the
     // accumulation averages the layers away; the reflections, without it, keep the fixed steps.
-    float lightScale = full ? exp2(frac(PixelJitter(vpos + 37.0) + fFrameJitter * 1.618034) * fLightJitter) : 1.0;
+    float lightScale = full ? exp2(frac(PixelJitter(vpos + 37.0 + fFrameShift) + fFrameJitter * 1.618034) * fLightJitter) : 1.0;
     float t = t0 + max(vec4Layer.y / 24.0, t0 * FAR_STEP) * stepScale * COARSE_STEP * jitter;
     float fineLeft = 0.0;
     float lightDepth = 0.0;

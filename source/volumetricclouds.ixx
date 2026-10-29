@@ -499,6 +499,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     // The golden ratio's fraction per frame: each frame's march noise falls between the last
     // ones', and temporal anti-aliasing averages it away.
     effect->SetFloat(effect->GetParameterByName(nullptr, "fFrameJitter"), static_cast<float>(std::fmod(FrameHistory::Frame() * 0.6180339887, 1.0)));
+    effect->SetFloat(effect->GetParameterByName(nullptr, "fFrameShift"), 5.588238f * float(FrameHistory::Frame() % 64));
     // The outline wanders by up to 150 metres.
     effect->SetFloat(effect->GetParameterByName(nullptr, "fWarp"), 150.0f / R.fCloudShadowsScale);
     // The outline's bulges by billows, VolumetricCloudsLumps either way.
