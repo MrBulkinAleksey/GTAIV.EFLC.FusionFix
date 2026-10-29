@@ -756,11 +756,12 @@ namespace DebugServer
         const uint32_t hour = uint32_t(request.Number("hour")) % 24, minute = uint32_t(request.Number("minute", 0)) % 60;
         return OnMainThread([=]
         {
-            // (while frozen the clock stays stopped at the new time)
+            // The clock itself first: FORCE_TIME_OF_DAY alone gives the timecycle's colours the new time while the sky's
+            // SunDirection (RenderSkip's sun height, Physical Sky) keeps the clock's (at 5:33 forced over 7:50, the
+            // cascades and lamp shadows of 7:50). While frozen it stays stopped at the new time.
+            Natives::SetTimeOfDay(hour, minute);
             if (clockStopped)
                 Natives::ForceTimeOfDay(hour, minute);
-            else
-                Natives::SetTimeOfDay(hour, minute);
             return Object({{"time", Quote(std::to_string(hour) + ":" + (minute < 10 ? "0" : "") + std::to_string(minute))}});
         });
     }
