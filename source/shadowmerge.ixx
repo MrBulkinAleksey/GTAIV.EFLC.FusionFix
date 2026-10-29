@@ -469,6 +469,106 @@ namespace ShadowMerge
         return &entry;
     }
 
+    // G-buffer counts (ShadowMeshMergeLog; nothing drawn otherwise): what merging a building's or prop's geometries there would
+    // save, a frame capture one evening having found a third of the buildings' 1527 G-buffer draws repeating an earlier draw's
+    // shaders and textures within the same entity. There each geometry is drawn with its own shader, so only those of one
+    // material may go together: by shader instance (the same pointer), by material (the effect, the bucket and every
+    // parameter alike: a texture by pointer, any other by its values) and by textures alone (the parameters' values left
+    // out: what the capture saw, an upper bound). A shader's parameters (grmShaderFx +0x14, CE 0x437170): +0x14 their data
+    // pointers, +0x1c their count, +0x24 a byte each, 0 a texture, else the float4 registers it fills
+    struct GBufferModel { uintptr_t geometries = 0; uint16_t count = 0, inBucket = 0, byInstance = 0, byMaterial = 0, byTextures = 0, unmergeable = 0; };
+    std::unordered_map<uint64_t, GBufferModel> gbufferModels;     // by model and bucket
+    struct { uint64_t models = 0, draws = 0, byInstance = 0, byMaterial = 0, byTextures = 0, unmergeable = 0; } gbuffer;
+
+    uint64_t Fnv(uint64_t hash, const void* p, size_t n)
+    {
+        for (size_t i = 0; i < n; ++i)
+            hash = (hash ^ static_cast<const uint8_t*>(p)[i]) * 0x100000001b3ull;
+        return hash;
+    }
+
+    // A shader's key by material (its parameters' values too) or by its effect, bucket and textures alone; 0 when unreadable.
+    // Under SEH: the pointers are the game's
+    uint64_t MaterialKey(uintptr_t shader, bool constants)
+    {
+        __try
+        {
+            uint64_t hash = 0xcbf29ce484222325ull;
+            const char* name = *reinterpret_cast<const char* const*>(shader + 0x44);
+            for (int i = 0; name && i < 64 && name[i]; ++i)
+                hash = Fnv(hash, &name[i], 1);
+            hash = Fnv(hash, reinterpret_cast<const void*>(shader + 9), 1);
+            const auto data = *reinterpret_cast<const uintptr_t* const*>(shader + 0x14);
+            const uint32_t count = (std::min)(*reinterpret_cast<const uint32_t*>(shader + 0x1c) & 0xffff, 256u);
+            const auto types = *reinterpret_cast<const uint8_t* const*>(shader + 0x24);
+            for (uint32_t i = 0; data && types && i < count; ++i)
+            {
+                hash = Fnv(hash, &types[i], 1);
+                if (types[i] == 0)
+                    hash = Fnv(hash, &data[i], sizeof(uintptr_t));
+                else if (constants && data[i])
+                    hash = Fnv(hash, reinterpret_cast<const void*>(data[i]), size_t(types[i]) * 16);
+            }
+            return hash | 1;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return 0;
+        }
+    }
+
+    void GBufferCount(uintptr_t m, uintptr_t group, int32_t bucket)
+    {
+        const uint16_t count = Read<uint16_t>(m, 0x1a);
+        const uintptr_t geometries = Read<uintptr_t>(m, 4), shaderMap = Read<uintptr_t>(m, 0x10);
+        if (!count || !geometries || !shaderMap || !group)
+            return;
+        auto& model = gbufferModels[uint64_t(m) | (uint64_t(uint32_t(bucket)) << 32)];
+        if (model.geometries != geometries || model.count != count)
+        {
+            model = { geometries, count };
+            const auto shaders = Read<const uintptr_t*>(group, 8);
+            const uint16_t shaderCount = Read<uint16_t>(group, 0xc);
+            struct Key { uint64_t key; uintptr_t declaration; uint32_t stride; };
+            std::vector<Key> instance, material, textures;
+            auto add = [](std::vector<Key>& keys, const Key& k)
+            {
+                if (std::none_of(keys.begin(), keys.end(), [&](const Key& x) { return x.key == k.key && x.declaration == k.declaration && x.stride == k.stride; }))
+                    keys.push_back(k);
+            };
+            for (int i = 0; i < count; ++i)
+            {
+                const uint16_t index = Read<uint16_t>(shaderMap, i * 2);
+                const uintptr_t shader = shaders && index < shaderCount ? shaders[index] : 0;
+                if (!shader || int32_t(Read<uint8_t>(shader, 9)) != bucket)
+                    continue;
+                ++model.inBucket;
+                const uintptr_t g = Read<uintptr_t>(geometries, i * 4);
+                const uint64_t byMaterial = MaterialKey(shader, true), byTextures = MaterialKey(shader, false);
+                if (!Mergeable(g) || !byMaterial || !byTextures)
+                {
+                    ++model.unmergeable;
+                    continue;
+                }
+                const uintptr_t declaration = Read<uintptr_t>(g, 0x40);
+                const uint32_t stride = Read<uint32_t>(Read<uintptr_t>(g, 0xc), 0xc);
+                add(instance, { shader, declaration, stride });
+                add(material, { byMaterial, declaration, stride });
+                add(textures, { byTextures, declaration, stride });
+            }
+            const int mergeable = model.inBucket - model.unmergeable;
+            model.byInstance = uint16_t(mergeable - instance.size());
+            model.byMaterial = uint16_t(mergeable - material.size());
+            model.byTextures = uint16_t(mergeable - textures.size());
+        }
+        ++gbuffer.models;
+        gbuffer.draws += model.inBucket;
+        gbuffer.byInstance += model.byInstance;
+        gbuffer.byMaterial += model.byMaterial;
+        gbuffer.byTextures += model.byTextures;
+        gbuffer.unmergeable += model.unmergeable;
+    }
+
     // Whether a draw of this entity in this pass may be merged; counts why not
     bool Eligible()
     {
@@ -500,6 +600,10 @@ namespace ShadowMerge
     void __fastcall ModelDraw(void* model, void* edx, void* group, int32_t bucket, int32_t flag)
     {
         const uintptr_t m = reinterpret_cast<uintptr_t>(model);
+        if (bLog && m && inEntity && (currentKind == EntityClass::Kind::Building || currentKind == EntityClass::Kind::Prop) &&
+            !(pSkinning && *pSkinning))
+            if (const char* target = RenderSkip::CurrentTarget(); target && std::strcmp(target, "_DEFERRED_GBUFFER_0_") == 0)
+                GBufferCount(m, reinterpret_cast<uintptr_t>(group), bucket);
         const Entry* entry = bEnabled && m && Eligible() ? Lookup(m, reinterpret_cast<uintptr_t>(group), false) : nullptr;
         shModelDraw.unsafe_fastcall(entry ? static_cast<const void*>(entry->model) : model, edx, group, bucket, flag);
     }
@@ -563,6 +667,12 @@ namespace ShadowMerge
             FusionLog::Write("ShadowMerge", "Calls", "per frame: %.1f model and drawable draws, %.1f outside an entity's draw, %.1f of vehicles and people, "
                 "%.1f outside a shadow pass; buildings' and props' by target: %s\n", stats.calls / n, stats.outside / n, stats.otherKind / n,
                 stats.otherPass / n, targets.c_str());
+            FusionLog::Write("ShadowMerge", "GBuffer", "per frame: %.1f buildings' and props' model draws, %.1f geometries drawn, %.1f not mergeable; "
+                "draws merging would save: by shader instance %.1f, by material %.1f, by textures alone %.1f; %zu models seen\n", gbuffer.models / n,
+                gbuffer.draws / n, gbuffer.unmergeable / n, gbuffer.byInstance / n, gbuffer.byMaterial / n, gbuffer.byTextures / n, gbufferModels.size());
+            gbuffer = {};
+            if (gbufferModels.size() > 20000)
+                gbufferModels.clear();
             targetsSeen.clear();
             stats = {};
         }
