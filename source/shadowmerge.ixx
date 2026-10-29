@@ -55,7 +55,7 @@ export namespace ShadowMerge
 
 namespace ShadowMerge
 {
-    constexpr size_t kModelCopy = 0x20, kGeometryCopy = 0x50, kVertexBufferCopy = 0x40, kIndexBufferCopy = 0x20;
+    constexpr size_t kDrawableCopy = 0x60, kModelCopy = 0x20, kGeometryCopy = 0x50, kVertexBufferCopy = 0x40, kIndexBufferCopy = 0x20;
     constexpr uint32_t kMaxVertices = 65535;
     constexpr int kBuildsPerFrame = 6;
     constexpr uint32_t kUnusedFrames = 1800;        // an entry not drawn this long is let go
@@ -63,7 +63,7 @@ namespace ShadowMerge
     constexpr uint32_t kLogFrames = 600;
 
     bool bEnabled = true, bLog = false;
-    SafetyHookInline shModelDraw{};
+    SafetyHookInline shModelDraw{}, shDrawNoShaders{};
     void** pSkinning = nullptr;         // [0x1b4f714]
 
     EntityClass::Kind currentKind = EntityClass::Kind::Unknown;
@@ -89,7 +89,7 @@ namespace ShadowMerge
         std::vector<uint16_t> shaders;
         uint8_t model[kModelCopy] = {};
     };
-    std::unordered_map<uintptr_t, Entry> entries;
+    std::unordered_map<uint64_t, Entry> entries;    // by model, and 1 << 32 for those grouped by bucket
     size_t totalBytes = 0;
     uint32_t frame = 0;
     int buildsThisFrame = 0;
@@ -97,7 +97,7 @@ namespace ShadowMerge
     {
         uint64_t drawn = 0, saved = 0, built = 0, noGain = 0, failed = 0, letGo = 0;
         // models of buildings and props in a shadow pass drawn the game's way, and why
-        uint64_t skinned = 0, instancing = 0, single = 0, budget = 0;
+        uint64_t skinned = 0, instancing = 0, single = 0, budget = 0, nothing = 0;
         // all model draws, those outside an entity's draw, of another kind, outside a shadow pass
         uint64_t calls = 0, outside = 0, otherKind = 0, otherPass = 0;
     } stats;
@@ -163,7 +163,22 @@ namespace ShadowMerge
         }
     }
 
-    bool Build(uintptr_t model, uintptr_t shaderGroup, Entry& entry)
+    // A shader's bucket (+9), for a draw without shaders of their own; under SEH
+    uint64_t BucketKey(uintptr_t group, uint16_t index)
+    {
+        __try
+        {
+            const auto shaders = *reinterpret_cast<const uintptr_t* const*>(group + 8);
+            const uintptr_t shader = shaders && index < *reinterpret_cast<const uint16_t*>(group + 0xc) ? shaders[index] : 0;
+            return shader ? (2ull << 62) | *reinterpret_cast<const uint8_t*>(shader + 9) : index;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return index;
+        }
+    }
+
+    bool Build(uintptr_t model, uintptr_t shaderGroup, bool byBucket, Entry& entry)
     {
         static const CpuScopes::Id kCpuScope("ShadowMerge.Build");
         CpuScopes::Scope cpuScope(kCpuScope);
@@ -188,7 +203,7 @@ namespace ShadowMerge
                 continue;
             }
             const uint16_t shader = shaderMap ? Read<uint16_t>(shaderMap, i * 2) : 0;
-            const uint64_t key = shaderGroup ? ShaderKey(shaderGroup, shader) : shader;
+            const uint64_t key = !shaderGroup ? shader : byBucket ? BucketKey(shaderGroup, shader) : ShaderKey(shaderGroup, shader);
             const uintptr_t declaration = Read<uintptr_t>(g, 0x40);
             const uint32_t stride = Read<uint32_t>(Read<uintptr_t>(g, 0xc), 0xc);
             auto it = std::find_if(groups.begin(), groups.end(), [&](const Group& x)
@@ -346,40 +361,21 @@ namespace ShadowMerge
         }
     }
 
-    void __fastcall ModelDraw(void* model, void* edx, void* group, int32_t bucket, int32_t flag)
+    // The model's entry, built if need be (false: drawn the game's way, the budget spent or nothing to merge). byBucket:
+    // grouped for a draw without shaders of their own (DrawNoShaders)
+    const Entry* Lookup(uintptr_t m, uintptr_t group, bool byBucket)
     {
-        const uintptr_t m = reinterpret_cast<uintptr_t>(model);
-        auto original = [&] { shModelDraw.unsafe_fastcall(model, edx, group, bucket, flag); };
-        if (!bEnabled || !m)
-            return original();
-        ++stats.calls;
-        if (!inEntity || (currentKind != EntityClass::Kind::Building && currentKind != EntityClass::Kind::Prop))
-        {
-            ++(inEntity ? stats.otherKind : stats.outside);
-            return original();
-        }
-        if (bLog && targetsSeen.size() < 64)
-        {
-            const char* target = RenderSkip::CurrentTarget();
-            ++targetsSeen[target ? target : "(no lock hooks)"];
-        }
-        if (!ShadowPass())
-        {
-            ++stats.otherPass;
-            return original();
-        }
         const uint16_t count = Read<uint16_t>(m, 0x1a);
         const uintptr_t geometries = Read<uintptr_t>(m, 4);
-        uint64_t* reason = (pSkinning && *pSkinning) ? &stats.skinned
-                         : (pInstancing && pInstancing()) ? &stats.instancing : (count < 2 || !geometries) ? &stats.single : nullptr;
-        if (reason)
+        if (count < 2 || !geometries)
         {
-            ++*reason;
-            return original();
+            ++stats.single;
+            return nullptr;
         }
         const uintptr_t firstGeometry = Read<uintptr_t>(geometries, 0);
         const uintptr_t firstVertexBuffer = firstGeometry ? Read<uintptr_t>(firstGeometry, 0xc) : 0;
-        auto it = entries.find(m);
+        const uint64_t key = uint64_t(m) | (byBucket ? 1ull << 32 : 0);
+        auto it = entries.find(key);
         if (it != entries.end() && (it->second.geometries != geometries || it->second.count != count ||
             it->second.firstGeometry != firstGeometry || it->second.firstVertexBuffer != firstVertexBuffer))
         {
@@ -392,7 +388,7 @@ namespace ShadowMerge
             if (buildsThisFrame >= kBuildsPerFrame)
             {
                 ++stats.budget;
-                return original();
+                return nullptr;
             }
             ++buildsThisFrame;
             Entry entry;
@@ -400,13 +396,13 @@ namespace ShadowMerge
             entry.count = count;
             entry.firstGeometry = firstGeometry;
             entry.firstVertexBuffer = firstVertexBuffer;
-            if (!Build(m, reinterpret_cast<uintptr_t>(group), entry))
+            if (!Build(m, group, byBucket, entry))
             {
                 ++stats.failed;
-                return original();
+                return nullptr;
             }
             ++(entry.gain ? stats.built : stats.noGain);
-            it = entries.emplace(m, std::move(entry)).first;
+            it = entries.emplace(key, std::move(entry)).first;
             if (it->second.gain)
             {
                 // (the vectors moved with the entry: point the copy at their new storage)
@@ -418,10 +414,85 @@ namespace ShadowMerge
         auto& entry = it->second;
         entry.used = frame;
         if (!entry.gain)
-            return original();
+        {
+            ++stats.nothing;
+            return nullptr;
+        }
         ++stats.drawn;
         stats.saved += uint64_t(entry.saved);
-        shModelDraw.unsafe_fastcall(entry.model, edx, group, bucket, flag);
+        return &entry;
+    }
+
+    // Whether a draw of this entity in this pass may be merged; counts why not
+    bool Eligible()
+    {
+        ++stats.calls;
+        if (!inEntity || (currentKind != EntityClass::Kind::Building && currentKind != EntityClass::Kind::Prop))
+        {
+            ++(inEntity ? stats.otherKind : stats.outside);
+            return false;
+        }
+        if (bLog && targetsSeen.size() < 64)
+        {
+            const char* target = RenderSkip::CurrentTarget();
+            ++targetsSeen[target ? target : "(no lock hooks)"];
+        }
+        if (!ShadowPass())
+        {
+            ++stats.otherPass;
+            return false;
+        }
+        uint64_t* reason = (pSkinning && *pSkinning) ? &stats.skinned : (pInstancing && pInstancing()) ? &stats.instancing : nullptr;
+        if (reason)
+        {
+            ++*reason;
+            return false;
+        }
+        return true;
+    }
+
+    void __fastcall ModelDraw(void* model, void* edx, void* group, int32_t bucket, int32_t flag)
+    {
+        const uintptr_t m = reinterpret_cast<uintptr_t>(model);
+        const Entry* entry = bEnabled && m && Eligible() ? Lookup(m, reinterpret_cast<uintptr_t>(group), false) : nullptr;
+        shModelDraw.unsafe_fastcall(entry ? static_cast<const void*>(entry->model) : model, edx, group, bucket, flag);
+    }
+
+    // rmcDrawable's draw under a forced shader (CE 0x6a1d50, vtable +0x2c; thiscall: the matrix, the detail, the bucket or
+    // -1, a mask of its models or 0; ret 0x10): the pass has bound the shader, and each geometry of the detail's models
+    // (the list at drawable +0x40 + detail * 4: the models' array and a u16 count) whose shader (+8 the group) is of the
+    // bucket is drawn as it is (its vtable +8), nothing of its own bound. The cascades and the lamps' maps draw most
+    // entities so (CDrawEntityDC's execute, CE 0x8dcbf0, when 0x444940 gives a forced shader or the command's +0x36 & 3);
+    // the first builds hooked grmModel::Draw alone and saw no model of the lamps' maps at all. Here any geometries of
+    // one bucket, declaration and stride draw alike, so they are merged whatever their shaders. The game's function is
+    // given a copy of the drawable whose list holds the merged models (in their places, the mask's bits still theirs).
+    void __fastcall DrawNoShaders(void* drawable, void* edx, void* matrix, int32_t detail, int32_t bucket, void* mask)
+    {
+        const uintptr_t d = reinterpret_cast<uintptr_t>(drawable);
+        auto original = [&] { shDrawNoShaders.unsafe_fastcall(drawable, edx, matrix, detail, bucket, mask); };
+        if (!bEnabled || !d || detail < 0 || detail > 3 || !Eligible())
+            return original();
+        const uintptr_t list = Read<uintptr_t>(d, 0x40 + detail * 4);
+        const uintptr_t models = list ? Read<uintptr_t>(list, 0) : 0;
+        const uint16_t count = list ? Read<uint16_t>(list, 4) : 0;
+        static uintptr_t merged[32];
+        if (!models || !count || count > 32)
+            return original();
+        bool any = false;
+        for (int i = 0; i < count; ++i)
+        {
+            const uintptr_t m = Read<uintptr_t>(models, i * 4);
+            const Entry* entry = m ? Lookup(m, Read<uintptr_t>(d, 8), true) : nullptr;
+            merged[i] = entry ? reinterpret_cast<uintptr_t>(entry->model) : m;
+            any = any || entry;
+        }
+        if (!any)
+            return original();
+        struct { uintptr_t models; uint16_t count, size; } copyList = { reinterpret_cast<uintptr_t>(merged), count, count };
+        alignas(16) uint8_t copy[kDrawableCopy];
+        std::memcpy(copy, drawable, kDrawableCopy);
+        *reinterpret_cast<uintptr_t*>(copy + 0x40 + detail * 4) = reinterpret_cast<uintptr_t>(&copyList);
+        shDrawNoShaders.unsafe_fastcall(copy, edx, matrix, detail, bucket, mask);
     }
 
     void EndFrame()
@@ -434,14 +505,14 @@ namespace ShadowMerge
         {
             const double n = double(kLogFrames);
             FusionLog::Write("ShadowMerge", "Stats", "per frame over %u: %.1f merged models drawn, %.0f draws saved; drawn the game's way: "
-                "skinned %.1f, instanced sample %.1f, one geometry %.1f, waiting to be built %.1f; built %llu, "
+                "skinned %.1f, instanced sample %.1f, one geometry %.1f, nothing to merge %.1f, waiting to be built %.1f; built %llu, "
                 "nothing to merge %llu, failed %llu, let go %llu; cache %zu models, %.1f MB\n", kLogFrames, stats.drawn / n, stats.saved / n,
-                stats.skinned / n, stats.instancing / n, stats.single / n, stats.budget / n,
+                stats.skinned / n, stats.instancing / n, stats.single / n, stats.nothing / n, stats.budget / n,
                 stats.built, stats.noGain, stats.failed, stats.letGo, entries.size(), totalBytes / 1048576.0);
             std::string targets;
             for (auto& [name, count] : targetsSeen)
                 targets += std::format("{} {:.1f}, ", name, count / n);
-            FusionLog::Write("ShadowMerge", "Calls", "per frame: %.1f model draws, %.1f outside an entity's draw, %.1f of vehicles and people, "
+            FusionLog::Write("ShadowMerge", "Calls", "per frame: %.1f model and drawable draws, %.1f outside an entity's draw, %.1f of vehicles and people, "
                 "%.1f outside a shadow pass; buildings' and props' by target: %s\n", stats.calls / n, stats.outside / n, stats.otherKind / n,
                 stats.otherPass / n, targets.c_str());
             targetsSeen.clear();
@@ -484,6 +555,14 @@ public:
             }
             pSkinning = *reinterpret_cast<void***>(at + 10);
             shModelDraw = safetyhook::create_inline(at, reinterpret_cast<void*>(&ModelDraw));
+            // rmcDrawable's draw under a forced shader (CE 0x6a1d50): sub esp, 8 / push ebx / push ebp / push esi /
+            // push [esp+18h] / mov ebx, ecx / mov ecx, [viewport] / mov [esp+14h], ebx / call / mov eax, [esp+1Ch] / mov edx, 1 /
+            // mov esi, [ebx+eax*4+40h]
+            if (auto noShaders = hook::pattern("83 EC 08 53 55 56 FF 74 24 18 8B D9 8B 0D ? ? ? ? 89 5C 24 14 E8 ? ? ? ? 8B 44 24 1C BA 01 00 00 00 8B 74 83 40");
+                !noShaders.empty())
+                shDrawNoShaders = safetyhook::create_inline(noShaders.get_first(0), reinterpret_cast<void*>(&DrawNoShaders));
+            FusionLog::Write("ShadowMerge", "Init", "grmModel::Draw hooked, rmcDrawable's draw under a forced shader %s\n",
+                shDrawNoShaders ? "hooked" : "not found");
             EntityClass::AddDrawHooks([](EntityClass::Kind kind) { currentKind = kind; inEntity = true; },
                                       [](EntityClass::Kind) { inEntity = false; });
             FusionFix::onBeforePresent() += []() { EndFrame(); };
