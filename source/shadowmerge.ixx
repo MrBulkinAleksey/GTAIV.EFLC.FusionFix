@@ -73,6 +73,9 @@ namespace ShadowMerge
     {
         IDirect3DVertexBuffer9* vb = nullptr;
         IDirect3DIndexBuffer9* ib = nullptr;
+        // the geometry copied (its index in the model) and its vertex declaration, checked at each draw (Current)
+        int source = 0;
+        uintptr_t declaration = 0;
         uint8_t vbObject[kVertexBufferCopy] = {}, ibObject[kIndexBufferCopy] = {}, geometry[kGeometryCopy] = {};
     };
     struct Entry
@@ -301,12 +304,15 @@ namespace ShadowMerge
                 *reinterpret_cast<IDirect3DVertexBuffer9**>(m.vbObject + 0x1c) = m.vb;
                 *reinterpret_cast<uint32_t*>(m.ibObject + 4) = indices;
                 *reinterpret_cast<IDirect3DIndexBuffer9**>(m.ibObject + 0xc) = m.ib;
-                // No data in memory and not dirty: a buffer flagged dirty (vertex buffer +0x28 bit 0x100) is filled again
+                // No data in memory and not dirty: a buffer flagged dirty (vertex buffer +0x28 bit 0x100, index buffer +0x14 bit 2) is filled again
                 // at its draw from its data in memory (CE 0x446140 / 0x471fb0), which the copies' counts would overread
                 // (the first geometry's data, smaller than the merged buffer)
                 *reinterpret_cast<uintptr_t*>(m.vbObject + 0x20) = 0;
                 *reinterpret_cast<uint32_t*>(m.vbObject + 0x28) &= ~0x100u;
                 *reinterpret_cast<uintptr_t*>(m.ibObject + 0x10) = 0;
+                *reinterpret_cast<uint32_t*>(m.ibObject + 0x14) &= ~0x2u;
+                m.source = group.members[at];
+                m.declaration = Read<uintptr_t>(first, 0x40);
                 entry.bytes += size_t(vertices) * group.stride + size_t(indices) * 2;
                 entry.merged.push_back(m);
                 entry.shaders.push_back(group.shader);
@@ -367,6 +373,21 @@ namespace ShadowMerge
         }
     }
 
+    // Whether the merged geometries' copies still hold the model's vertex declarations: a declaration (geometry +0x40) is
+    // the game's, counted by the geometries holding it (+4) and let go with the last of them (CE 0x45f540 -> 0x45ed50 ->
+    // 0x422cd0), and the copies hold none. A model let go and loaded again where it was keeps its geometries' and buffers'
+    // places (the checks in Lookup) but may take a declaration made anew, which the copies would draw with let go
+    bool Current(const Entry& entry, uintptr_t geometries)
+    {
+        for (auto& m : entry.merged)
+        {
+            const uintptr_t g = Read<uintptr_t>(geometries, m.source * 4);
+            if (!g || Read<uintptr_t>(g, 0x40) != m.declaration)
+                return false;
+        }
+        return true;
+    }
+
     // The model's entry, built if need be (false: drawn the game's way, the budget spent or nothing to merge). byBucket:
     // grouped for a draw without shaders of their own (DrawNoShaders)
     const Entry* Lookup(uintptr_t m, uintptr_t group, bool byBucket)
@@ -383,7 +404,7 @@ namespace ShadowMerge
         const uint64_t key = uint64_t(m) | (byBucket ? 1ull << 32 : 0);
         auto it = entries.find(key);
         if (it != entries.end() && (it->second.geometries != geometries || it->second.count != count ||
-            it->second.firstGeometry != firstGeometry || it->second.firstVertexBuffer != firstVertexBuffer))
+            it->second.firstGeometry != firstGeometry || it->second.firstVertexBuffer != firstVertexBuffer || !Current(it->second, geometries)))
         {
             Release(it->second);
             entries.erase(it);
