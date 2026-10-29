@@ -307,7 +307,7 @@ namespace RenderSkip
     Drop drop = Drop::Nothing;
 
     // The locks of target index 0, innermost last, and what each drops
-    struct Lock { Kind kind; Drop drop; rage::grcRenderTargetPC* target; int8_t intoAtlas = -1; bool statesTraced = false; };
+    struct Lock { Kind kind; Drop drop; rage::grcRenderTargetPC* target; int8_t intoAtlas = -1; uint8_t divisor = 1; bool statesTraced = false; };
     Lock stack[16]{};
     int depth = 0;
     bool bLockHooked = false;
@@ -349,6 +349,23 @@ namespace RenderSkip
     bool bFillPending = false;
     uint32_t intoAtlas = 0, intoAtlasFailed = 0;
 
+    // FarCascadesResolution: drawn into the atlas, the third and fourth cascades take 1/n of the side (1024 of 2048 at
+    // 2), in the corner of their quarter at its left and top edge: a quarter of the texels to fill, where the near ones
+    // need them all. Their casters get a viewport of that corner (the game's window of the cascade goes into it
+    // whole), and the shaders that read them the same window onto it (ShrinkCascades); the texel of the shaders'
+    // filter stays the atlas's, so their shadows are softer by n as well as coarser.
+    uint32_t nFarDivisor = 2;
+    uint32_t quarterDivisor[4] = { 1, 1, 1, 1 };    // how the quarter was last drawn
+    uint32_t drawnSeq[4] = { ~0u, ~0u, ~0u, ~0u };  // the pass it was last drawn in
+    uint32_t shrunkSeq = ~0u;
+    uint32_t shrunk = 0, shrinkMisses = 0;
+    bool bShrinkHooked = false;     // the setter's hook that reads them so is in place
+
+    uint32_t DivisorFor(int index)
+    {
+        return bShrinkHooked && index >= 2 && (nFarDivisor == 2 || nFarDivisor == 4) ? nFarDivisor : 1;
+    }
+
     bool IntoAtlasReady()
     {
         return bCascadesIntoAtlas && atlasTarget && atlasTarget->mD3DTexture && (bCascadesAtNight || !IsNight());
@@ -374,7 +391,7 @@ namespace RenderSkip
     HRESULT(__stdcall* RealSetScissorRect)(IDirect3DDevice9*, const RECT*) = nullptr;
 
     // The game's lock just bound CASCADE_TARGET_R32: the atlas and a depth buffer of its size instead
-    bool BindAtlas(IDirect3DDevice9* device, int index)
+    bool BindAtlas(IDirect3DDevice9* device, int index, uint32_t divisor)
     {
         IDirect3DSurface9* surface = nullptr;
         if (!device || !atlasTarget || !atlasTarget->mD3DTexture || FAILED(atlasTarget->mD3DTexture->GetSurfaceLevel(0, &surface)))
@@ -422,9 +439,10 @@ namespace RenderSkip
         // send again the viewport it takes as set already: the cascade was drawn over all four quarters
         if (bound && RealSetViewport && RealSetScissorRect)
         {
-            D3DVIEWPORT9 quarter{ DWORD(index) * cascadeSide, 0, cascadeSide, cascadeSide, viewport.MinZ, viewport.MaxZ };
+            DWORD side = cascadeSide / divisor;
+            D3DVIEWPORT9 quarter{ DWORD(index) * cascadeSide, 0, side, side, viewport.MinZ, viewport.MaxZ };
             RealSetViewport(device, &quarter);
-            RECT rect{ LONG(index) * LONG(cascadeSide), 0, LONG(index + 1) * LONG(cascadeSide), LONG(cascadeSide) };
+            RECT rect{ LONG(index) * LONG(cascadeSide), 0, LONG(index) * LONG(cascadeSide) + LONG(side), LONG(side) };
             RealSetScissorRect(device, &rect);
         }
         return bound;
@@ -650,6 +668,65 @@ namespace RenderSkip
         TraceMatrix(values, lastMatrix, passTexels, passDepth);
     }
 
+    // FarCascadesResolution, in the setter before FollowCascades, once a pass: a cascade drawn into the corner of its
+    // quarter is read there. Its scale and offset of x and y put its window (the frame copy's bounds, +0x1f0 min x, +0x200
+    // min y, +0x210 max x, +0x220 max y, a float a cascade) onto the quarter, u = t * scale + offset, one bound at the
+    // quarter's left or top edge (u k / 4, v 0); 1/n of the side keeps that edge: u' = edge + (u - edge) / n. A cascade
+    // left out in this pass keeps the values of the pass it was drawn in (FollowCascades), shrunk then; without
+    // FollowCascades it is read with this pass's values, shrunk as its quarter was last drawn.
+    void ShrinkCascades(float* frameCopy)
+    {
+        if (shrunkSeq == passSeq)
+            return;
+        shrunkSeq = passSeq;
+        float values[4][4];
+        for (int v = 0; v < 4; v++)
+        {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; k++)
+            {
+                sum += frameCopy[v * 4 + k];
+                values[k][v] = sum;
+            }
+        }
+        bool changed = false;
+        for (int k = 0; k < 4; k++)
+        {
+            uint32_t n = drawnSeq[k] == passSeq || !bFollow ? quarterDivisor[k] : 1;
+            if (n <= 1)
+                continue;
+            float edges[2];
+            bool found = true;
+            for (int axis = 0; axis < 2 && found; axis++)
+            {
+                float scale = values[k][axis], offset = values[k][2 + axis];
+                float a = frameCopy[(axis ? 0x200 : 0x1f0) / 4 + k] * scale + offset;
+                float b = frameCopy[(axis ? 0x220 : 0x210) / 4 + k] * scale + offset;
+                float want = axis ? 0.0f : float(k) * 0.25f;
+                edges[axis] = std::abs(a - want) <= std::abs(b - want) ? a : b;
+                found = std::abs(edges[axis] - want) < 0.01f;
+            }
+            // No bound at the edge: read as the game has it, this once wrong, and the next ones drawn whole
+            if (!found)
+            {
+                shrinkMisses++;
+                nFarDivisor = 1;
+                continue;
+            }
+            for (int axis = 0; axis < 2; axis++)
+            {
+                values[k][axis] /= float(n);
+                values[k][2 + axis] = edges[axis] + (values[k][2 + axis] - edges[axis]) / float(n);
+            }
+            changed = true;
+            shrunk++;
+        }
+        if (changed)
+            for (int v = 0; v < 4; v++)
+                for (int k = 0; k < 4; k++)
+                    frameCopy[v * 4 + k] = values[k][v] - (k ? values[k - 1][v] : 0.0f);
+    }
+
     Drop DropFor(Kind kind)
     {
         switch (kind)
@@ -764,9 +841,10 @@ namespace RenderSkip
                 bAtlasLeftOut = true;
             else if (lock.drop != Drop::Nothing)
                 ;   // the night's: its quarter of the atlas is cleared below
-            else if (BindAtlas(RageDirect3DDevice9::GetRuntimeDevice(), lastCascade))
+            else if (uint32_t divisor = DivisorFor(lastCascade); BindAtlas(RageDirect3DDevice9::GetRuntimeDevice(), lastCascade, divisor))
             {
                 lock.intoAtlas = int8_t(lastCascade);
+                lock.divisor = uint8_t(divisor);
                 bAtlasLeftOut = true;
                 intoAtlas++;
                 if (Tracing())
@@ -787,6 +865,12 @@ namespace RenderSkip
                 intoAtlasFailed++;
                 bCascadesIntoAtlas = false;
             }
+        }
+        // How the quarter is drawn this pass, for the scales and offsets the setter sends after the pass
+        if (index == 0 && depth > 0 && stack[depth - 1].kind == CascadeTarget && lastCascade >= 0 && stack[depth - 1].drop == Drop::Nothing)
+        {
+            quarterDivisor[lastCascade] = stack[depth - 1].intoAtlas >= 0 ? stack[depth - 1].divisor : 1;
+            drawnSeq[lastCascade] = passSeq;
         }
         // The night's quarter of the atlas, bound now: 1.0 in it, which the lighting takes as lit for any depth. The atlas
         // holds 0.5 - 0.0005 z of the casters (cascadeConvert) and a point is lit where that is no less than its own; the
@@ -964,10 +1048,9 @@ namespace RenderSkip
         // A cascade's own scissor, moved to its quarter like its viewport
         if (rect && depth > 0 && stack[depth - 1].intoAtlas >= 0 && rect->right <= LONG(cascadeSide) && rect->bottom <= LONG(cascadeSide))
         {
-            RECT moved = *rect;
-            LONG x = LONG(stack[depth - 1].intoAtlas) * LONG(cascadeSide);
-            moved.left += x;
-            moved.right += x;
+            // (and to its corner, scaled down, at FarCascadesResolution)
+            LONG n = stack[depth - 1].divisor, x = LONG(stack[depth - 1].intoAtlas) * LONG(cascadeSide);
+            RECT moved{ x + rect->left / n, rect->top / n, x + (rect->right + n - 1) / n, (rect->bottom + n - 1) / n };
             return RealSetScissorRect(device, &moved);
         }
         return RealSetScissorRect(device, rect);
@@ -1004,6 +1087,7 @@ namespace RenderSkip
         {
             D3DVIEWPORT9 quarter = *viewport;
             quarter.X = DWORD(stack[depth - 1].intoAtlas) * cascadeSide;
+            quarter.Width = quarter.Height = cascadeSide / stack[depth - 1].divisor;
             return RealSetViewport(device, &quarter);
         }
         return RealSetViewport(device, viewport);
@@ -1185,9 +1269,11 @@ public:
                 bFarCascadesHalfRate = ini.ReadInteger("PERFORMANCE", "FarCascadesHalfRate", 1) != 0;
                 bMidCascadeHalfRate = ini.ReadInteger("PERFORMANCE", "MidCascadeHalfRate", 0) != 0;
                 fSunLowBelow = ini.ReadFloat("PERFORMANCE", "SunShadowsMinElevation", 8.0f);
+                nFarDivisor = uint32_t(std::max(1, ini.ReadInteger("SHADOWS", "FarCascadesResolution", 2)));
             });
 
-            bCascadesIntoAtlas = iniReader.ReadInteger("SHADOWS", "CascadesIntoAtlas", 0) != 0;
+            bCascadesIntoAtlas = iniReader.ReadInteger("SHADOWS", "CascadesIntoAtlas", 1) != 0;
+            nFarDivisor = uint32_t(std::max(1, iniReader.ReadInteger("SHADOWS", "FarCascadesResolution", 2)));
 
             // The matrix as CE 0x92dd20 hands it to its global (CE 0x92dd5d: eax the matrix, push eax), called from the
             // setter of the shaders' cascades (CE 0x92d856 returned to, esi the frame's copy there) and from each cascade's
@@ -1227,13 +1313,19 @@ public:
                     }
                 }
             });
-            if (follow)
+            // FarCascadesResolution reads its cascades' corners through the setter's copy; without the setter they are
+            // drawn whole
+            if (follow || (bCascadesIntoAtlas && !setter.empty()))
             {
                 static auto SetterHook = safetyhook::create_mid(setter.get_first(0), [](SafetyHookContext& regs)
                 {
-                    FollowCascades((float*)regs.esi);
+                    if (bCascadesIntoAtlas)
+                        ShrinkCascades((float*)regs.esi);
+                    if (bFollow)
+                        FollowCascades((float*)regs.esi);
                 });
-                bFollow = true;
+                bFollow = follow;
+                bShrinkHooked = bCascadesIntoAtlas;
             }
             if (bCascadesIntoAtlas)
             {
@@ -1266,7 +1358,8 @@ public:
                 bFarCascadesHalfRate ? (bFollow ? "in turns, following the camera" : "in turns while the camera keeps still") : "every frame",
                 bReflectionsHalfRate ? "every other frame" : "every frame",
                 bWaterReflectionWhenSeen ? "only while water is seen" : "whenever the game draws it");
-            FusionLog::Write("RenderSkip", "Settings", "cascades %s\n", bCascadesIntoAtlas ? "drawn straight into the atlas" : "copied into the atlas");
+            FusionLog::Write("RenderSkip", "Settings", "cascades %s, the far ones at 1/%u of the side\n",
+                bCascadesIntoAtlas ? "drawn straight into the atlas" : "copied into the atlas", DivisorFor(2));
         };
 
         // The queries are not kept over a reset (released on the render thread)
@@ -1314,7 +1407,10 @@ public:
             largestTexels = largestDepth = 0.0f;
             if (intoAtlas || intoAtlasFailed)
                 text += std::format("cascades drawn into the atlas: {}{}; ", intoAtlas, intoAtlasFailed ? ", then could not bind it and stopped" : "");
-            intoAtlas = 0;
+            if (shrunk || shrinkMisses)
+                text += std::format("far cascades read in their quarter's corner: {}{}; ", shrunk,
+                    shrinkMisses ? std::format(", {} with no bound at the edge (then drawn whole)", shrinkMisses) : std::string());
+            intoAtlas = shrunk = shrinkMisses = 0;
             for (int kind = CascadeTarget; kind < Kinds; kind++)
                 if (dropped[kind] || halfRates[kind].skipped || halfRates[kind].kept)
                     text += std::format("{}: {} calls left out, {} frames left out, {} drawn; ", KindNames[kind], dropped[kind],
