@@ -1,0 +1,92 @@
+diff --git a/win32_30_nv8/mirror/mirrorPS1.asm b/win32_30_nv8/mirror/mirrorPS1.asm
+index f0752696..3d901550 100644
+--- a/win32_30_nv8/mirror/mirrorPS1.asm
++++ b/win32_30_nv8/mirror/mirrorPS1.asm
+@@ -20,14 +20,86 @@
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0691907283e-42 // 763
+     def c0, -1.75, -0.5, -0.285714298, 0.5
++    def c1, 2, -1, 1, 1000 // FusionFix mirror_car_shape.patch: uv to -1..1, one, far inside
++    def c2, 0.0199999996, 0.0199999996, 0.0250000004, 0 // FusionFix mirror_car_shape.patch: dark glass
+     dcl_texcoord v0.xyw
+     dcl_texcoord9 v9
++    dcl_texcoord5 v6.xy // FusionFix mirror_car_shape.patch: the quad's uv
+     dcl_2d s0
++    // FusionFix mirror_car_shape.patch: a car's mirror (c152.x 1, set by carmirrors.ixx right before the quad is drawn) keeps only what lies
++    // inside its glass's outline, c153-c160 its edges (a corner xy, the way to the next zw, counter-clockwise over the
++    // quad's -1..1; unused ones all zero); interior mirrors (c152.x 0) keep the whole quad.
++    mad r1.xy, v6, c1.x, c1.y
++    mov r8.x, c1.z
++    add r7.xy, r1, -c153
++    mul r7.z, r7.y, c153.z
++    mad r7.z, r7.x, -c153.w, r7.z
++    min r8.x, r8.x, r7.z
++    add r7.xy, r1, -c154
++    mul r7.z, r7.y, c154.z
++    mad r7.z, r7.x, -c154.w, r7.z
++    min r8.x, r8.x, r7.z
++    add r7.xy, r1, -c155
++    mul r7.z, r7.y, c155.z
++    mad r7.z, r7.x, -c155.w, r7.z
++    min r8.x, r8.x, r7.z
++    add r7.xy, r1, -c156
++    mul r7.z, r7.y, c156.z
++    mad r7.z, r7.x, -c156.w, r7.z
++    min r8.x, r8.x, r7.z
++    add r7.xy, r1, -c157
++    mul r7.z, r7.y, c157.z
++    mad r7.z, r7.x, -c157.w, r7.z
++    min r8.x, r8.x, r7.z
++    add r7.xy, r1, -c158
++    mul r7.z, r7.y, c158.z
++    mad r7.z, r7.x, -c158.w, r7.z
++    min r8.x, r8.x, r7.z
++    add r7.xy, r1, -c159
++    mul r7.z, r7.y, c159.z
++    mad r7.z, r7.x, -c159.w, r7.z
++    min r8.x, r8.x, r7.z
++    add r7.xy, r1, -c160
++    mul r7.z, r7.y, c160.z
++    mad r7.z, r7.x, -c160.w, r7.z
++    min r8.x, r8.x, r7.z
++    mov r8.z, c152.x
++    add r8.y, c1.z, -r8.z
++    mad r8.x, r8.y, c1.w, r8.x
++    mov r9.xyz, r8.x
++    texkill r9
+     rcp r0.x, v0_abs.w
+     mul r0.x, r0.x, c0.y
+     mad r0.xy, v0, r0.x, c0.w
++    // FusionFix mirror_car_shape.patch: a car's mirror shows a wider view (c152.y, the zoom out - 1; 0 for interior
++    // mirrors), as a convex one: the reflection, rendered for the whole screen, is read further from the mirror's middle
++    // on the screen, found from how the screen position and the quad's uv change across the pixels.
++    dsx r2.xy, r0
++    dsy r2.zw, r0.xyxy
++    dsx r3.xy, v6
++    dsy r3.zw, v6.xyxy
++    mul r4.x, r3.x, r3.w
++    mad r4.x, r3.z, -r3.y, r4.x
++    rcp r4.x, r4.x
++    add r4.zw, c0.w, -v6.xyxy
++    mul r5.x, r3.w, r4.z
++    mad r5.x, -r3.z, r4.w, r5.x
++    mul r5.y, r3.x, r4.w
++    mad r5.y, -r3.y, r4.z, r5.y
++    mul r5.xy, r5, r4.x
++    mul r6.xy, r2, r5.x
++    mad r6.xy, r2.zwzw, r5.y, r6
++    mad r0.xy, r6, -c152.y, r0
++    // FusionFix mirror_car_shape.patch: the reflection was made wider than the screen (c152.w, 1 / widen - 1; 0 for interior mirrors): read
++    // nearer its middle
++    mov r12, c152
++    add r13.xy, r0, -c0.w
++    mad r0.xy, r13, r12.w, r0
+     texld r0, r0, s0
+-    mul oC0.xyz, r0, c39.y
++    // FusionFix mirror_car_shape.patch: c152.z how dark: a car's other mirrors, and the one reflected as it fades out and in
++    mov r10, c152
++    lrp r11.xyz, r10.z, c2, r0
++    mul oC0.xyz, r11, c39.y
+     mov oC0.w, c46.x
+     
+     // LogDepth Write

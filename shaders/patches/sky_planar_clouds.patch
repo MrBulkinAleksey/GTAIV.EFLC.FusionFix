@@ -1,0 +1,311 @@
+diff --git a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS1.asm b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS1.asm
+index 1ef25269..f9df26f4 100644
+--- a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS1.asm
++++ b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS1.asm
+@@ -62,6 +62,8 @@
+ //
+ 
+     ps_3_0
++    def c154, 1.20000000, 0.20000000, -0.5, 1 // FusionFix sky_planar_clouds.patch: 1 + k, k, minus a half, one
++    def c155, 0, 9.99999975e-006, 0, 0 // FusionFix sky_planar_clouds.patch: zero, tiny
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.1275310931e-44 // 58
+     def c151, 1.57072878, -0.212114394, 0.0742610022, -0.0187292993 // FusionFix sky_pbr.patch: acos cubic
+     def c152, 1, -0.636619747, 0.5, -0.5 // FusionFix sky_pbr.patch: one, -2 / pi, a half
+@@ -86,6 +88,20 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s10 // FusionFix sky_pbr.patch: the PBR sky's SkyView table
++    // --- FusionFix sky_planar_clouds.patch: the clouds' coordinates as a flat deck's: r28 v0, r29 v2.xy, r30 v4.xy
++    add r27.xyz, v1, c155.y
++    nrm r28.xyz, r27
++    max r27.x, r28.y, c155.x
++    add r27.x, r27.x, c154.y
++    rcp r27.x, r27.x
++    mad r27.x, r27.x, c154.x, -c154.w // (1 + k) / (y + k) - 1
++    add r27.yz, v0.xxyy, c154.z
++    mul r27.yz, r27, r27.x // (v0 - 0.5) times that
++    add r28.xy, v0, r27.yzzw
++    add r29.xy, v2, r27.yzzw
++    mul r27.yz, r27, c74.w // the high layer is laid out TopCloudBiasDetailThresholdHeight.w times larger
++    add r30.xy, v4, r27.yzzw
++    // --- FusionFix sky_planar_clouds.patch end
+     
+     mul r20.w, c44.x, c44.w
+     add r20.w, r20.w, -c142.y
+@@ -190,16 +206,16 @@
+     mad_pp r1.xyz, r3, c79.y, r1
+     mad r0.x, r2.y, c0.z, c0.w
+     mul_pp r0.z, r2.y, r2.y
+-    mul r2.xy, c78.z, v2
++    mul r2.xy, c78.z, r29 // FusionFix sky_planar_clouds.patch
+     texld r2, r2, s2
+     mul r1.w, r2.x, c78.w
+-    texld_pp r2, v2, s1
++    texld_pp r2, r29, s1 // FusionFix sky_planar_clouds.patch
+     mad_pp r1.w, r1.w, c0.x, r2.x
+     mov r2.x, c71.x
+     mad r1.w, r2.x, r1.w, -c72.x
+     mul_sat_pp r1.w, r1.w, c76.x
+     add r2.y, -r1.w, c1.y
+-    texld_pp r3, v0, s1
++    texld_pp r3, r28, s1 // FusionFix sky_planar_clouds.patch
+     texld_pp r4, v2.zwzw, s2
+     add_pp r2.z, r4.x, -c2.y
+     mad_pp r2.w, r2.z, c78.w, r3.x
+@@ -219,7 +235,7 @@
+     mad_pp r0.y, r0.z, c77.x, r0.y
+     mad r3.xyz, r0.y, c69, -r1.w
+     mad_pp r0.xyz, c70, r0.x, r3
+-    texld_pp r3, v4, s1
++    texld_pp r3, r30, s1 // FusionFix sky_planar_clouds.patch
+     mad_pp r1.w, r2.z, c74.y, r3.y
+     mad_sat r1.w, c74.z, r1.w, -c74.x
+     mul_pp r1.w, r1.w, v4.z
+diff --git a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS5.asm b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS5.asm
+index 60dc2f10..e63731a3 100644
+--- a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS5.asm
++++ b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS5.asm
+@@ -58,6 +58,8 @@
+ //
+ 
+     ps_3_0
++    def c154, 1.20000000, 0.20000000, -0.5, 1 // FusionFix sky_planar_clouds.patch: 1 + k, k, minus a half, one
++    def c155, 0, 9.99999975e-006, 0, 0 // FusionFix sky_planar_clouds.patch: zero, tiny
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.6880504788e-44 // 62
+     def c151, 1.57072878, -0.212114394, 0.0742610022, -0.0187292993 // FusionFix sky_pbr.patch: acos cubic
+     def c152, 1, -0.636619747, 0.5, -0.5 // FusionFix sky_pbr.patch: one, -2 / pi, a half
+@@ -76,6 +78,20 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s10 // FusionFix sky_pbr.patch: the PBR sky's SkyView table
++    // --- FusionFix sky_planar_clouds.patch: the clouds' coordinates as a flat deck's: r28 v0, r29 v2.xy, r30 v4.xy
++    add r27.xyz, v1, c155.y
++    nrm r28.xyz, r27
++    max r27.x, r28.y, c155.x
++    add r27.x, r27.x, c154.y
++    rcp r27.x, r27.x
++    mad r27.x, r27.x, c154.x, -c154.w // (1 + k) / (y + k) - 1
++    add r27.yz, v0.xxyy, c154.z
++    mul r27.yz, r27, r27.x // (v0 - 0.5) times that
++    add r28.xy, v0, r27.yzzw
++    add r29.xy, v2, r27.yzzw
++    mul r27.yz, r27, c74.w // the high layer is laid out TopCloudBiasDetailThresholdHeight.w times larger
++    add r30.xy, v4, r27.yzzw
++    // --- FusionFix sky_planar_clouds.patch end
+     mov r0.xw, c3
+     add_sat r0.x, r0.x, c65.w
+     mov r1.yz, c2.xxyw
+@@ -147,16 +163,16 @@
+     mad_pp r1.xyz, r3, c79.y, r1
+     mad r0.x, r2.y, c0.z, c0.w
+     mul_pp r0.z, r2.y, r2.y
+-    mul r2.xy, c78.z, v2
++    mul r2.xy, c78.z, r29 // FusionFix sky_planar_clouds.patch
+     texld r2, r2, s2
+     mul r1.w, r2.x, c78.w
+-    texld_pp r2, v2, s1
++    texld_pp r2, r29, s1 // FusionFix sky_planar_clouds.patch
+     mad_pp r1.w, r1.w, c0.x, r2.x
+     mov r2.x, c71.x
+     mad r1.w, r2.x, r1.w, -c72.x
+     mul_sat_pp r1.w, r1.w, c76.x
+     add r2.y, -r1.w, c1.y
+-    texld_pp r3, v0, s1
++    texld_pp r3, r28, s1 // FusionFix sky_planar_clouds.patch
+     texld_pp r4, v2.zwzw, s2
+     add_pp r2.z, r4.x, -c2.y
+     mad_pp r2.w, r2.z, c78.w, r3.x
+@@ -176,7 +192,7 @@
+     mad_pp r0.y, r0.z, c77.x, r0.y
+     mad r3.xyz, r0.y, c69, -r1.w
+     mad_pp r0.xyz, c70, r0.x, r3
+-    texld_pp r3, v4, s1
++    texld_pp r3, r30, s1 // FusionFix sky_planar_clouds.patch
+     mad_pp r1.w, r2.z, c74.y, r3.y
+     mad_sat r1.w, c74.z, r1.w, -c74.x
+     mul_pp r1.w, r1.w, v4.z
+diff --git a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS7.asm b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS7.asm
+index ef272d31..05007a65 100644
+--- a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS7.asm
++++ b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS7.asm
+@@ -80,6 +80,8 @@
+ //
+ 
+     ps_3_0
++    def c154, 1.20000000, 0.20000000, -0.5, 1 // FusionFix sky_planar_clouds.patch: 1 + k, k, minus a half, one
++    def c155, 0, 9.99999975e-006, 0, 0 // FusionFix sky_planar_clouds.patch: zero, tiny
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.9683101717e-44 // 64
+     def c151, 1.57072878, -0.212114394, 0.0742610022, -0.0187292993 // FusionFix sky_pbr.patch: acos cubic
+     def c152, 1, -0.636619747, 0.5, -0.5 // FusionFix sky_pbr.patch: one, -2 / pi, a half
+@@ -109,6 +111,20 @@
+     dcl_2d s3
+     dcl_2d s4
+     dcl_2d s10 // FusionFix sky_pbr.patch: the PBR sky's SkyView table
++    // --- FusionFix sky_planar_clouds.patch: the clouds' coordinates as a flat deck's: r28 v0, r29 v2.xy, r30 v4.xy
++    add r27.xyz, v1, c155.y
++    nrm r28.xyz, r27
++    max r27.x, r28.y, c155.x
++    add r27.x, r27.x, c154.y
++    rcp r27.x, r27.x
++    mad r27.x, r27.x, c154.x, -c154.w // (1 + k) / (y + k) - 1
++    add r27.yz, v0.xxyy, c154.z
++    mul r27.yz, r27, r27.x // (v0 - 0.5) times that
++    add r28.xy, v0, r27.yzzw
++    add r29.xy, v2, r27.yzzw
++    mul r27.yz, r27, c75.w // the high layer is laid out TopCloudBiasDetailThresholdHeight.w times larger
++    add r30.xy, v4, r27.yzzw
++    // --- FusionFix sky_planar_clouds.patch end
+     
+     mul r20.w, c44.x, c44.w
+     add r20.w, r20.w, -c142.y
+@@ -172,7 +188,7 @@
+     mul r4.xyz, r2_abs.xzww, r2_abs.xzww
+     mad_pp r2.xzw, r4.xyyz, r4.xyyz, r2
+     mul_pp r1.x, r1.z, c89.x
+-    texld_pp r4, v0, s3
++    texld_pp r4, r28, s3 // FusionFix sky_planar_clouds.patch
+     texld_pp r5, v2.zwzw, s4
+     add_pp r1.z, r5.x, -c1.y
+     mul_pp r1.w, r1.z, c79.w
+@@ -182,14 +198,14 @@
+     pow r4.y, r3.x, c79.x
+     mul_sat r3.x, r3.x, c79.y
+     mul_pp r3.z, r4.y, r3.x
+-    texld_pp r5, v2, s3
+-    mul r5.yz, c79.z, v2.xxyw
++    texld_pp r5, r29, s3 // FusionFix sky_planar_clouds.patch
++    mul r5.yz, c79.z, r29.xxyw // FusionFix sky_planar_clouds.patch
+     texld r6, r5.yzzw, s4
+     mul r4.w, r6.x, c79.w
+     mad_pp r4.w, r4.w, c3.x, r5.x
+     mad r4.x, r4.x, r4.w, -c73.x
+     mul_sat_pp r4.x, r4.x, c77.x
+-    texld_pp r5, v4, s3
++    texld_pp r5, r30, s3 // FusionFix sky_planar_clouds.patch
+     mad_pp r1.w, r1.w, c75.y, r5.y
+     mad_sat r1.w, c75.z, r1.w, -c75.x
+     mul_pp r1.w, r1.w, v4.z
+diff --git a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS8.asm b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS8.asm
+index 4959dd39..42b0e76d 100644
+--- a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS8.asm
++++ b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS8.asm
+@@ -64,6 +64,8 @@
+ //
+ 
+     ps_3_0
++    def c154, 1.20000000, 0.20000000, -0.5, 1 // FusionFix sky_planar_clouds.patch: 1 + k, k, minus a half, one
++    def c155, 0, 9.99999975e-006, 0, 0 // FusionFix sky_planar_clouds.patch: zero, tiny
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 9.1084400181e-44 // 65
+     def c151, 1.57072878, -0.212114394, 0.0742610022, -0.0187292993 // FusionFix sky_pbr.patch: acos cubic
+     def c152, 1, -0.636619747, 0.5, -0.5 // FusionFix sky_pbr.patch: one, -2 / pi, a half
+@@ -90,6 +92,20 @@
+     dcl_2d s2
+     dcl_2d s3
+     dcl_2d s10 // FusionFix sky_pbr.patch: the PBR sky's SkyView table
++    // --- FusionFix sky_planar_clouds.patch: the clouds' coordinates as a flat deck's: r28 v0, r29 v2.xy, r30 v4.xy
++    add r27.xyz, v1, c155.y
++    nrm r28.xyz, r27
++    max r27.x, r28.y, c155.x
++    add r27.x, r27.x, c154.y
++    rcp r27.x, r27.x
++    mad r27.x, r27.x, c154.x, -c154.w // (1 + k) / (y + k) - 1
++    add r27.yz, v0.xxyy, c154.z
++    mul r27.yz, r27, r27.x // (v0 - 0.5) times that
++    add r28.xy, v0, r27.yzzw
++    add r29.xy, v2, r27.yzzw
++    mul r27.yz, r27, c74.w // the high layer is laid out TopCloudBiasDetailThresholdHeight.w times larger
++    add r30.xy, v4, r27.yzzw
++    // --- FusionFix sky_planar_clouds.patch end
+     
+     mul r20.w, c44.x, c44.w
+     add r20.w, r20.w, -c142.y
+@@ -200,16 +216,16 @@
+     add_pp r0.xyz, r0, r1
+     mad r0.w, r3.y, c0.z, c0.w
+     mul_pp r1.x, r3.y, r3.y
+-    mul r1.yz, c78.z, v2.xxyw
++    mul r1.yz, c78.z, r29.xxyw // FusionFix sky_planar_clouds.patch
+     texld r3, r1.yzzw, s3
+     mul r1.y, r3.x, c78.w
+-    texld_pp r3, v2, s2
++    texld_pp r3, r29, s2 // FusionFix sky_planar_clouds.patch
+     mad_pp r1.y, r1.y, c0.x, r3.x
+     mov r2.x, c71.x
+     mad r1.y, r2.x, r1.y, -c72.x
+     mul_sat_pp r1.y, r1.y, c76.x
+     add r1.z, -r1.y, c1.y
+-    texld_pp r3, v0, s2
++    texld_pp r3, r28, s2 // FusionFix sky_planar_clouds.patch
+     texld_pp r4, v2.zwzw, s3
+     add_pp r2.z, r4.x, -c2.y
+     mad_pp r2.w, r2.z, c78.w, r3.x
+@@ -229,7 +245,7 @@
+     mad_pp r1.x, r1.x, c77.x, r2.y
+     mad r1.xyz, r1.x, c69, -r1.y
+     mad_pp r1.xyz, c70, r0.w, r1
+-    texld_pp r3, v4, s2
++    texld_pp r3, r30, s2 // FusionFix sky_planar_clouds.patch
+     mad_pp r0.w, r2.z, c74.y, r3.y
+     mad_sat r0.w, c74.z, r0.w, -c74.x
+     mul_pp r0.w, r0.w, v4.z
+diff --git a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS9.asm b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS9.asm
+index 626f72d2..881d854d 100644
+--- a/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS9.asm
++++ b/win32_30_nv8/gta_atmoscatt_clouds/gta_atmoscatt_cloudsPS9.asm
+@@ -82,6 +82,8 @@
+ //
+ 
+     ps_3_0
++    def c154, 1.20000000, 0.20000000, -0.5, 1 // FusionFix sky_planar_clouds.patch: 1 + k, k, minus a half, one
++    def c155, 0, 9.99999975e-006, 0, 0 // FusionFix sky_planar_clouds.patch: zero, tiny
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 9.2485698645e-44 // 66
+     def c151, 1.57072878, -0.212114394, 0.0742610022, -0.0187292993 // FusionFix sky_pbr.patch: acos cubic
+     def c152, 1, -0.636619747, 0.5, -0.5 // FusionFix sky_pbr.patch: one, -2 / pi, a half
+@@ -112,6 +114,20 @@
+     dcl_2d s4
+     dcl_2d s5
+     dcl_2d s10 // FusionFix sky_pbr.patch: the PBR sky's SkyView table
++    // --- FusionFix sky_planar_clouds.patch: the clouds' coordinates as a flat deck's: r28 v0, r29 v2.xy, r30 v4.xy
++    add r27.xyz, v1, c155.y
++    nrm r28.xyz, r27
++    max r27.x, r28.y, c155.x
++    add r27.x, r27.x, c154.y
++    rcp r27.x, r27.x
++    mad r27.x, r27.x, c154.x, -c154.w // (1 + k) / (y + k) - 1
++    add r27.yz, v0.xxyy, c154.z
++    mul r27.yz, r27, r27.x // (v0 - 0.5) times that
++    add r28.xy, v0, r27.yzzw
++    add r29.xy, v2, r27.yzzw
++    mul r27.yz, r27, c75.w // the high layer is laid out TopCloudBiasDetailThresholdHeight.w times larger
++    add r30.xy, v4, r27.yzzw
++    // --- FusionFix sky_planar_clouds.patch end
+     
+     mul r20.w, c44.x, c44.w
+     add r20.w, r20.w, -c142.y
+@@ -175,7 +191,7 @@
+     mul r4.xyz, r2_abs.xzww, r2_abs.xzww
+     mad_pp r2.xzw, r4.xyyz, r4.xyyz, r2
+     mul_pp r1.x, r1.z, c89.x
+-    texld_pp r4, v0, s4
++    texld_pp r4, r28, s4 // FusionFix sky_planar_clouds.patch
+     texld_pp r5, v2.zwzw, s5
+     add_pp r1.z, r5.x, -c1.y
+     mul_pp r1.w, r1.z, c79.w
+@@ -185,14 +201,14 @@
+     pow r4.y, r3.x, c79.x
+     mul_sat r3.x, r3.x, c79.y
+     mul_pp r3.z, r4.y, r3.x
+-    texld_pp r5, v2, s4
+-    mul r5.yz, c79.z, v2.xxyw
++    texld_pp r5, r29, s4 // FusionFix sky_planar_clouds.patch
++    mul r5.yz, c79.z, r29.xxyw // FusionFix sky_planar_clouds.patch
+     texld r6, r5.yzzw, s5
+     mul r4.w, r6.x, c79.w
+     mad_pp r4.w, r4.w, c3.x, r5.x
+     mad r4.x, r4.x, r4.w, -c73.x
+     mul_sat_pp r4.x, r4.x, c77.x
+-    texld_pp r5, v4, s4
++    texld_pp r5, r30, s4 // FusionFix sky_planar_clouds.patch
+     mad_pp r1.w, r1.w, c75.y, r5.y
+     mad_sat r1.w, c75.z, r1.w, -c75.x
+     mul_pp r1.w, r1.w, v4.z

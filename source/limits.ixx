@@ -70,7 +70,7 @@ public:
                 pattern.for_each_result([&](hook::pattern_match match)
                 {
                     auto xref = match.get<uint32_t>();
-                    if (*xref == ptr)
+                    if (*xref == ptr && IsRelocatedDword(xref))
                     {
                         if (v < max_array_offset)
                             injector::AdjustPointer(xref, m_array, m_startAddress, ptr);
@@ -163,6 +163,9 @@ public:
                 poolNames.push_back("Dummy Object");
                 poolNames.push_back("EntryInfoNodes");
                 poolNames.push_back("PtrNode Double");
+
+                // Physics instances of buildings and objects (4760): CE 0xa322a0 does not check the pool and crashes on a full one
+                poolNames.push_back("phInstGta");
             }
 
             if (nVehicleBudget)
@@ -480,7 +483,8 @@ public:
                 auto newEnd = uintptr_t(WeaponInfo.GetNewArrayPointer() + 0x110 * WeaponInfo.GetNewElementsCount() + 0x24);
                 hook::pattern("81 ? " + pattern_str(to_bytes(oldEnd)) + "7C").for_each_result([&](hook::pattern_match match)
                 {
-                    injector::WriteMemory(match.get<void>(2), newEnd, true);
+                    if (IsRelocatedDword(match.get<void>(2)))
+                        injector::WriteMemory(match.get<void>(2), newEnd, true);
                 });
 
                 pattern = hook::pattern("8B 44 24 04 83 F8 3C 7D ? 69 C0 10 01 00 00 05");

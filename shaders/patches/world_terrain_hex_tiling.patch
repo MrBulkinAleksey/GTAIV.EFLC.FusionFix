@@ -1,0 +1,1090 @@
+diff --git a/win32_30_nv8/gta_default/gta_defaultPS3.asm b/win32_30_nv8/gta_default/gta_defaultPS3.asm
+index 37ea8d05..d27ac672 100644
+--- a/win32_30_nv8/gta_default/gta_defaultPS3.asm
++++ b/win32_30_nv8/gta_default/gta_defaultPS3.asm
+@@ -21,6 +21,8 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.1019476965e-43 // 150
++    def c197, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix world_terrain_hex_tiling.patch: the hash
++    def c198, 3.46410155, -0.577350259, 1.15470052, 0 // FusionFix world_terrain_hex_tiling.patch: the hexagonal lattice: cells per repeat, the skew
+     def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
+     def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
+     def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
+@@ -307,9 +309,6 @@
+       mul r5.xy, v5, c167.x
+       mov r5.w, c167.z
+       texldb r5, r5, s12
+-      mul r6.xy, v5, c167.y
+-      mov r6.w, c167.z
+-      texldb r6, r6, s12
+       mov r7.xy, r23
+       mov r7.zw, c184.x
+       texldl r7, r7, s0 // the texture's average colour
+@@ -323,19 +322,73 @@
+       mul r8.z, r8.z, r8.x
+       add r8.z, r8.z, -c184.y
+       mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.z, r8.z, c179.x // FusionFix world_terrain_hex_tiling.patch: and how evenly it tiles (texturequality.ixx)
+       mul r8.w, r8.z, r4.w
+-      add r9.xy, r23, c186
+-      texld r9, r9, s0
+-      dp3 r10.x, r0, c188
+-      dp3 r10.y, r9, c188
+-      add r10.z, r10.y, -r10.x
+-      add r10.w, r6.z, -c187.z
+-      mul r10.w, r10.w, c166.w
+-      mad r10.z, r10.z, c187.w, r10.w
+-      add_sat r10.z, r10.z, c187.z
+-      mul r10.z, r10.z, c166.z
+-      mul r10.z, r10.z, r8.w
+-      lrp r11.xyz, r10.z, r9, r0
++      dsx r14.xy, r23.xyxy
++      dsy r17.xy, r23.xyxy
++      mov r11.xyz, r0
++      mul r9.w, r8.w, c166.z
++      if_gt r9.w, c187.x
++        // The lattice, skewed so that its cells are hexagons, and the triangle of three vertices around this pixel
++        mul r9.xy, r23, c198.x
++        mad r9.x, r9.y, c198.y, r9.x
++        mul r9.y, r9.y, c198.z
++        frc r10.xy, r9
++        add r9.xy, r9, -r10
++        add r10.z, r10.x, -r10.y
++        add r12.xy, -r10, c187.y
++        cmp r13.x, r10.z, r12.x, r12.y
++        abs r13.y, r10.z
++        cmp r13.z, r10.z, r10.y, r10.x
++        cmp r12.xy, r10.z, c187.yxxx, c187.xyyy
++        add r12.xy, r9, r12
++        add r12.zw, r9.xyxy, c187.y
++        mul r13.xyz, r13, r13
++        mul r13.xyz, r13, r13 // weights to the fourth: sharper towards the nearest vertex
++        dp3 r13.w, r13, c187.y
++        rcp r13.w, r13.w
++        mul r13.xyz, r13, r13.w
++        // Each vertex's own random shift of the texture
++        mul r10.xyz, r9.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mul r18.xyz, r15, r13.x
++        mul r10.xyz, r12.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.y, r18
++        mul r10.xyz, r12.zwzw, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.z, r18
++        // The texture's contrast kept: its average (r7) plus the blend's departure from it over sqrt(sum w^2)
++        dp3 r13.w, r13, r13
++        rsq r13.w, r13.w
++        add r18.xyz, r18, -r7
++        mad_sat r18.xyz, r18, r13.w, r7
++        lrp r11.xyz, r9.w, r18, r0
++      endif
+       mov r22.xy, r23
+       mov r22.w, c171.w
+       texldb r22, r22, s0 // the texture's local average
+diff --git a/win32_30_nv8/gta_default/gta_defaultPS4.asm b/win32_30_nv8/gta_default/gta_defaultPS4.asm
+index 5f3db10c..b59b7615 100644
+--- a/win32_30_nv8/gta_default/gta_defaultPS4.asm
++++ b/win32_30_nv8/gta_default/gta_defaultPS4.asm
+@@ -21,6 +21,8 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 2.1159606811e-43 // 151
++    def c197, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix world_terrain_hex_tiling.patch: the hash
++    def c198, 3.46410155, -0.577350259, 1.15470052, 0 // FusionFix world_terrain_hex_tiling.patch: the hexagonal lattice: cells per repeat, the skew
+     def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
+     def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
+     def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
+@@ -305,9 +307,6 @@
+       mul r5.xy, v5, c167.x
+       mov r5.w, c167.z
+       texldb r5, r5, s12
+-      mul r6.xy, v5, c167.y
+-      mov r6.w, c167.z
+-      texldb r6, r6, s12
+       mov r7.xy, r23
+       mov r7.zw, c184.x
+       texldl r7, r7, s0 // the texture's average colour
+@@ -321,19 +320,73 @@
+       mul r8.z, r8.z, r8.x
+       add r8.z, r8.z, -c184.y
+       mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.z, r8.z, c179.x // FusionFix world_terrain_hex_tiling.patch: and how evenly it tiles (texturequality.ixx)
+       mul r8.w, r8.z, r4.w
+-      add r9.xy, r23, c186
+-      texld r9, r9, s0
+-      dp3 r10.x, r0, c188
+-      dp3 r10.y, r9, c188
+-      add r10.z, r10.y, -r10.x
+-      add r10.w, r6.z, -c187.z
+-      mul r10.w, r10.w, c166.w
+-      mad r10.z, r10.z, c187.w, r10.w
+-      add_sat r10.z, r10.z, c187.z
+-      mul r10.z, r10.z, c166.z
+-      mul r10.z, r10.z, r8.w
+-      lrp r11.xyz, r10.z, r9, r0
++      dsx r14.xy, r23.xyxy
++      dsy r17.xy, r23.xyxy
++      mov r11.xyz, r0
++      mul r9.w, r8.w, c166.z
++      if_gt r9.w, c187.x
++        // The lattice, skewed so that its cells are hexagons, and the triangle of three vertices around this pixel
++        mul r9.xy, r23, c198.x
++        mad r9.x, r9.y, c198.y, r9.x
++        mul r9.y, r9.y, c198.z
++        frc r10.xy, r9
++        add r9.xy, r9, -r10
++        add r10.z, r10.x, -r10.y
++        add r12.xy, -r10, c187.y
++        cmp r13.x, r10.z, r12.x, r12.y
++        abs r13.y, r10.z
++        cmp r13.z, r10.z, r10.y, r10.x
++        cmp r12.xy, r10.z, c187.yxxx, c187.xyyy
++        add r12.xy, r9, r12
++        add r12.zw, r9.xyxy, c187.y
++        mul r13.xyz, r13, r13
++        mul r13.xyz, r13, r13 // weights to the fourth: sharper towards the nearest vertex
++        dp3 r13.w, r13, c187.y
++        rcp r13.w, r13.w
++        mul r13.xyz, r13, r13.w
++        // Each vertex's own random shift of the texture
++        mul r10.xyz, r9.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mul r18.xyz, r15, r13.x
++        mul r10.xyz, r12.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.y, r18
++        mul r10.xyz, r12.zwzw, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.z, r18
++        // The texture's contrast kept: its average (r7) plus the blend's departure from it over sqrt(sum w^2)
++        dp3 r13.w, r13, r13
++        rsq r13.w, r13.w
++        add r18.xyz, r18, -r7
++        mad_sat r18.xyz, r18, r13.w, r7
++        lrp r11.xyz, r9.w, r18, r0
++      endif
+       mov r22.xy, r23
+       mov r22.w, c171.w
+       texldb r22, r22, s0 // the texture's local average
+diff --git a/win32_30_nv8/gta_normal/gta_normalPS3.asm b/win32_30_nv8/gta_normal/gta_normalPS3.asm
+index ab1f51f6..8ff9655c 100644
+--- a/win32_30_nv8/gta_normal/gta_normalPS3.asm
++++ b/win32_30_nv8/gta_normal/gta_normalPS3.asm
+@@ -27,6 +27,8 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.9835444427e-43 // 427
++    def c197, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix world_terrain_hex_tiling.patch: the hash
++    def c198, 3.46410155, -0.577350259, 1.15470052, 0 // FusionFix world_terrain_hex_tiling.patch: the hexagonal lattice: cells per repeat, the skew
+     def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
+     def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
+     def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
+@@ -144,9 +146,6 @@
+       mul r5.xy, v5, c167.x
+       mov r5.w, c167.z
+       texldb r5, r5, s12
+-      mul r6.xy, v5, c167.y
+-      mov r6.w, c167.z
+-      texldb r6, r6, s12
+       mov r7.xy, v0
+       mov r7.zw, c184.x
+       texldl r7, r7, s0 // the texture's average colour
+@@ -160,19 +159,73 @@
+       mul r8.z, r8.z, r8.x
+       add r8.z, r8.z, -c184.y
+       mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.z, r8.z, c179.x // FusionFix world_terrain_hex_tiling.patch: and how evenly it tiles (texturequality.ixx)
+       mul r8.w, r8.z, r4.w
+-      add r9.xy, v0, c186
+-      texld r9, r9, s0
+-      dp3 r10.x, r0, c188
+-      dp3 r10.y, r9, c188
+-      add r10.z, r10.y, -r10.x
+-      add r10.w, r6.z, -c187.z
+-      mul r10.w, r10.w, c166.w
+-      mad r10.z, r10.z, c187.w, r10.w
+-      add_sat r10.z, r10.z, c187.z
+-      mul r10.z, r10.z, c166.z
+-      mul r10.z, r10.z, r8.w
+-      lrp r11.xyz, r10.z, r9, r0
++      dsx r14.xy, v0.xyxy
++      dsy r17.xy, v0.xyxy
++      mov r11.xyz, r0
++      mul r9.w, r8.w, c166.z
++      if_gt r9.w, c187.x
++        // The lattice, skewed so that its cells are hexagons, and the triangle of three vertices around this pixel
++        mul r9.xy, v0, c198.x
++        mad r9.x, r9.y, c198.y, r9.x
++        mul r9.y, r9.y, c198.z
++        frc r10.xy, r9
++        add r9.xy, r9, -r10
++        add r10.z, r10.x, -r10.y
++        add r12.xy, -r10, c187.y
++        cmp r13.x, r10.z, r12.x, r12.y
++        abs r13.y, r10.z
++        cmp r13.z, r10.z, r10.y, r10.x
++        cmp r12.xy, r10.z, c187.yxxx, c187.xyyy
++        add r12.xy, r9, r12
++        add r12.zw, r9.xyxy, c187.y
++        mul r13.xyz, r13, r13
++        mul r13.xyz, r13, r13 // weights to the fourth: sharper towards the nearest vertex
++        dp3 r13.w, r13, c187.y
++        rcp r13.w, r13.w
++        mul r13.xyz, r13, r13.w
++        // Each vertex's own random shift of the texture
++        mul r10.xyz, r9.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, v0, r10
++        texldd r15, r10, s0, r14, r17
++        mul r18.xyz, r15, r13.x
++        mul r10.xyz, r12.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, v0, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.y, r18
++        mul r10.xyz, r12.zwzw, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, v0, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.z, r18
++        // The texture's contrast kept: its average (r7) plus the blend's departure from it over sqrt(sum w^2)
++        dp3 r13.w, r13, r13
++        rsq r13.w, r13.w
++        add r18.xyz, r18, -r7
++        mad_sat r18.xyz, r18, r13.w, r7
++        lrp r11.xyz, r9.w, r18, r0
++      endif
+       mov r22.xy, v0
+       mov r22.w, c171.w
+       texldb r22, r22, s0 // the texture's local average
+diff --git a/win32_30_nv8/gta_normal/gta_normalPS4.asm b/win32_30_nv8/gta_normal/gta_normalPS4.asm
+index 13744f54..1e2a9f55 100644
+--- a/win32_30_nv8/gta_normal/gta_normalPS4.asm
++++ b/win32_30_nv8/gta_normal/gta_normalPS4.asm
+@@ -29,6 +29,8 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.9975574273e-43 // 428
++    def c197, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix world_terrain_hex_tiling.patch: the hash
++    def c198, 3.46410155, -0.577350259, 1.15470052, 0 // FusionFix world_terrain_hex_tiling.patch: the hexagonal lattice: cells per repeat, the skew
+     def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
+     def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
+     def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
+@@ -149,9 +151,6 @@
+       mul r5.xy, v5, c167.x
+       mov r5.w, c167.z
+       texldb r5, r5, s12
+-      mul r6.xy, v5, c167.y
+-      mov r6.w, c167.z
+-      texldb r6, r6, s12
+       mov r7.xy, v0
+       mov r7.zw, c184.x
+       texldl r7, r7, s0 // the texture's average colour
+@@ -165,19 +164,73 @@
+       mul r8.z, r8.z, r8.x
+       add r8.z, r8.z, -c184.y
+       mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.z, r8.z, c179.x // FusionFix world_terrain_hex_tiling.patch: and how evenly it tiles (texturequality.ixx)
+       mul r8.w, r8.z, r4.w
+-      add r9.xy, v0, c186
+-      texld r9, r9, s0
+-      dp3 r10.x, r1, c188
+-      dp3 r10.y, r9, c188
+-      add r10.z, r10.y, -r10.x
+-      add r10.w, r6.z, -c187.z
+-      mul r10.w, r10.w, c166.w
+-      mad r10.z, r10.z, c187.w, r10.w
+-      add_sat r10.z, r10.z, c187.z
+-      mul r10.z, r10.z, c166.z
+-      mul r10.z, r10.z, r8.w
+-      lrp r11.xyz, r10.z, r9, r1
++      dsx r14.xy, v0.xyxy
++      dsy r17.xy, v0.xyxy
++      mov r11.xyz, r1
++      mul r9.w, r8.w, c166.z
++      if_gt r9.w, c187.x
++        // The lattice, skewed so that its cells are hexagons, and the triangle of three vertices around this pixel
++        mul r9.xy, v0, c198.x
++        mad r9.x, r9.y, c198.y, r9.x
++        mul r9.y, r9.y, c198.z
++        frc r10.xy, r9
++        add r9.xy, r9, -r10
++        add r10.z, r10.x, -r10.y
++        add r12.xy, -r10, c187.y
++        cmp r13.x, r10.z, r12.x, r12.y
++        abs r13.y, r10.z
++        cmp r13.z, r10.z, r10.y, r10.x
++        cmp r12.xy, r10.z, c187.yxxx, c187.xyyy
++        add r12.xy, r9, r12
++        add r12.zw, r9.xyxy, c187.y
++        mul r13.xyz, r13, r13
++        mul r13.xyz, r13, r13 // weights to the fourth: sharper towards the nearest vertex
++        dp3 r13.w, r13, c187.y
++        rcp r13.w, r13.w
++        mul r13.xyz, r13, r13.w
++        // Each vertex's own random shift of the texture
++        mul r10.xyz, r9.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, v0, r10
++        texldd r15, r10, s0, r14, r17
++        mul r18.xyz, r15, r13.x
++        mul r10.xyz, r12.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, v0, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.y, r18
++        mul r10.xyz, r12.zwzw, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, v0, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.z, r18
++        // The texture's contrast kept: its average (r7) plus the blend's departure from it over sqrt(sum w^2)
++        dp3 r13.w, r13, r13
++        rsq r13.w, r13.w
++        add r18.xyz, r18, -r7
++        mad_sat r18.xyz, r18, r13.w, r7
++        lrp r11.xyz, r9.w, r18, r1
++      endif
+       mov r22.xy, v0
+       mov r22.w, c171.w
+       texldb r22, r22, s0 // the texture's local average
+diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
+index 67e8364b..fd1e5dbe 100644
+--- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
++++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS3.asm
+@@ -31,6 +31,8 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.8153886269e-43 // 415
++    def c197, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix world_terrain_hex_tiling.patch: the hash
++    def c198, 3.46410155, -0.577350259, 1.15470052, 0 // FusionFix world_terrain_hex_tiling.patch: the hexagonal lattice: cells per repeat, the skew
+     def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
+     def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
+     def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
+@@ -149,9 +151,6 @@
+       mul r5.xy, v5, c167.x
+       mov r5.w, c167.z
+       texldb r5, r5, s12
+-      mul r6.xy, v5, c167.y
+-      mov r6.w, c167.z
+-      texldb r6, r6, s12
+       mov r7.xy, v0
+       mov r7.zw, c184.x
+       texldl r7, r7, s0 // the texture's average colour
+@@ -165,19 +164,73 @@
+       mul r8.z, r8.z, r8.x
+       add r8.z, r8.z, -c184.y
+       mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.z, r8.z, c179.x // FusionFix world_terrain_hex_tiling.patch: and how evenly it tiles (texturequality.ixx)
+       mul r8.w, r8.z, r4.w
+-      add r9.xy, v0, c186
+-      texld r9, r9, s0
+-      dp3 r10.x, r0, c188
+-      dp3 r10.y, r9, c188
+-      add r10.z, r10.y, -r10.x
+-      add r10.w, r6.z, -c187.z
+-      mul r10.w, r10.w, c166.w
+-      mad r10.z, r10.z, c187.w, r10.w
+-      add_sat r10.z, r10.z, c187.z
+-      mul r10.z, r10.z, c166.z
+-      mul r10.z, r10.z, r8.w
+-      lrp r11.xyz, r10.z, r9, r0
++      dsx r14.xy, v0.xyxy
++      dsy r17.xy, v0.xyxy
++      mov r11.xyz, r0
++      mul r9.w, r8.w, c166.z
++      if_gt r9.w, c187.x
++        // The lattice, skewed so that its cells are hexagons, and the triangle of three vertices around this pixel
++        mul r9.xy, v0, c198.x
++        mad r9.x, r9.y, c198.y, r9.x
++        mul r9.y, r9.y, c198.z
++        frc r10.xy, r9
++        add r9.xy, r9, -r10
++        add r10.z, r10.x, -r10.y
++        add r12.xy, -r10, c187.y
++        cmp r13.x, r10.z, r12.x, r12.y
++        abs r13.y, r10.z
++        cmp r13.z, r10.z, r10.y, r10.x
++        cmp r12.xy, r10.z, c187.yxxx, c187.xyyy
++        add r12.xy, r9, r12
++        add r12.zw, r9.xyxy, c187.y
++        mul r13.xyz, r13, r13
++        mul r13.xyz, r13, r13 // weights to the fourth: sharper towards the nearest vertex
++        dp3 r13.w, r13, c187.y
++        rcp r13.w, r13.w
++        mul r13.xyz, r13, r13.w
++        // Each vertex's own random shift of the texture
++        mul r10.xyz, r9.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, v0, r10
++        texldd r15, r10, s0, r14, r17
++        mul r18.xyz, r15, r13.x
++        mul r10.xyz, r12.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, v0, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.y, r18
++        mul r10.xyz, r12.zwzw, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, v0, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.z, r18
++        // The texture's contrast kept: its average (r7) plus the blend's departure from it over sqrt(sum w^2)
++        dp3 r13.w, r13, r13
++        rsq r13.w, r13.w
++        add r18.xyz, r18, -r7
++        mad_sat r18.xyz, r18, r13.w, r7
++        lrp r11.xyz, r9.w, r18, r0
++      endif
+       mov r22.xy, v0
+       mov r22.w, c171.w
+       texldb r22, r22, s0 // the texture's local average
+diff --git a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
+index 28fe3455..cb0cd0ab 100644
+--- a/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
++++ b/win32_30_nv8/gta_normal_spec/gta_normal_specPS4.asm
+@@ -33,6 +33,8 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 5.8294016116e-43 // 416
++    def c197, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix world_terrain_hex_tiling.patch: the hash
++    def c198, 3.46410155, -0.577350259, 1.15470052, 0 // FusionFix world_terrain_hex_tiling.patch: the hexagonal lattice: cells per repeat, the skew
+     def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
+     def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
+     def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
+@@ -154,9 +156,6 @@
+       mul r5.xy, v5, c167.x
+       mov r5.w, c167.z
+       texldb r5, r5, s12
+-      mul r6.xy, v5, c167.y
+-      mov r6.w, c167.z
+-      texldb r6, r6, s12
+       mov r7.xy, v0
+       mov r7.zw, c184.x
+       texldl r7, r7, s0 // the texture's average colour
+@@ -170,19 +169,73 @@
+       mul r8.z, r8.z, r8.x
+       add r8.z, r8.z, -c184.y
+       mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.z, r8.z, c179.x // FusionFix world_terrain_hex_tiling.patch: and how evenly it tiles (texturequality.ixx)
+       mul r8.w, r8.z, r4.w
+-      add r9.xy, v0, c186
+-      texld r9, r9, s0
+-      dp3 r10.x, r1, c188
+-      dp3 r10.y, r9, c188
+-      add r10.z, r10.y, -r10.x
+-      add r10.w, r6.z, -c187.z
+-      mul r10.w, r10.w, c166.w
+-      mad r10.z, r10.z, c187.w, r10.w
+-      add_sat r10.z, r10.z, c187.z
+-      mul r10.z, r10.z, c166.z
+-      mul r10.z, r10.z, r8.w
+-      lrp r11.xyz, r10.z, r9, r1
++      dsx r14.xy, v0.xyxy
++      dsy r17.xy, v0.xyxy
++      mov r11.xyz, r1
++      mul r9.w, r8.w, c166.z
++      if_gt r9.w, c187.x
++        // The lattice, skewed so that its cells are hexagons, and the triangle of three vertices around this pixel
++        mul r9.xy, v0, c198.x
++        mad r9.x, r9.y, c198.y, r9.x
++        mul r9.y, r9.y, c198.z
++        frc r10.xy, r9
++        add r9.xy, r9, -r10
++        add r10.z, r10.x, -r10.y
++        add r12.xy, -r10, c187.y
++        cmp r13.x, r10.z, r12.x, r12.y
++        abs r13.y, r10.z
++        cmp r13.z, r10.z, r10.y, r10.x
++        cmp r12.xy, r10.z, c187.yxxx, c187.xyyy
++        add r12.xy, r9, r12
++        add r12.zw, r9.xyxy, c187.y
++        mul r13.xyz, r13, r13
++        mul r13.xyz, r13, r13 // weights to the fourth: sharper towards the nearest vertex
++        dp3 r13.w, r13, c187.y
++        rcp r13.w, r13.w
++        mul r13.xyz, r13, r13.w
++        // Each vertex's own random shift of the texture
++        mul r10.xyz, r9.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, v0, r10
++        texldd r15, r10, s0, r14, r17
++        mul r18.xyz, r15, r13.x
++        mul r10.xyz, r12.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, v0, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.y, r18
++        mul r10.xyz, r12.zwzw, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, v0, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.z, r18
++        // The texture's contrast kept: its average (r7) plus the blend's departure from it over sqrt(sum w^2)
++        dp3 r13.w, r13, r13
++        rsq r13.w, r13.w
++        add r18.xyz, r18, -r7
++        mad_sat r18.xyz, r18, r13.w, r7
++        lrp r11.xyz, r9.w, r18, r1
++      endif
+       mov r22.xy, v0
+       mov r22.w, c171.w
+       texldb r22, r22, s0 // the texture's local average
+diff --git a/win32_30_nv8/gta_spec/gta_specPS3.asm b/win32_30_nv8/gta_spec/gta_specPS3.asm
+index c70b59be..1631df9e 100644
+--- a/win32_30_nv8/gta_spec/gta_specPS3.asm
++++ b/win32_30_nv8/gta_spec/gta_specPS3.asm
+@@ -27,6 +27,8 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.2676609395e-43 // 590
++    def c197, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix world_terrain_hex_tiling.patch: the hash
++    def c198, 3.46410155, -0.577350259, 1.15470052, 0 // FusionFix world_terrain_hex_tiling.patch: the hexagonal lattice: cells per repeat, the skew
+     def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
+     def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
+     def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
+@@ -312,9 +314,6 @@
+       mul r5.xy, v5, c167.x
+       mov r5.w, c167.z
+       texldb r5, r5, s12
+-      mul r6.xy, v5, c167.y
+-      mov r6.w, c167.z
+-      texldb r6, r6, s12
+       mov r7.xy, r23
+       mov r7.zw, c184.x
+       texldl r7, r7, s0 // the texture's average colour
+@@ -328,19 +327,73 @@
+       mul r8.z, r8.z, r8.x
+       add r8.z, r8.z, -c184.y
+       mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.z, r8.z, c179.x // FusionFix world_terrain_hex_tiling.patch: and how evenly it tiles (texturequality.ixx)
+       mul r8.w, r8.z, r4.w
+-      add r9.xy, r23, c186
+-      texld r9, r9, s0
+-      dp3 r10.x, r0, c188
+-      dp3 r10.y, r9, c188
+-      add r10.z, r10.y, -r10.x
+-      add r10.w, r6.z, -c187.z
+-      mul r10.w, r10.w, c166.w
+-      mad r10.z, r10.z, c187.w, r10.w
+-      add_sat r10.z, r10.z, c187.z
+-      mul r10.z, r10.z, c166.z
+-      mul r10.z, r10.z, r8.w
+-      lrp r11.xyz, r10.z, r9, r0
++      dsx r14.xy, r23.xyxy
++      dsy r17.xy, r23.xyxy
++      mov r11.xyz, r0
++      mul r9.w, r8.w, c166.z
++      if_gt r9.w, c187.x
++        // The lattice, skewed so that its cells are hexagons, and the triangle of three vertices around this pixel
++        mul r9.xy, r23, c198.x
++        mad r9.x, r9.y, c198.y, r9.x
++        mul r9.y, r9.y, c198.z
++        frc r10.xy, r9
++        add r9.xy, r9, -r10
++        add r10.z, r10.x, -r10.y
++        add r12.xy, -r10, c187.y
++        cmp r13.x, r10.z, r12.x, r12.y
++        abs r13.y, r10.z
++        cmp r13.z, r10.z, r10.y, r10.x
++        cmp r12.xy, r10.z, c187.yxxx, c187.xyyy
++        add r12.xy, r9, r12
++        add r12.zw, r9.xyxy, c187.y
++        mul r13.xyz, r13, r13
++        mul r13.xyz, r13, r13 // weights to the fourth: sharper towards the nearest vertex
++        dp3 r13.w, r13, c187.y
++        rcp r13.w, r13.w
++        mul r13.xyz, r13, r13.w
++        // Each vertex's own random shift of the texture
++        mul r10.xyz, r9.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mul r18.xyz, r15, r13.x
++        mul r10.xyz, r12.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.y, r18
++        mul r10.xyz, r12.zwzw, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.z, r18
++        // The texture's contrast kept: its average (r7) plus the blend's departure from it over sqrt(sum w^2)
++        dp3 r13.w, r13, r13
++        rsq r13.w, r13.w
++        add r18.xyz, r18, -r7
++        mad_sat r18.xyz, r18, r13.w, r7
++        lrp r11.xyz, r9.w, r18, r0
++      endif
+       mov r22.xy, r23
+       mov r22.w, c171.w
+       texldb r22, r22, s0 // the texture's local average
+diff --git a/win32_30_nv8/gta_spec/gta_specPS4.asm b/win32_30_nv8/gta_spec/gta_specPS4.asm
+index 9dc97311..4017ebb9 100644
+--- a/win32_30_nv8/gta_spec/gta_specPS4.asm
++++ b/win32_30_nv8/gta_spec/gta_specPS4.asm
+@@ -29,6 +29,8 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 8.2816739242e-43 // 591
++    def c197, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix world_terrain_hex_tiling.patch: the hash
++    def c198, 3.46410155, -0.577350259, 1.15470052, 0 // FusionFix world_terrain_hex_tiling.patch: the hexagonal lattice: cells per repeat, the skew
+     def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
+     def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
+     def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
+@@ -313,9 +315,6 @@
+       mul r5.xy, v5, c167.x
+       mov r5.w, c167.z
+       texldb r5, r5, s12
+-      mul r6.xy, v5, c167.y
+-      mov r6.w, c167.z
+-      texldb r6, r6, s12
+       mov r7.xy, r23
+       mov r7.zw, c184.x
+       texldl r7, r7, s0 // the texture's average colour
+@@ -329,19 +328,73 @@
+       mul r8.z, r8.z, r8.x
+       add r8.z, r8.z, -c184.y
+       mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.z, r8.z, c179.x // FusionFix world_terrain_hex_tiling.patch: and how evenly it tiles (texturequality.ixx)
+       mul r8.w, r8.z, r4.w
+-      add r9.xy, r23, c186
+-      texld r9, r9, s0
+-      dp3 r10.x, r0, c188
+-      dp3 r10.y, r9, c188
+-      add r10.z, r10.y, -r10.x
+-      add r10.w, r6.z, -c187.z
+-      mul r10.w, r10.w, c166.w
+-      mad r10.z, r10.z, c187.w, r10.w
+-      add_sat r10.z, r10.z, c187.z
+-      mul r10.z, r10.z, c166.z
+-      mul r10.z, r10.z, r8.w
+-      lrp r11.xyz, r10.z, r9, r0
++      dsx r14.xy, r23.xyxy
++      dsy r17.xy, r23.xyxy
++      mov r11.xyz, r0
++      mul r9.w, r8.w, c166.z
++      if_gt r9.w, c187.x
++        // The lattice, skewed so that its cells are hexagons, and the triangle of three vertices around this pixel
++        mul r9.xy, r23, c198.x
++        mad r9.x, r9.y, c198.y, r9.x
++        mul r9.y, r9.y, c198.z
++        frc r10.xy, r9
++        add r9.xy, r9, -r10
++        add r10.z, r10.x, -r10.y
++        add r12.xy, -r10, c187.y
++        cmp r13.x, r10.z, r12.x, r12.y
++        abs r13.y, r10.z
++        cmp r13.z, r10.z, r10.y, r10.x
++        cmp r12.xy, r10.z, c187.yxxx, c187.xyyy
++        add r12.xy, r9, r12
++        add r12.zw, r9.xyxy, c187.y
++        mul r13.xyz, r13, r13
++        mul r13.xyz, r13, r13 // weights to the fourth: sharper towards the nearest vertex
++        dp3 r13.w, r13, c187.y
++        rcp r13.w, r13.w
++        mul r13.xyz, r13, r13.w
++        // Each vertex's own random shift of the texture
++        mul r10.xyz, r9.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mul r18.xyz, r15, r13.x
++        mul r10.xyz, r12.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.y, r18
++        mul r10.xyz, r12.zwzw, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.z, r18
++        // The texture's contrast kept: its average (r7) plus the blend's departure from it over sqrt(sum w^2)
++        dp3 r13.w, r13, r13
++        rsq r13.w, r13.w
++        add r18.xyz, r18, -r7
++        mad_sat r18.xyz, r18, r13.w, r7
++        lrp r11.xyz, r9.w, r18, r0
++      endif
+       mov r22.xy, r23
+       mov r22.w, c171.w
+       texldb r22, r22, s0 // the texture's local average
+diff --git a/win32_30_nv8/rage_default/rage_defaultPS3.asm b/win32_30_nv8/rage_default/rage_defaultPS3.asm
+index 1668b821..66d3214c 100644
+--- a/win32_30_nv8/rage_default/rage_defaultPS3.asm
++++ b/win32_30_nv8/rage_default/rage_defaultPS3.asm
+@@ -23,6 +23,8 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0958153991e-42 // 782
++    def c197, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix world_terrain_hex_tiling.patch: the hash
++    def c198, 3.46410155, -0.577350259, 1.15470052, 0 // FusionFix world_terrain_hex_tiling.patch: the hexagonal lattice: cells per repeat, the skew
+     def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
+     def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
+     def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
+@@ -240,9 +242,6 @@
+       mul r5.xy, v5, c167.x
+       mov r5.w, c167.z
+       texldb r5, r5, s12
+-      mul r6.xy, v5, c167.y
+-      mov r6.w, c167.z
+-      texldb r6, r6, s12
+       mov r7.xy, r23
+       mov r7.zw, c184.x
+       texldl r7, r7, s0 // the texture's average colour
+@@ -256,19 +255,73 @@
+       mul r8.z, r8.z, r8.x
+       add r8.z, r8.z, -c184.y
+       mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.z, r8.z, c179.x // FusionFix world_terrain_hex_tiling.patch: and how evenly it tiles (texturequality.ixx)
+       mul r8.w, r8.z, r4.w
+-      add r9.xy, r23, c186
+-      texld r9, r9, s0
+-      dp3 r10.x, r0, c188
+-      dp3 r10.y, r9, c188
+-      add r10.z, r10.y, -r10.x
+-      add r10.w, r6.z, -c187.z
+-      mul r10.w, r10.w, c166.w
+-      mad r10.z, r10.z, c187.w, r10.w
+-      add_sat r10.z, r10.z, c187.z
+-      mul r10.z, r10.z, c166.z
+-      mul r10.z, r10.z, r8.w
+-      lrp r11.xyz, r10.z, r9, r0
++      dsx r14.xy, r23.xyxy
++      dsy r17.xy, r23.xyxy
++      mov r11.xyz, r0
++      mul r9.w, r8.w, c166.z
++      if_gt r9.w, c187.x
++        // The lattice, skewed so that its cells are hexagons, and the triangle of three vertices around this pixel
++        mul r9.xy, r23, c198.x
++        mad r9.x, r9.y, c198.y, r9.x
++        mul r9.y, r9.y, c198.z
++        frc r10.xy, r9
++        add r9.xy, r9, -r10
++        add r10.z, r10.x, -r10.y
++        add r12.xy, -r10, c187.y
++        cmp r13.x, r10.z, r12.x, r12.y
++        abs r13.y, r10.z
++        cmp r13.z, r10.z, r10.y, r10.x
++        cmp r12.xy, r10.z, c187.yxxx, c187.xyyy
++        add r12.xy, r9, r12
++        add r12.zw, r9.xyxy, c187.y
++        mul r13.xyz, r13, r13
++        mul r13.xyz, r13, r13 // weights to the fourth: sharper towards the nearest vertex
++        dp3 r13.w, r13, c187.y
++        rcp r13.w, r13.w
++        mul r13.xyz, r13, r13.w
++        // Each vertex's own random shift of the texture
++        mul r10.xyz, r9.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mul r18.xyz, r15, r13.x
++        mul r10.xyz, r12.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.y, r18
++        mul r10.xyz, r12.zwzw, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.z, r18
++        // The texture's contrast kept: its average (r7) plus the blend's departure from it over sqrt(sum w^2)
++        dp3 r13.w, r13, r13
++        rsq r13.w, r13.w
++        add r18.xyz, r18, -r7
++        mad_sat r18.xyz, r18, r13.w, r7
++        lrp r11.xyz, r9.w, r18, r0
++      endif
+       mov r22.xy, r23
+       mov r22.w, c171.w
+       texldb r22, r22, s0 // the texture's local average
+diff --git a/win32_30_nv8/rage_default/rage_defaultPS4.asm b/win32_30_nv8/rage_default/rage_defaultPS4.asm
+index 57354fcc..ff745631 100644
+--- a/win32_30_nv8/rage_default/rage_defaultPS4.asm
++++ b/win32_30_nv8/rage_default/rage_defaultPS4.asm
+@@ -25,6 +25,8 @@
+ 
+     ps_3_0
+     def c219, 1.8395173895e+25, 3.9938258725e+24, 4.5435787456e+30, 1.0972166976e-42 // 783
++    def c197, 0.103100002, 0.103000000, 0.0973000005, 33.3300018 // FusionFix world_terrain_hex_tiling.patch: the hash
++    def c198, 3.46410155, -0.577350259, 1.15470052, 0 // FusionFix world_terrain_hex_tiling.patch: the hexagonal lattice: cells per repeat, the skew
+     def c180, -1, 2, 1e-20, 0 // FusionFix ground surfaces: from the texture's repeats per square metre, ground (a repeat over 1 m2) or a prop (under 0.5 m2)
+     def c187, 0, 1, 0.5, 2 // FusionFix ground surfaces: zero, one, half, two
+     def c188, 0.2126, 0.7152, 0.0722, 0 // FusionFix ground surfaces: luminance as height
+@@ -242,9 +244,6 @@
+       mul r5.xy, v5, c167.x
+       mov r5.w, c167.z
+       texldb r5, r5, s12
+-      mul r6.xy, v5, c167.y
+-      mov r6.w, c167.z
+-      texldb r6, r6, s12
+       mov r7.xy, r23
+       mov r7.zw, c184.x
+       texldl r7, r7, s0 // the texture's average colour
+@@ -258,19 +257,73 @@
+       mul r8.z, r8.z, r8.x
+       add r8.z, r8.z, -c184.y
+       mul_sat r8.z, r8.z, c184.z // how natural it looks
++      mul r8.z, r8.z, c179.x // FusionFix world_terrain_hex_tiling.patch: and how evenly it tiles (texturequality.ixx)
+       mul r8.w, r8.z, r4.w
+-      add r9.xy, r23, c186
+-      texld r9, r9, s0
+-      dp3 r10.x, r0, c188
+-      dp3 r10.y, r9, c188
+-      add r10.z, r10.y, -r10.x
+-      add r10.w, r6.z, -c187.z
+-      mul r10.w, r10.w, c166.w
+-      mad r10.z, r10.z, c187.w, r10.w
+-      add_sat r10.z, r10.z, c187.z
+-      mul r10.z, r10.z, c166.z
+-      mul r10.z, r10.z, r8.w
+-      lrp r11.xyz, r10.z, r9, r0
++      dsx r14.xy, r23.xyxy
++      dsy r17.xy, r23.xyxy
++      mov r11.xyz, r0
++      mul r9.w, r8.w, c166.z
++      if_gt r9.w, c187.x
++        // The lattice, skewed so that its cells are hexagons, and the triangle of three vertices around this pixel
++        mul r9.xy, r23, c198.x
++        mad r9.x, r9.y, c198.y, r9.x
++        mul r9.y, r9.y, c198.z
++        frc r10.xy, r9
++        add r9.xy, r9, -r10
++        add r10.z, r10.x, -r10.y
++        add r12.xy, -r10, c187.y
++        cmp r13.x, r10.z, r12.x, r12.y
++        abs r13.y, r10.z
++        cmp r13.z, r10.z, r10.y, r10.x
++        cmp r12.xy, r10.z, c187.yxxx, c187.xyyy
++        add r12.xy, r9, r12
++        add r12.zw, r9.xyxy, c187.y
++        mul r13.xyz, r13, r13
++        mul r13.xyz, r13, r13 // weights to the fourth: sharper towards the nearest vertex
++        dp3 r13.w, r13, c187.y
++        rcp r13.w, r13.w
++        mul r13.xyz, r13, r13.w
++        // Each vertex's own random shift of the texture
++        mul r10.xyz, r9.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mul r18.xyz, r15, r13.x
++        mul r10.xyz, r12.xyxy, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.y, r18
++        mul r10.xyz, r12.zwzw, c197
++        frc r10.xyz, r10
++        add r15.xyz, r10.yzxw, c197.w
++        dp3 r15.x, r10, r15
++        add r10.xyz, r10, r15.x
++        add r15.xyz, r10.xxyw, r10.yzzw
++        mul r15.xyz, r15, r10.zyxw
++        frc r10.xyz, r15
++        add r10.xy, r23, r10
++        texldd r15, r10, s0, r14, r17
++        mad r18.xyz, r15, r13.z, r18
++        // The texture's contrast kept: its average (r7) plus the blend's departure from it over sqrt(sum w^2)
++        dp3 r13.w, r13, r13
++        rsq r13.w, r13.w
++        add r18.xyz, r18, -r7
++        mad_sat r18.xyz, r18, r13.w, r7
++        lrp r11.xyz, r9.w, r18, r0
++      endif
+       mov r22.xy, r23
+       mov r22.w, c171.w
+       texldb r22, r22, s0 // the texture's local average

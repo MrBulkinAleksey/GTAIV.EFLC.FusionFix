@@ -2,6 +2,7 @@ module;
 
 #include <common.hxx>
 #include <D3D9Types.h>
+#include <atomic>
 
 export module comvars;
 
@@ -745,6 +746,13 @@ namespace CObject
     {
         return *pObjectsPool;
     }
+
+    // Calls visit(object) for every object in the pool; false where the pool is not usable.
+    export template <typename Visit>
+    bool ForEachObject(Visit&& visit)
+    {
+        return ForEachInPool(CheckedPool(pObjectsPool, 0x24), visit);
+    }
 }
 
 namespace CTask
@@ -757,6 +765,12 @@ namespace CTask
 
 namespace CPed
 {
+    // CPed::GetBoneMatrix (CE 0x9E70B0, also behind GET_PED_BONE_POSITION): the bone as posed by the animation, in the
+    // world, a 4x4 matrix with the place in [12..14]. Bone ids as the melee parser's names give them (CE 0xd9d08f):
+    // PELVIS 0x1A1, HEAD 0x4B5, L_THIGH/CALF/FOOT 0x1A2-0x1A4, R_THIGH/CALF/FOOT 0x1A7-0x1A9, L_UPPERARM/FOREARM/HAND
+    // 0x4C1-0x4C3, R_UPPERARM/FOREARM 0x4C8/0x4C9, R_HAND 0x4D0.
+    export void (__fastcall* GetBoneMatrix)(uintptr_t ped, void*, float* matrix, uint32_t bone) = nullptr;
+
     export CPool<void*>* GetPedPool()
     {
         return *pPedPool;
@@ -1318,7 +1332,10 @@ export namespace rage
         float mViewInverseMatrix[4][4];
         float mViewMatrix[4][4];
         float mProjectionMatrix[4][4];
-        float mMatrix_200[4][4];//FrustumLRTB?
+        // World, view, projection and the viewport's own transform in one: a point (row vector, w 1) to pixels of the
+        // viewport after the divide by w, w being the depth along the view (CE 0x618310 projects the moon with it; seen in
+        // MoonLog, 2026-10-28). Not -1..1: the moon's on-screen test once compared it with that.
+        float mMatrix_200[4][4];
         float mMatrix_240[4][4];//FrustumNFNF?
         grcViewportWindow mGrcViewportWindow1;
         grcViewportWindow mGrcViewportWindow2;//UnclippedWindow?
@@ -1658,6 +1675,14 @@ export namespace rage
         VALIDATE_SIZE(Functor0, 0x10);
 
         void(__cdecl* RegisterDeviceCallbacks)(Functor0 onLost, Functor0 onReset);
+
+        // From the start of the game's lost device callbacks (CE 0x422d50) to the start of its reset callbacks (CE
+        // 0x422f60), the device Reset between them. The game resets on the main thread while the render thread still
+        // draws: a default pool resource the render thread makes meanwhile is alive at the Reset, which then fails
+        // (fatal DD3D80), and what the lost callbacks released is gone under it. Render thread code that makes such
+        // resources on first use, or draws with released ones, waits until it is false again.
+        inline std::atomic<bool> bDeviceLost = false;
+        inline bool IsDeviceLost() { return bDeviceLost.load(std::memory_order_acquire); }
     }
 
     class grcTextureFactoryPC;
@@ -1728,15 +1753,13 @@ export namespace rage
             func(this, index, resolveFlags, unused);
         }
 
-        static inline std::unordered_map<std::string, grcTexturePC*> TextureCache;
-        static inline std::unordered_map<std::string, grcRenderTargetPC*> RTCache;
-        static inline SafetyHookInline shCreateTexture{};
-        static grcTexturePC* __fastcall CreateTexture(grcTextureFactoryPC* _this, void* edx, const char* name, void* a3)
+        // The game's render targets by name, looked up without making a string each time
+        struct NameHash
         {
-            auto ret = shCreateTexture.fastcall<grcTexturePC*>(_this, edx, name, a3);
-            TextureCache[name] = ret;
-            return ret;
-        }
+            using is_transparent = void;
+            size_t operator()(std::string_view name) const { return std::hash<std::string_view>{}(name); }
+        };
+        static inline std::unordered_map<std::string, grcRenderTargetPC*, NameHash, std::equal_to<>> RTCache;
 
         static inline SafetyHookInline shCreateRT{};
         // Lets the render scale size the scene's targets (renderscale.ixx)
@@ -1777,38 +1800,10 @@ export namespace rage
             return ret;
         }
 
-        static grcTexturePC* GetTextureByName(const char* name)
+        static grcRenderTargetPC* GetRTByName(std::string_view name)
         {
-            if (TextureCache.contains(name))
-                return TextureCache[name];
-            return nullptr;
-        }
-
-        static grcRenderTargetPC* GetRTByName(const char* name)
-        {
-            if (RTCache.contains(name))
-                return RTCache[name];
-            return nullptr;
-        }
-
-        static grcTexturePC* FindTextureByRawPointer(IDirect3DTexture9* ptr)
-        {
-            for (auto& [name, tex] : TextureCache)
-            {
-                if (tex->mD3DTexture == ptr)
-                    return tex;
-            }
-            return nullptr;
-        }
-
-        static grcRenderTargetPC* FindRTByRawPointer(IDirect3DTexture9* ptr)
-        {
-            for (auto& [name, rt] : RTCache)
-            {
-                if (rt->mD3DTexture == ptr)
-                    return rt;
-            }
-            return nullptr;
+            auto it = RTCache.find(name);
+            return it != RTCache.end() ? it->second : nullptr;
         }
     };
 
@@ -1866,14 +1861,18 @@ export namespace rage
     };
 
     // CLightSource::mFlags, from the game's own calls to its light submission (CE 0xABCC50, which
-    // clears the shaft bit, and 0xABCCD0).
+    // clears the shaft bit, and 0xABCCD0). A model's lights (its 2dfx light effects, the .light
+    // files of openFormats) get theirs in CE 0xC1E5BE from the effect's Flags (+0x4C): 0x4000 gives
+    // 0x2 and 0x8000 0x4 (each only where the caller allows it), 0x80000 0x8, 0x100000 0x10;
+    // 0x10000 takes the colour from the timecycle's SunColor (0xC1DAA0).
     enum eLightFlags : uint32_t
     {
         LF_MAP = 0x1,             // map (2dfx) lights, and effects
         LF_STATIC_SHADOW = 0x2,   // shadow map kept in the cache (mShadowCacheIndex)
         LF_DYNAMIC_SHADOW = 0x4,  // shadow map drawn every frame
         LF_SHAFT = 0x8,           // light shaft
-        LF_10 = 0x10,             // a 2dfx flag, also vehicle point lights
+        LF_FILLER = 0x10,         // filler light, drawn with the filler techniques (CE 0xAC138C),
+                                  // no highlight; also vehicle point lights
         LF_INTERIOR = 0x20,       // set by the game
         LF_EXTERIOR = 0x40,       // set by the game
         LF_UNCULLED = 0x80,       // one source the game never culls
@@ -2361,10 +2360,17 @@ export namespace VehicleBoxShadowsBridge
     int (*BoxedCars)(const float position[3], uintptr_t* cars, int max) = nullptr;
     // Main thread: those lamps and cars as of the last frame drawn, up to max.
     int (*CopyBoxedPairs)(BoxedPair* pairs, int max) = nullptr;
+    // Whether cars get box shadows (VehicleBoxShadows in the menu) and how far from the camera, in metres, lamps keep
+    // them before they fade out.
+    bool (*Enabled)() = nullptr;
+    float (*MaxDistance)() = nullptr;
     // Render thread: the key whose shadow map a light's key uses (the other lamp of its pair on one post), 0 for none.
     uint32_t (*SharedMapKey)(uint32_t key) = nullptr;
     // Render thread: for either lamp of a pair on one post, the point between them and their spacing; false otherwise.
     bool (*LampPair)(uint32_t key, float between[3], float& spacing) = nullptr;
+    // Render thread: whether a light's shadow is ours rather than the map's, AddedLightsLast's lights (facades' model and
+    // glow lights, traffic signals)
+    bool (*AddedLight)(uint32_t key, uint32_t flags) = nullptr;
 }
 
 export namespace CPlayerPed
@@ -2646,6 +2652,9 @@ export namespace RageDirect3DDevice9
     // into the D3D9 runtime with the proxy for the device crash, so these always go by this one.
     IDirect3DDevice9* RuntimeDevice = nullptr;
 
+    // Called with the device as the game stores it, right after creating it
+    void (*OnDeviceStored)(IDirect3DDevice9* device) = nullptr;
+
     IDirect3DDevice9* GetRuntimeDevice()
     {
         if (!RuntimeDevice && m_pRealDevice)
@@ -2697,6 +2706,8 @@ namespace RageDirect3DDevice9
     void __stdcall StoreDevice(IDirect3DDevice9* device)
     {
         RuntimeDevice = device;
+        if (OnDeviceStored && device)
+            OnDeviceStored(device);
     }
 
     // Takes the place of the call right after the game stores its device, eax still holds it. The call's offset is
@@ -2735,10 +2746,10 @@ public:
         return AfterBuildRenderListEvent;
     }
 
-    // An entity the camera's scene leaves out of its G-buffer while it stays in shadows and
-    // reflections (the player in first person); asked by the entity AddToDrawList hooks while the
-    // camera's scene list is built.
-    static inline bool (*SkipEntity)(void* entity) = nullptr;
+    // Called by the entity AddToDrawList hooks before (true) and after (false) each entity's draws
+    // while the camera's scene list is built, to append commands around them that leave shadows and
+    // reflections alone (the player's head in first person).
+    static inline void (*AroundEntity)(void* entity, bool before) = nullptr;
 
     static inline SafetyHookInline shBuildRenderList{};
     static void __fastcall BuildRenderList(CBaseDC* _this, void* edx)
@@ -3366,6 +3377,23 @@ public:
         pattern = find_pattern("8B 0D ? ? ? ? 53 56 33 F6", "53 56 8B 35 ? ? ? ? 33 D2");
         rage::grcDevice::RegisterDeviceCallbacks = pattern.get_first<void(__cdecl)(rage::grcDevice::Functor0, rage::grcDevice::Functor0)>(0);
 
+        pattern = hook::pattern("83 EC 58 53 56 57 8B 3D ? ? ? ? 85 FF 7E 14 BE ? ? ? ? 8B 46 0C 56 FF D0");
+        if (!pattern.empty())
+        {
+            static auto DeviceLostHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&)
+            {
+                rage::grcDevice::bDeviceLost.store(true, std::memory_order_release);
+            });
+        }
+        pattern = hook::pattern("51 56 57 8B 3D ? ? ? ? 85 FF 7E 14 BE ? ? ? ? 8B 46 0C 56 FF D0");
+        if (!pattern.empty())
+        {
+            static auto DeviceResetHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&)
+            {
+                rage::grcDevice::bDeviceLost.store(false, std::memory_order_release);
+            });
+        }
+
         pattern = find_pattern("8B 44 24 04 56 8B F1 85 C0 74 38", "8B 44 24 04 85 C0 56 8B F1 74 38");
         rage::grcDevice::SetCallbackAddr = pattern.get_first<void*>(0);
 
@@ -3472,9 +3500,6 @@ public:
         pattern = find_pattern("BF ? ? ? ? F3 AB B8", "BF ? ? ? ? F3 AB B8 ? ? ? ? B9");
         RageDirect3DDevice9::g_TexturesBySampler = *pattern.get_first<IDirect3DTexture9**>(1);
 
-        pattern = find_pattern("81 EC ? ? ? ? 8D 04 24 68 ? ? ? ? FF B4 24", "8B 44 24 04 81 EC ? ? ? ? 68");
-        rage::grcTextureFactoryPC::shCreateTexture = safetyhook::create_inline(pattern.get_first(0), rage::grcTextureFactoryPC::CreateTexture);
-
         pattern = find_pattern("53 8B 5C 24 08 56 33 F6 57 39 35 ? ? ? ? 7E 25 8B 3C B5", "53 8B 5C 24 08 56 57 33 FF 39 3D", "53 8B 5C 24 08 56 33 F6 39 35 ? ? ? ? 57 7E 29 8B 3C B5 ? ? ? ? 8B 07 8B 50 14 53 8B CF FF D2 50 E8 ? ? ? ? 83 C4 08 85 C0");
         rage::grcTextureFactoryPC::shCreateRT = safetyhook::create_inline(pattern.get_first(0), rage::grcTextureFactoryPC::CreateRT);
 
@@ -3563,6 +3588,11 @@ public:
             CPlayer::getLocalPlayerPed = (uintptr_t(*)())injector::GetBranchDestination(pattern.get_first(0)).as_int();
             CPlayer::findPlayerCar = (uintptr_t(*)())injector::GetBranchDestination(pattern.get_first(10)).as_int();
         }
+
+        // CPed::GetBoneMatrix: push edi / mov edi, ecx / mov eax, [edi] / call [eax+A0] / ...
+        pattern = hook::pattern("57 8B F9 8B 07 FF 90 A0 00 00 00 85 C0 74 16 8B 07 8B CF FF 90 A0 00 00 00 8B 10 8B C8 FF 92 E0 00 00 00 EB 06 8B 87 00 01 00 00 85 C0 0F 84");
+        if (!pattern.empty())
+            CPed::GetBoneMatrix = pattern.get_first<void(__fastcall)(uintptr_t, void*, float*, uint32_t)>(0);
 
         pattern = hook::pattern("E8 ? ? ? ? 8A 88 6E 28 00 00 32 88 6C 28 00 00 80 F9 7F");
         if (!pattern.empty())

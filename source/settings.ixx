@@ -1772,10 +1772,17 @@ private:
         std::vector<std::pair<uint32_t*, uintptr_t>> references;
         auto replaceReferences = [&](const std::string& signature, size_t count, ptrdiff_t operandOffset, uintptr_t replacement)
         {
-            auto pattern = hook::pattern(signature).count(count);
-            pattern.for_each_result([&](hook::pattern_match match)
+            // count() stops at the count'th match, so a base-dependent false match before a real one would push it out:
+            // take the first count matches whose address operand is relocated
+            size_t found = 0;
+            hook::pattern(signature).for_each_result([&](hook::pattern_match match)
             {
-                references.emplace_back(match.get<uint32_t>(operandOffset), replacement);
+                auto operand = match.get<uint32_t>(operandOffset);
+                if (found < count && IsRelocatedDword(operand))
+                {
+                    references.emplace_back(operand, replacement);
+                    found++;
+                }
             });
         };
 
@@ -2111,33 +2118,52 @@ public:
             { 0, "PREF_AUTOCLIMBLADDERS",       "MISC",       "AutoClimbLadders",                   "",                           0, nullptr, 0, 1 },
             { 0, "PREF_STUNTJUMPCAM",           "MISC",       "StuntJumpCamera",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_ACTIONCAM",              "MISC",       "ActionCamera",                       "",                           1, nullptr, 0, 1 },
-            { 0, "PREF_SSR",                    "POSTFX",     "ScreenSpaceReflections",             "MENU_DISPLAY_SSR_QUALITY",   0, nullptr, 0, 2 },
-            { 0, "PREF_SSR_DEBUG",              "POSTFX",     "ScreenSpaceReflectionsDebug",        "MENU_DISPLAY_SSR_DEBUG",     0, nullptr, 0, 10 },
-            { 0, "PREF_VOLUMETRIC_LIGHT",       "POSTFX",     "VolumetricLight",                    "",                           1, nullptr, 0, 1 },
-            { 0, "PREF_CONTACTSHADOWS",         "POSTFX",     "ContactShadows",                     "",                           1, nullptr, 0, 1 },
-            { 0, "PREF_SSGI",                   "POSTFX",     "ScreenSpaceIndirectLight",           "",                           1, nullptr, 0, 1 },
-            { 0, "PREF_SKIN_SSS",               "POSTFX",     "SkinScattering",                     "",                           1, nullptr, 0, 1 },
-            { 0, "PREF_HEADLIGHT_REACH",        "SHADOWS",    "HeadlightShadowReach",               "",                           10, nullptr, 0, 100 },
-            { 0, "PREF_LAMP_REACH",             "SHADOWS",    "LamppostShadowReach",                "",                           10, nullptr, 0, 100 },
+            { 0, "PREF_SSR",                    "REFLECTIONS", "SSR",                               "MENU_DISPLAY_SSR_QUALITY",   0, nullptr, 0, 2 },
+            { 0, "PREF_SSR_DEBUG",              "DEBUG",      "SSRDebug",                           "MENU_DISPLAY_SSR_DEBUG",     0, nullptr, 0, 10 },
+            { 0, "PREF_GROUND_DEBUG",           "DEBUG",      "GroundSurfacesDebug",                "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_WET_GROUND_DEBUG",       "DEBUG",      "WetGroundDebug",                     "MENU_DISPLAY_WET_DEBUG",     0, nullptr, 0, 2 },
+            { 0, "PREF_CLOUD_SHADOWS_DEBUG",    "DEBUG",      "CloudShadowsDebug",                  "MENU_DISPLAY_CLOUD_SH_DEBUG", 0, nullptr, 0, 2 },
+            { 0, "PREF_CLOUDS_DEBUG",           "DEBUG",      "VolumetricCloudsDebug",              "MENU_DISPLAY_CLOUDS_DEBUG",  0, nullptr, 0, 14 },
+            { 0, "PREF_SSR_FULL_DEPTH",         "DEBUG",      "SSRMarchFullDepth",                  "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_AERIAL_DEBUG",           "DEBUG",      "AerialPerspectiveDebug",             "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_FG_DEBUG_VIEW",          "DEBUG",      "FrameGenerationDebugView",           "MENU_DISPLAY_FG_DEBUG",      0, nullptr, 0, 3 },
+            { 0, "PREF_VOLUMETRIC_LIGHT",       "LIGHTING",   "VolumetricLight",                    "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_CONTACTSHADOWS",         "LIGHTING",   "ContactShadows",                     "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_SSGI",                   "LIGHTING",   "IndirectLight",                      "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_SKIN_SSS",               "LIGHTING",   "SkinScattering",                     "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_HEADLIGHT_REACH",        "NIGHTSHADOWS", "HeadlightReach",                   "",                           10, nullptr, 0, 100 },
+            { 0, "PREF_LAMP_REACH",             "NIGHTSHADOWS", "LampReach",                        "",                           10, nullptr, 0, 100 },
             { 0, "PREF_SHARPENING",             "TEXTURES",   "Sharpening",                         "MENU_DISPLAY_SHARPENING",    0, nullptr, 0, 3 },
             { 0, "PREF_TEXTURE_LOD_BIAS",       "TEXTURES",   "TextureLodBias",                     "MENU_DISPLAY_TEXTURE_LOD_BIAS", 0, nullptr, 0, 4 },
             { 0, "PREF_ANISO_ALL_MAPS",         "TEXTURES",   "AnisotropicAllMaps",                 "",                           0, nullptr, 0, 1 },
             { 0, "PREF_DETAIL_TEXTURES",        "TEXTURES",   "DetailTextures",                     "",                           0, nullptr, 0, 1 },
             { 0, "PREF_BICUBIC_TEXTURES",       "TEXTURES",   "BicubicFiltering",                   "",                           0, nullptr, 0, 1 },
             { 0, "PREF_SPECULAR_AA",            "TEXTURES",   "SpecularAntiAliasing",               "",                           0, nullptr, 0, 1 },
-            { 0, "PREF_UPSCALER_QUALITY",       "TEMPORAL",   "UpscalerQuality",                    "MENU_DISPLAY_UPSCALER_QUALITY", 0, nullptr, 0, 4 },
-            { 0, "PREF_FRAME_GENERATION",       "TEMPORAL",   "FrameGeneration",                    "",                           0, nullptr, 0, 1 },
-            { 0, "PREF_VOLUMETRIC_CLOUDS",      "POSTFX",     "VolumetricClouds",                   "",                           1, nullptr, 0, 1 },
-            { 0, "PREF_GGX_LIGHTING",           "POSTFX",     "GGXLighting",                        "",                           1, nullptr, 0, 1 },
-            { 0, "PREF_WET_WEATHER",            "POSTFX",     "WetWeather",                         "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_UPSCALER_QUALITY",       "ANTIALIASING", "UpscalerQuality",                  "MENU_DISPLAY_UPSCALER_QUALITY", 0, nullptr, 0, 4 },
+            { 0, "PREF_FRAME_GENERATION",       "ANTIALIASING", "FrameGeneration",                  "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_VOLUMETRIC_CLOUDS",      "WEATHER",    "VolumetricClouds",                   "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_GGX_LIGHTING",           "LIGHTING",   "GGX",                                "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_WET_WEATHER",            "WEATHER",    "WetWeather",                         "",                           1, nullptr, 0, 1 },
             { 0, "PREF_GROUND_SURFACES",        "TEXTURES",   "GroundSurfaces",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_PROCEDURAL_DISTANCE",    "PROCEDURAL", "ProceduralDistance",                 "",                           0, nullptr, 0, 8 },
-            { 0, "PREF_VEHICLE_BOX_SHADOWS",    "POSTFX",     "VehicleBoxShadows",                  "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_VEHICLE_BOX_SHADOWS",    "NIGHTSHADOWS", "VehicleBoxShadows",                "",                           1, nullptr, 0, 1 },
             // Liberty's Shadows 2.0 light families (nightshadows, LibertyLighting20Runtime.inl)
-            { 0, "PREF_DUAL_HEADLIGHTS",        "SHADOWS",    "DualHeadlights",                     "",                           0, nullptr, 0, 1 },
-            { 0, "PREF_TAIL_LIGHT_SHADOWS",     "SHADOWS",    "TailLightShadows",                   "",                           1, nullptr, 0, 1 },
-            { 0, "PREF_WORLD_LIGHT_SHADOWS",    "SHADOWS",    "WorldLightShadows",                  "",                           1, nullptr, 0, 1 },
-            { 0, "PREF_BUILDING_SHADOWS",       "SHADOWS",    "BuildingShadows",                    "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_DUAL_HEADLIGHTS",        "NIGHTSHADOWS", "DualHeadlights",                   "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_TAIL_LIGHT_SHADOWS",     "NIGHTSHADOWS", "TailLightShadows",                 "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_WORLD_LIGHT_SHADOWS",    "NIGHTSHADOWS", "WorldLightShadows",                "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_BUILDING_SHADOWS",       "NIGHTSHADOWS", "BuildingShadows",                  "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_PBR_SKY",                "WEATHER",    "PbrSky",                             "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_AERIAL_PERSPECTIVE",     "WEATHER",    "AerialPerspective",                  "MENU_DISPLAY_AERIAL",        2, nullptr, 0, 3 },
+            // Car paint and rain drops on it (vehiclepaint.ixx)
+            { 0, "PREF_VEHICLE_PAINT",          "TEXTURES",   "VehiclePaint",                       "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_CAR_RAINDROPS",          "WEATHER",    "CarRaindrops",                       "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_SUN_FLARE",              "SUNSHAFTS",  "SunFlare",                           "",                           0, nullptr, 0, 1 },
+            // Improved grass: drawn by the GPU on grassy ground (gpugrass.ixx); the wind, bending and trampling are ini switches (grasswind.ixx)
+            { 0, "PREF_GPU_GRASS",              "PROCEDURAL", "GpuGrass",                           "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_GPU_GRASS_DEBUG",        "DEBUG",      "GpuGrassDebug",                      "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_GRASS_WIND_DEBUG",       "DEBUG",      "GrassWindDebug",                     "",                           0, nullptr, 0, 1 },
+            // Real reflections in the player car's mirrors in first person (carmirrors.ixx)
+            { 0, "PREF_CAR_MIRRORS",            "MISC",       "CarMirrors",                         "",                           1, nullptr, 0, 1 },
         };
 
         for (auto& setting : arr)
@@ -2187,7 +2213,14 @@ public:
         DefineDisplay("MENU_DISPLAY_TEXTURE_LOD_BIAS", { "MO_OFF", "LodBias1", "LodBias2", "LodBias3", "LodBias4" });
         DefineDisplay("MENU_DISPLAY_SSR_QUALITY", { "MO_OFF", "SSRHalf", "SSRFull" });
         DefineDisplay("MENU_DISPLAY_AO", { "MO_OFF", "SAO", "GTAO" });
+        DefineDisplay("MENU_DISPLAY_AERIAL", { "MO_OFF", "MO_LOW", "MO_MED", "MO_HIGH" });
         DefineDisplay("MENU_DISPLAY_SSR_DEBUG", { "MO_OFF", "SSRDbgColour", "SSRDbgHits", "SSRDbgNormals", "SSRDbgHorizon", "SSRDbgSpecular", "SSRDbgGlass", "SSRDbgContact", "SSRDbgGI", "SSRDbgSkin", "SSRDbgGIHistory" });
+        DefineDisplay("MENU_DISPLAY_FG_DEBUG", { "MO_OFF", "FGDbgMarker", "FGDbgGenerated", "FGDbgBoth" });
+        DefineDisplay("MENU_DISPLAY_WET_DEBUG", { "MO_OFF", "WetDbgMaterial", "WetDbgWetness" });
+        DefineDisplay("MENU_DISPLAY_CLOUD_SH_DEBUG", { "MO_OFF", "CloudShDbgAll", "CloudShDbgNoise" });
+        // VolumetricCloudsDebug: menu step n is the shader's view n + 1 (see Clouds.fx)
+        DefineDisplay("MENU_DISPLAY_CLOUDS_DEBUG", { "MO_OFF", "CloudDbgSky", "CloudDbgBase", "CloudDbgSilver", "CloudDbgSunset", "CloudDbgGlow", "CloudDbgPower",
+                                                     "CloudDbgTops", "CloudDbgRim", "CloudDbgHaze", "CloudDbgSun", "CloudDbgMarch", "CloudDbgExtinct", "CloudDbgAbsorb", "CloudDbgOverhd" });
 
         constexpr auto toggle = "MENU_DISPLAY_ON_OFF";
         constexpr auto slider = "MENU_DISPLAY_SLIDERBAR";
@@ -2381,11 +2414,16 @@ public:
             AddRow(category, "Contact Shadows", "PREF_CONTACTSHADOWS", 2, toggle);
             AddRow(category, "SkinSSS", "PREF_SKIN_SSS", 2, toggle);
             AddRow(category, "VolumetricLight", "PREF_VOLUMETRIC_LIGHT", 2, toggle);
+            AddRow(category, "SunFlare", "PREF_SUN_FLARE", 2, toggle);
+            AddRow(category, "CarMirrors", "PREF_CAR_MIRRORS", 2, toggle);
             AddRow(category, "VolumeClouds", "PREF_VOLUMETRIC_CLOUDS", 2, toggle);
+            AddRow(category, "PbrSky", "PREF_PBR_SKY", 2, toggle);
+            AddRow(category, "AerialPersp", "PREF_AERIAL_PERSPECTIVE", 4, "MENU_DISPLAY_AERIAL");
             AddRow(category, "GGXLighting", "PREF_GGX_LIGHTING", 2, toggle);
             AddRow(category, "WetWeather", "PREF_WET_WEATHER", 2, toggle);
+            AddRow(category, "CarRaindrops", "PREF_CAR_RAINDROPS", 2, toggle);
             AddRow(category, "VehBoxShadows", "PREF_VEHICLE_BOX_SHADOWS", 2, toggle);
-            AddRow(category, "WorldLightShad", "PREF_WORLD_LIGHT_SHADOWS", 2, toggle);
+            AddRow(category, "ImprovedGrass", "PREF_GPU_GRASS", 2, toggle);
             AddEmptyLine(category);
             // The number next to the slider is the reach in feet, 0 keeps the game's own
             for (auto [label, preference] : { std::pair{ "FF_HREACH", "PREF_HEADLIGHT_REACH" }, std::pair{ "FF_LREACH", "PREF_LAMP_REACH" } })
@@ -2395,8 +2433,6 @@ public:
                     valueTexts[*id] = [this, id = *id] { auto step = std::clamp(Get(id), 0, 100); return step ? std::format(L"{} ft", step * 5) : std::wstring(CText::getText("MO_DEF")); };
                 AddRow(category, label, preference, 101, valueTextHook ? "MENU_DISPLAY_VALUE_SLIDERBAR" : slider);
             }
-            AddEmptyLine(category);
-            AddRow(category, "SSR Debug", "PREF_SSR_DEBUG", 11, "MENU_DISPLAY_SSR_DEBUG");
         }
 
         // Graphics: a Textures category for the sharpness and filtering of surfaces (texturequality.ixx)
@@ -2414,6 +2450,27 @@ public:
             AddRow(category, "DetailTex", "PREF_DETAIL_TEXTURES", 2, toggle);
             AddRow(category, "SpecularAA", "PREF_SPECULAR_AA", 2, toggle);
             AddRow(category, "GroundSurf", "PREF_GROUND_SURFACES", 2, toggle);
+            AddRow(category, "VehiclePaint", "PREF_VEHICLE_PAINT", 2, toggle);
+        }
+
+        // Graphics: a Debug category for the debug views, all off; the logs and traces stay in [DEBUG] of the ini
+        for (auto screen : { MenuScreen::Graphics, MenuScreen::TitleGraphics })
+        {
+            auto category = AddCategory(screen, "FF_DEBUG", "MO_ANALYZER");
+            if (category == MenuScreen::Invalid)
+                continue;
+            AddRow(category, "SSR Debug", "PREF_SSR_DEBUG", 11, "MENU_DISPLAY_SSR_DEBUG");
+            AddRow(category, "SSRFullDepth", "PREF_SSR_FULL_DEPTH", 2, toggle);
+            AddEmptyLine(category);
+            AddRow(category, "GroundDebug", "PREF_GROUND_DEBUG", 2, toggle);
+            AddRow(category, "WetGroundDebug", "PREF_WET_GROUND_DEBUG", 3, "MENU_DISPLAY_WET_DEBUG");
+            AddRow(category, "CloudShDebug", "PREF_CLOUD_SHADOWS_DEBUG", 3, "MENU_DISPLAY_CLOUD_SH_DEBUG");
+            AddRow(category, "CloudsDebug", "PREF_CLOUDS_DEBUG", 15, "MENU_DISPLAY_CLOUDS_DEBUG");
+            AddRow(category, "GrassWindDebug", "PREF_GRASS_WIND_DEBUG", 2, toggle);
+            AddRow(category, "GpuGrassDebug", "PREF_GPU_GRASS_DEBUG", 2, toggle);
+            AddRow(category, "AerialDebug", "PREF_AERIAL_DEBUG", 2, toggle);
+            AddEmptyLine(category);
+            AddRow(category, "FGDebug", "PREF_FG_DEBUG_VIEW", 4, "MENU_DISPLAY_FG_DEBUG");
         }
     }
 

@@ -1,0 +1,45 @@
+diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
+index 3e5af028..e42960a5 100644
+--- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
++++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS2.asm
+@@ -1222,6 +1222,10 @@
+     add r8.xyz, -v4, c15
+     dp3 r8.w, r8, r8
+     add r8.w, r8.w, -c204.y
++    // FusionFix vehicle_glass_reflections_wet_mirror.patch: none of the glass while c204.w is 1: the player's car's in its interior mirror
++    // (carmirrors.ixx MirrorDrawBegin), its rear window covered the sky there black.
++    mov r26, -c204.w
++    texkill r26
+     mov r8.x, c204.x
+     cmp r8.w, r8.w, c187.w, r8.x
+     mul r0.x, r0.x, r8.w
+diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
+index 8988f5b6..d1f0db62 100644
+--- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
++++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS3.asm
+@@ -1070,6 +1070,10 @@
+     add r8.xyz, -v4, c15
+     dp3 r8.w, r8, r8
+     add r8.w, r8.w, -c204.y
++    // FusionFix vehicle_glass_reflections_wet_mirror.patch: none of the glass while c204.w is 1: the player's car's in its interior mirror
++    // (carmirrors.ixx MirrorDrawBegin), its rear window covered the sky there black.
++    mov r26, -c204.w
++    texkill r26
+     mov r8.x, c204.x
+     cmp r8.w, r8.w, c187.w, r8.x
+     mul r0.x, r0.x, r8.w
+diff --git a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
+index 0fa1a7c2..c402ede8 100644
+--- a/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
++++ b/win32_30_nv8/gta_vehicle_vehglass/gta_vehicle_vehglassPS4.asm
+@@ -1147,6 +1147,10 @@
+     add r8.xyz, -v4, c15
+     dp3 r8.w, r8, r8
+     add r8.w, r8.w, -c204.y
++    // FusionFix vehicle_glass_reflections_wet_mirror.patch: none of the glass while c204.w is 1: the player's car's in its interior mirror
++    // (carmirrors.ixx MirrorDrawBegin), its rear window covered the sky there black.
++    mov r26, -c204.w
++    texkill r26
+     mov r8.x, c204.x
+     cmp r8.w, r8.w, c187.w, r8.x
+     mul r0.x, r0.x, r8.w

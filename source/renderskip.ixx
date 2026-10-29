@@ -3,6 +3,7 @@ module;
 #include <common.hxx>
 #include "FusionLog.hpp"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -14,12 +15,15 @@ export module renderskip;
 import common;
 import comvars;
 import temporal;
+import vtablepatch;
+import inireload;
+import coronas;
 
 // Passes of the game left out on the GPU, by the target they draw into. grcTextureFactoryPC::LockRenderTarget and
 // UnlockRenderTarget (its vtable slots 15 and 16, index 0) say which target the game draws into; the device's draws,
 // clears and copies (its vtable) are dropped while a target is locked whose pass is to be left out. In a profile at
 // night on an integrated GPU, the frame took some 39 GPU milliseconds and these passes:
-//  - CascadeShadowsAtNight = 0: the sun's cascades (CASCADE_TARGET_R32, CASCADE_ATLAS, some 7.5 ms) are not drawn from
+//  - SunShadowsAtNight = 0: the sun's cascades (CASCADE_TARGET_R32, CASCADE_ATLAS, some 7.5 ms) are not drawn from
 //    22:00 to 05:00, when the moon casts no shadows to see. Their casters go; the game clears only the depth of
 //    CASCADE_TARGET_R32 and none of the atlas, so its colour is cleared here to 1.0 (nothing in the light's way) and
 //    the game's own draw puts that into the atlas: no shadows, instead of the last ones of the day.
@@ -27,6 +31,11 @@ import temporal;
 //    REFLECTION_MAP_COLOUR, some 2.3 ms with what is drawn into them) are drawn every other frame; in between their
 //    targets keep the last one, nothing drawn, cleared or resolved into them. They are drawn every frame while the
 //    camera turns or moves fast, where one frame behind would show.
+//  - WaterReflectionWhenSeen = 1: the water's reflection is left out altogether while no water was seen on screen. An
+//    occlusion query goes around each of the game's water draws outside the reflections' own passes (postfx's water
+//    hook); the game draws the reflection whenever water is near, behind the houses or the camera too: 3.5 ms of the
+//    render thread's CPU in the city with 300-450 buildings in it. The answer is a frame or two old, so the first
+//    frames with water seen again show the reflection last drawn; with none known for 4 frames it is drawn.
 // The lamps' shadow maps (SHADOW_MAP_COLOUR_POINT, some 3.8 ms at night) can't be left out so: the game hands its tiles
 // to other lamps from one frame to the next, and a tile kept from the frame before lit a lamp with another's shadow.
 //  - FarCascadesHalfRate = 1: by day the two far cascades of the four, three in four of the cascades' draws, take turns:
@@ -44,11 +53,12 @@ export namespace RenderSkip
 {
     bool bCascadesAtNight = true;
     bool bReflectionsHalfRate = true;
+    bool bWaterReflectionWhenSeen = true;
     bool bFarCascadesHalfRate = true;
     bool bMidCascadeHalfRate = false;
     bool bCascadesIntoAtlas = false;
     bool bTrace = false;
-    // CascadeSunElevation: degrees of the sun above the horizon below which its cascades are left out, by the sky's
+    // SunShadowsMinElevation: degrees of the sun above the horizon below which its cascades are left out, by the sky's
     // SunDirection; below -90 (or before the sky has been drawn) by the clock instead, from 22:00 to 05:00
     float fSunLowBelow = 8.0f;
 
@@ -56,6 +66,28 @@ export namespace RenderSkip
     bool SunIsLow();        // the sun's shadows too faint to draw: the cascades and the clouds in reflections go
     bool SunShadowsDrawn(); // the game drew the sun's cascades in the last few frames, which it does only outside, and they
                             // weren't left out for a low sun
+    bool SunShadowsDrawnByDay(); // and the sun is up: not the moon's cascades drawn with SunShadowsAtNight
+    // Render thread: the name of the target the game has locked (index 0, innermost), "" with none locked, nullptr while
+    // the lock hooks are not in place (everything above off at startup)
+    const char* CurrentTarget();
+    // Render thread: how many locks of target index 0 there have been, to tell one lock of a target from the next
+    uint32_t LockCount();
+    // Render thread: how many device viewports have been set, to tell one face of a lamp's shadow map from the next
+    uint32_t ViewportCount();
+    // Render thread: how many device draws (indexed or not, from buffers or user memory, dropped or not) there have been
+    uint32_t DrawCount();
+    // Render thread: the pass being drawn now is left out, its draws dropped (whatever else of it goes through)
+    bool DropsDraws();
+    // Render thread, around the game's water draws: an occlusion query of the water seen, outside the reflections' passes
+    void BeginWaterQuery();
+    void EndWaterQuery();
+    // The water's pixels seen by the latest query answered (a frame or few old), -1 while none is known
+    int64_t WaterPixelsSeen();
+    // Render thread: called before each device draw that is not dropped (carmirrors.ixx's frame capture); set once at init
+    void (*pDrawObserver)(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT primitives) = nullptr;
+    // Render thread: called as the water's reflection target is unlocked, before the game resolves it, with whether its
+    // draws were left out (Water Far Layer's composite); set once at init
+    void (*pBeforeWaterUnlock)(bool leftOut) = nullptr;
 }
 
 namespace RenderSkip
@@ -105,6 +137,108 @@ namespace RenderSkip
         }
     }
 
+    // The water seen: the queries of the last few frames, up to 4 water draws in each
+    constexpr int WaterQueryFrames = 4, WaterQueriesPerFrame = 4;
+    constexpr uint32_t WaterAnswerMaxAge = 4;
+    struct WaterQueries
+    {
+        IDirect3DQuery9* queries[WaterQueriesPerFrame]{};
+        int issued = 0;
+        uint32_t frame = ~0u;
+        bool pending = false;
+    };
+    WaterQueries waterQueries[WaterQueryFrames];
+    int waterSlot = 0;
+    bool bWaterQueryOpen = false;
+    bool bWaterQueriesFailed = false;
+    uint32_t waterAnswerFrame = ~0u;    // the scene frame of the latest query answered
+    uint64_t waterAnswerPixels = 0;
+    uint32_t waterDecided = ~0u;
+    bool bWaterUnseen = false;
+    // Stats: frames of the water's reflection left out with no water seen, drawn with it seen or not known; water draws
+    // measured, answers that never came
+    uint32_t nWaterUnseenFrames = 0, nWaterSeenFrames = 0, nWaterUnknownFrames = 0, nWaterQueries = 0, nWaterLost = 0;
+    uint64_t waterPixelsSum = 0;
+
+    void ReleaseWaterQueries()
+    {
+        for (auto& w : waterQueries)
+        {
+            for (auto& q : w.queries)
+                if (q)
+                {
+                    q->Release();
+                    q = nullptr;
+                }
+            w = {};
+        }
+        bWaterQueryOpen = false;
+        waterAnswerFrame = ~0u;
+    }
+
+    // A device reset gives the queries back on the render thread, which uses them: the game resets on the main thread
+    // while this thread still draws
+    std::atomic<bool> bWaterQueriesStale = false;
+    void DropStaleWaterQueries()
+    {
+        if (bWaterQueriesStale.exchange(false))
+            ReleaseWaterQueries();
+    }
+
+    // The answers back, without waiting: each frame's sum once all its queries have answered
+    void PollWaterQueries()
+    {
+        for (auto& w : waterQueries)
+        {
+            if (!w.pending)
+                continue;
+            uint64_t sum = 0;
+            bool ready = true, failed = false;
+            for (int i = 0; i < w.issued && ready; ++i)
+            {
+                DWORD pixels = 0;
+                const auto hr = w.queries[i]->GetData(&pixels, sizeof(pixels), 0);
+                if (hr == S_OK)
+                    sum += pixels;
+                else if (hr == S_FALSE)
+                    ready = false;
+                else
+                    failed = true, ready = false;
+            }
+            if (failed || (!ready && TemporalAA::SceneFrame - w.frame > WaterAnswerMaxAge))
+            {
+                w.pending = false;
+                nWaterLost++;
+                continue;
+            }
+            if (!ready)
+                continue;
+            w.pending = false;
+            if (waterAnswerFrame == ~0u || int32_t(w.frame - waterAnswerFrame) > 0)
+            {
+                waterAnswerFrame = w.frame;
+                waterAnswerPixels = sum;
+            }
+        }
+    }
+
+    // Once a scene frame: no water seen by an answer at most WaterAnswerMaxAge frames old
+    bool WaterUnseen()
+    {
+        const uint32_t frame = TemporalAA::SceneFrame;
+        if (waterDecided == frame)
+            return bWaterUnseen;
+        waterDecided = frame;
+        DropStaleWaterQueries();
+        PollWaterQueries();
+        const bool known = waterAnswerFrame != ~0u && frame - waterAnswerFrame <= WaterAnswerMaxAge;
+        bWaterUnseen = known && waterAnswerPixels == 0;
+        (bWaterUnseen ? nWaterUnseenFrames : known ? nWaterSeenFrames : nWaterUnknownFrames)++;
+        if (known)
+            waterPixelsSum += waterAnswerPixels;
+        return bWaterUnseen;
+    }
+
     // Once a scene frame for each kind: left out when it was drawn the frame before and the camera hardly moved since
     bool SkipThisFrame(Kind kind)
     {
@@ -131,6 +265,7 @@ namespace RenderSkip
     // The sky's sun (gta_atmoscatt_clouds' SunDirection, y up): unlike gDirectionalLight it stays the sun at night
     size_t nSunDirectionIdx = SIZE_MAX;
     bool bSunLow = false;
+    bool bCascadeAtNight = false; // IsNight() at the last cascade drawn
 
     bool IsNight()
     {
@@ -175,6 +310,10 @@ namespace RenderSkip
     struct Lock { Kind kind; Drop drop; rage::grcRenderTargetPC* target; int8_t intoAtlas = -1; bool statesTraced = false; };
     Lock stack[16]{};
     int depth = 0;
+    bool bLockHooked = false;
+    uint32_t nLocks = 0;
+    uint32_t nViewports = 0;
+    uint32_t nDraws = 0;
     uint32_t dropped[Kinds]{};
 
     // The far cascades by day: the cascades' passes counted, and where the camera was at each one's last draw
@@ -379,7 +518,8 @@ namespace RenderSkip
     {
         bAtlasLeftOut = false;
         lastCascade = -1;
-        bNightCascade = !bCascadesAtNight && IsNight();
+        bCascadeAtNight = IsNight();
+        bNightCascade = !bCascadesAtNight && bCascadeAtNight;
         if (bNightCascade)
             return Drop::Draws;     // its quarter of the atlas is cleared by LockTarget instead
         uint32_t frame = TemporalAA::SceneFrame;
@@ -524,6 +664,9 @@ namespace RenderSkip
             return leftOut ? Drop::Everything : Drop::Nothing;
         }
         case WaterReflection:
+            if (bWaterReflectionWhenSeen && WaterUnseen())
+                return Drop::Everything;
+            [[fallthrough]];
         case ReflectionMap: return bReflectionsHalfRate && SkipThisFrame(kind) ? Drop::Everything : Drop::Nothing;
         default: return Drop::Nothing;
         }
@@ -606,6 +749,7 @@ namespace RenderSkip
             if (kind == CascadeAtlas)
                 atlasTarget = target;
             stack[depth++] = { kind, DropFor(kind), target };
+            ++nLocks;
             Refresh();
             if (Tracing())
                 TraceEvent(std::format("lock {} (colour {}, depth {}){}", TargetName(target), TargetName(color), TargetName(depthTarget),
@@ -677,6 +821,8 @@ namespace RenderSkip
     // Unlocked while still counted: a resolve the game makes then goes with its pass
     void __fastcall UnlockTarget(void* factory, void*, uint32_t index, void* resolveFlags, int32_t unused)
     {
+        if (pBeforeWaterUnlock && index == 0 && depth > 0 && stack[depth - 1].kind == WaterReflection)
+            pBeforeWaterUnlock(stack[depth - 1].drop != Drop::Nothing);
         pfnUnlock(factory, index, resolveFlags, unused);
         if (index != 0 || depth == 0)
             return;
@@ -689,6 +835,7 @@ namespace RenderSkip
 
     bool DropDraw()
     {
+        ++nDraws;
         if (Tracing())
             traceDraws++;
         // The game's fill of a cascade drawn into the atlas: a clear of its quarter to 1.0 instead
@@ -742,23 +889,39 @@ namespace RenderSkip
 
     HRESULT __stdcall DrawPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT start, UINT count)
     {
-        return DropDraw() ? D3D_OK : RealDrawPrimitive(device, type, start, count);
+        if (DropDraw())
+            return D3D_OK;
+        if (pDrawObserver)
+            pDrawObserver(device, type, count);
+        return RealDrawPrimitive(device, type, start, count);
     }
 
     HRESULT __stdcall DrawIndexedPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count)
     {
-        return DropDraw() ? D3D_OK : RealDrawIndexedPrimitive(device, type, base, minIndex, vertices, start, count);
+        if (DropDraw())
+            return D3D_OK;
+        if (pDrawObserver)
+            pDrawObserver(device, type, count);
+        return RealDrawIndexedPrimitive(device, type, base, minIndex, vertices, start, count);
     }
 
     HRESULT __stdcall DrawPrimitiveUP(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT count, const void* data, UINT stride)
     {
-        return DropDraw() ? D3D_OK : RealDrawPrimitiveUP(device, type, count, data, stride);
+        if (DropDraw())
+            return D3D_OK;
+        if (pDrawObserver)
+            pDrawObserver(device, type, count);
+        return RealDrawPrimitiveUP(device, type, count, data, stride);
     }
 
     HRESULT __stdcall DrawIndexedPrimitiveUP(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT minIndex, UINT vertices, UINT count, const void* indices,
         D3DFORMAT format, const void* data, UINT stride)
     {
-        return DropDraw() ? D3D_OK : RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
+        if (DropDraw())
+            return D3D_OK;
+        if (pDrawObserver)
+            pDrawObserver(device, type, count);
+        return RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
     }
 
     HRESULT __stdcall Clear(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags, D3DCOLOR colour, float z, DWORD stencil)
@@ -832,6 +995,7 @@ namespace RenderSkip
 
     HRESULT __stdcall SetViewport(IDirect3DDevice9* device, const D3DVIEWPORT9* viewport)
     {
+        ++nViewports;
         if (viewport && Tracing())
             TraceEvent(std::format("viewport {} {} {}x{}", viewport->X, viewport->Y, viewport->Width, viewport->Height));
         // The cascade's viewport, moved to its quarter of the atlas
@@ -845,15 +1009,6 @@ namespace RenderSkip
         return RealSetViewport(device, viewport);
     }
 
-    template <class F>
-    void Patch(void** vtable, int index, F& real, F hook)
-    {
-        if (vtable[index] == reinterpret_cast<void*>(hook))
-            return;
-        real = reinterpret_cast<F>(vtable[index]);
-        injector::WriteMemory(&vtable[index], reinterpret_cast<void*>(hook), true);
-    }
-
     bool Install()
     {
         auto device = RageDirect3DDevice9::GetRuntimeDevice();
@@ -861,24 +1016,112 @@ namespace RenderSkip
         if (!device || !factory)
             return false;
         auto vft = *reinterpret_cast<void***>(factory);
-        Patch(vft, 15, pfnLock, reinterpret_cast<LockFn>(&LockTarget));
-        Patch(vft, 16, pfnUnlock, reinterpret_cast<UnlockFn>(&UnlockTarget));
+        PatchVTable(vft, 15, pfnLock, reinterpret_cast<LockFn>(&LockTarget));
+        PatchVTable(vft, 16, pfnUnlock, reinterpret_cast<UnlockFn>(&UnlockTarget));
+        bLockHooked = true;
         auto vtable = *reinterpret_cast<void***>(device);
-        Patch(vtable, 34, RealStretchRect, &StretchRect);
-        Patch(vtable, 35, RealColorFill, &ColorFill);
-        Patch(vtable, 43, RealClear, &Clear);
-        Patch(vtable, 47, RealSetViewport, &SetViewport);
-        Patch(vtable, 75, RealSetScissorRect, &SetScissorRect);
-        Patch(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
-        Patch(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
-        Patch(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
-        Patch(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
+        PatchVTable(vtable, 34, RealStretchRect, &StretchRect);
+        PatchVTable(vtable, 35, RealColorFill, &ColorFill);
+        PatchVTable(vtable, 43, RealClear, &Clear);
+        PatchVTable(vtable, 47, RealSetViewport, &SetViewport);
+        PatchVTable(vtable, 75, RealSetScissorRect, &SetScissorRect);
+        PatchVTable(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
+        PatchVTable(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
+        PatchVTable(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
+        PatchVTable(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
         return true;
     }
 }
 
 namespace RenderSkip
 {
+    const char* CurrentTarget()
+    {
+        if (!bLockHooked)
+            return nullptr;
+        if (depth == 0 || !stack[depth - 1].target)
+            return "";
+        auto name = stack[depth - 1].target->mName;
+        return name ? name : "unnamed";
+    }
+
+    uint32_t LockCount()
+    {
+        return nLocks;
+    }
+
+    uint32_t ViewportCount()
+    {
+        return nViewports;
+    }
+
+    uint32_t DrawCount()
+    {
+        return nDraws;
+    }
+
+    bool DropsDraws()
+    {
+        return drop != Drop::Nothing;
+    }
+
+    // In the reflections' own passes the water is drawn into them, or dropped with them: not the water seen
+    void BeginWaterQuery()
+    {
+        DropStaleWaterQueries();
+        if (!bWaterReflectionWhenSeen || bWaterQueriesFailed || bWaterQueryOpen || !bLockHooked)
+            return;
+        for (int i = 0; i < depth; ++i)
+            if (stack[i].kind == WaterReflection || stack[i].kind == ReflectionMap)
+                return;
+        auto device = RageDirect3DDevice9::GetRuntimeDevice();
+        const uint32_t frame = TemporalAA::SceneFrame;
+        if (!device || !frame)
+            return;
+        auto* w = &waterQueries[waterSlot];
+        if (w->frame != frame)
+        {
+            PollWaterQueries();
+            waterSlot = (waterSlot + 1) % WaterQueryFrames;
+            w = &waterQueries[waterSlot];
+            if (w->pending)
+                nWaterLost++;
+            w->issued = 0;
+            w->pending = false;
+            w->frame = frame;
+        }
+        if (w->issued >= WaterQueriesPerFrame)
+            return;
+        auto& query = w->queries[w->issued];
+        if (!query && FAILED(device->CreateQuery(D3DQUERYTYPE_OCCLUSION, &query)))
+        {
+            query = nullptr;
+            bWaterQueriesFailed = true;  // no occlusion queries on this device: the reflection is drawn as the game says
+            return;
+        }
+        query->Issue(D3DISSUE_BEGIN);
+        bWaterQueryOpen = true;
+    }
+
+    void EndWaterQuery()
+    {
+        if (!bWaterQueryOpen)
+            return;
+        bWaterQueryOpen = false;
+        auto& w = waterQueries[waterSlot];
+        w.queries[w.issued++]->Issue(D3DISSUE_END);
+        w.pending = true;
+        nWaterQueries++;
+    }
+
+    int64_t WaterPixelsSeen()
+    {
+        const uint32_t frame = TemporalAA::SceneFrame;
+        if (waterAnswerFrame == ~0u || frame - waterAnswerFrame > WaterAnswerMaxAge)
+            return -1;
+        return int64_t(waterAnswerPixels);
+    }
+
     float SunElevation()
     {
         if (nSunDirectionIdx == SIZE_MAX)
@@ -900,6 +1143,12 @@ namespace RenderSkip
         // cascadeFrame moves on only past CascadeDrop's night check
         return cascadeFrame != ~0u && TemporalAA::SceneFrame - cascadeFrame <= 3;
     }
+
+    // The same with the sun up: with SunShadowsAtNight the cascades are drawn at night too, the moon's
+    bool SunShadowsDrawnByDay()
+    {
+        return SunShadowsDrawn() && !bCascadeAtNight;
+    }
 }
 
 class RenderSkipFeature
@@ -912,18 +1161,31 @@ public:
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
-            bCascadesAtNight = iniReader.ReadInteger("SHADOWS", "CascadeShadowsAtNight", 1) != 0;
-            bReflectionsHalfRate = iniReader.ReadInteger("MISC", "ReflectionsHalfRate", 1) != 0;
-            bFarCascadesHalfRate = iniReader.ReadInteger("SHADOWS", "FarCascadesHalfRate", 1) != 0;
-            bMidCascadeHalfRate = iniReader.ReadInteger("SHADOWS", "MidCascadeHalfRate", 0) != 0;
-            bTrace = iniReader.ReadInteger("MISC", "RenderSkipTrace", 0) != 0;
-            fSunLowBelow = iniReader.ReadFloat("SHADOWS", "CascadeSunElevation", 8.0f);
+            bCascadesAtNight = iniReader.ReadInteger("PERFORMANCE", "SunShadowsAtNight", 1) != 0;
+            bReflectionsHalfRate = iniReader.ReadInteger("PERFORMANCE", "ReflectionsHalfRate", 1) != 0;
+            bWaterReflectionWhenSeen = iniReader.ReadInteger("PERFORMANCE", "WaterReflectionWhenSeen", 1) != 0;
+            bFarCascadesHalfRate = iniReader.ReadInteger("PERFORMANCE", "FarCascadesHalfRate", 1) != 0;
+            bMidCascadeHalfRate = iniReader.ReadInteger("PERFORMANCE", "MidCascadeHalfRate", 0) != 0;
+            bTrace = iniReader.ReadInteger("DEBUG", "RenderSkipTrace", 0) != 0;
+            CoronaRender::pPassDropped = &DropsDraws;
+            fSunLowBelow = iniReader.ReadFloat("PERFORMANCE", "SunShadowsMinElevation", 8.0f);
             // At init: the hook that fills the parameters walks the same vector
             nSunDirectionIdx = rage::grmShaderInfo::registerShaderParam("gta_atmoscatt_clouds.fxc", "SunDirection");
             // The game camera, where the procedural generator measures from too (movss xmm2, [0x128e340] in CE 0xc09440)
             if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
                 pCamera = *camera.get_first<float*>(12);
-            bMatrixTrace = iniReader.ReadInteger("SHADOWS", "CascadeMatrixTrace", 0) != 0;
+            bMatrixTrace = iniReader.ReadInteger("DEBUG", "CascadeMatrixTrace", 0) != 0;
+            // Ctrl+Shift+F10 (IniReload). Half rate cascades turned on in game without the hooks below (put in when one
+            // of them is on at startup) take turns only while the camera keeps still.
+            IniReload::Add([](CIniReader& ini)
+            {
+                bCascadesAtNight = ini.ReadInteger("PERFORMANCE", "SunShadowsAtNight", 1) != 0;
+                bReflectionsHalfRate = ini.ReadInteger("PERFORMANCE", "ReflectionsHalfRate", 1) != 0;
+                bWaterReflectionWhenSeen = ini.ReadInteger("PERFORMANCE", "WaterReflectionWhenSeen", 1) != 0;
+                bFarCascadesHalfRate = ini.ReadInteger("PERFORMANCE", "FarCascadesHalfRate", 1) != 0;
+                bMidCascadeHalfRate = ini.ReadInteger("PERFORMANCE", "MidCascadeHalfRate", 0) != 0;
+                fSunLowBelow = ini.ReadFloat("PERFORMANCE", "SunShadowsMinElevation", 8.0f);
+            });
 
             bCascadesIntoAtlas = iniReader.ReadInteger("SHADOWS", "CascadesIntoAtlas", 0) != 0;
 
@@ -995,15 +1257,22 @@ public:
 
         FusionFix::onGameInitEvent() += []()
         {
-            if (bCascadesAtNight && !bReflectionsHalfRate && !bFarCascadesHalfRate && !bMidCascadeHalfRate && !bCascadesIntoAtlas && !bTrace)
+            if (bCascadesAtNight && !bReflectionsHalfRate && !bWaterReflectionWhenSeen && !bFarCascadesHalfRate && !bMidCascadeHalfRate && !bCascadesIntoAtlas && !bTrace)
                 return;
             bool installed = Install();
-            FusionLog::Write("RenderSkip", "Settings", "%s: cascades %s, the far ones by day %s, reflections %s\n",
+            FusionLog::Write("RenderSkip", "Settings", "%s: cascades %s, the far ones by day %s, reflections %s, the water's %s\n",
                 installed ? "in place" : "no device or texture factory yet, nothing is left out",
                 bCascadesAtNight ? "drawn at night" : fSunLowBelow > -90.0f ? "not drawn while the sun is low" : "not drawn from 22:00 to 05:00",
                 bFarCascadesHalfRate ? (bFollow ? "in turns, following the camera" : "in turns while the camera keeps still") : "every frame",
-                bReflectionsHalfRate ? "every other frame" : "every frame");
+                bReflectionsHalfRate ? "every other frame" : "every frame",
+                bWaterReflectionWhenSeen ? "only while water is seen" : "whenever the game draws it");
             FusionLog::Write("RenderSkip", "Settings", "cascades %s\n", bCascadesIntoAtlas ? "drawn straight into the atlas" : "copied into the atlas");
+        };
+
+        // The queries are not kept over a reset (released on the render thread)
+        FusionFix::onBeforeReset() += []()
+        {
+            bWaterQueriesStale = true;
         };
 
         // A trace starts some 20 seconds into the game; and every 3600 frames, what was left out
@@ -1020,7 +1289,7 @@ public:
             }
             if (bMatrixTrace && bFollow && frames == 1200)
                 matrixTraceFrom = passSeq + 2;
-            // The sun's height at each hour of the game's clock, to set CascadeSunElevation by
+            // The sun's height at each hour of the game's clock, to set SunShadowsMinElevation by
             static int lastHour = -1;
             if (CClock::ms_nGameClockHours && CClock::GetHours() != lastHour)
             {
@@ -1050,6 +1319,13 @@ public:
                 if (dropped[kind] || halfRates[kind].skipped || halfRates[kind].kept)
                     text += std::format("{}: {} calls left out, {} frames left out, {} drawn; ", KindNames[kind], dropped[kind],
                         halfRates[kind].skipped, halfRates[kind].kept);
+            if (nWaterQueries || nWaterUnseenFrames || nWaterSeenFrames || nWaterUnknownFrames)
+                text += std::format("the water's reflection: {} frames left out with no water seen, {} drawn with water seen ({:.0f} pixels of it on average), "
+                    "{} with none known; water draws measured {}, answers lost {}{}; ",
+                    nWaterUnseenFrames, nWaterSeenFrames, nWaterSeenFrames ? double(waterPixelsSum) / nWaterSeenFrames : 0.0,
+                    nWaterUnknownFrames, nWaterQueries, nWaterLost, bWaterQueriesFailed ? " (no occlusion queries on this device)" : "");
+            nWaterUnseenFrames = nWaterSeenFrames = nWaterUnknownFrames = nWaterQueries = nWaterLost = 0;
+            waterPixelsSum = 0;
             if (!text.empty())
                 FusionLog::WriteText("RenderSkip", "Stats", text);
             for (int kind = 0; kind < Kinds; kind++)

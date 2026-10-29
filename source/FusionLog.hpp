@@ -5,7 +5,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <mutex>
-#include <set>
+#include <map>
+#include <share.h>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -41,7 +42,9 @@ namespace FusionLog
     struct State
     {
         std::mutex mutex;
-        std::set<std::string, std::less<>> started; // features written to in this run
+        // Each feature's file, emptied and opened by its first line of the run and kept open: a trace writing every
+        // frame paid for an open and a close of the file a line. Open for others to read, flushed with every write.
+        std::map<std::string, FILE*, std::less<>> files;
     };
     inline State& GetState()
     {
@@ -85,12 +88,14 @@ namespace FusionLog
 
         auto& state = GetState();
         std::lock_guard lock(state.mutex);
-        const bool first = state.started.emplace(feature).second;
-        FILE* file = nullptr;
-        if (_wfopen_s(&file, PathFor(feature).c_str(), first ? L"w" : L"a") || !file)
+        auto it = state.files.find(feature);
+        if (it == state.files.end())
+            it = state.files.emplace(std::string(feature), _wfsopen(PathFor(feature).c_str(), L"w", _SH_DENYNO)).first;
+        FILE* file = it->second;
+        if (!file)
             return;
         fwrite(out.data(), 1, out.size(), file);
-        fclose(file);
+        fflush(file);
     }
 
     inline std::string FormatV(const char* format, va_list args)

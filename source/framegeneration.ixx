@@ -18,6 +18,8 @@ import consolegamma;
 import hdr;
 import settings;
 import upscaler;
+import vtablepatch;
+import inireload;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -40,13 +42,13 @@ import upscaler;
 //   the rendered frame goes from a draw call FrameGenerationDelay into the next frame. A frame that ends before its
 //   waiting frames went presents them first.
 // - Sharpening (CAS) is left out of the post processing and drawn over the frames as they are shown, the rendered and
-//   the generated one, with the HUD left as it is (SharpenShownFrame in postfx.ixx). Sharpened before the generation,
+//   the generated one, with the HUD left as it is (SharpenShownFrame in sharpening.ixx). Sharpened before the generation,
 //   the shadow under a moving car went along with the ground in the generated frames and was shown twice.
 // - Not in the menus, where nothing moves, nor with DLSS-IV loaded, which replays the game's D3D9 calls on a thread of
 //   its own and so runs ahead of what the helper is handed.
-// - [TEMPORAL] in the ini: FrameGenerationDelay, FrameGenerationPacing, and FrameGenerationDebug: 1 marks which frames
-//   reach the screen, 2 logs how far between its neighbours a generated frame is (reads frames back, slow), 4 shows
-//   the generated frames in place of the rendered ones, 8 logs the pacing.
+// - [ANTIALIASING] in the ini: FrameGenerationDelay, FrameGenerationPacing; [DEBUG] FrameGenerationDebug (logs): 2 logs how
+//   far between its neighbours a generated frame is (reads frames back, slow), 8 logs the pacing. The graphics menu's Debug
+//   category (FrameGenerationDebugView) marks which frames reach the screen and shows the generated frames alone.
 
 namespace
 {
@@ -67,15 +69,41 @@ namespace
     bool bAsyncCompute = true;      // FrameGenerationAsyncCompute: the helper generates on its compute queue
     bool bDeferredBroken = false;   // the game's Present did not come through the device: not deferred any more
 
-    // FrameGenerationDebug in [TEMPORAL]
+    // HelperPresent in [ANTIALIASING], 1 by default: with DLAA or FSR the helper presents the frames through a flip model
+    // swap chain on a window of its own over the game's, the game's Present is left out. With the frame generation it also
+    // generates the frames and shows them, the rendered frame FrameGenerationDelay of the frame time after the generated one,
+    // paced on a thread of its own: nothing comes back to the game, which neither waits for Generate nor presents inside its
+    // next frame. The frame generation's sharpening of the shown frames is then left to the post processing.
+    // HelperPresent 1: AMD's frame generation swap chain generates and paces the frames instead (FrameGenerationDelay
+    // unused); 2: the helper's own pacing above.
+    bool bHelperPresent = false;
+    bool bAmdPacing = false;
+    bool bHelperPresentBroken = false;  // the game's Present did not come through the device
+    bool bPresentedByHelper = false;    // this frame
+    HWND GameWindow = nullptr;          // the swap chain's, for the helper's window
+    bool bGameWindowed = false;         // the helper's window can't show over exclusive fullscreen
+    uint32_t GameSyncInterval = 1;
+
+    // FrameGenerationDebug in [DEBUG], the logs
     namespace Debug
     {
-        constexpr int32_t Marker = 1;       // a square in the corner: magenta on generated frames, green on rendered ones
         constexpr int32_t Similarity = 2;   // how much the generated frame differs from the rendered ones around it
-        constexpr int32_t ShowGenerated = 4; // only the generated frames are shown, to check the generation itself
         constexpr int32_t PacingLog = 8;    // the pacing on the CPU and the GPU, every 300 frames
     }
     int32_t nDebug = 0;
+
+    // The menu's FrameGenerationDebugView: bit 1 a square in the corner, magenta on generated frames and green on
+    // rendered ones; bit 2 only the generated frames shown, to check the generation itself
+    namespace DebugView
+    {
+        constexpr int32_t Marker = 1;
+        constexpr int32_t ShowGenerated = 2;
+    }
+    int32_t GetDebugView()
+    {
+        static auto pref = FusionFixSettings.GetRef("PREF_FG_DEBUG_VIEW");
+        return pref ? pref->get() : 0;
+    }
 
     rage::grcRenderTargetPC* PresentRT = nullptr;
     rage::grcRenderTargetPC* GeneratedRT = nullptr;
@@ -83,7 +111,7 @@ namespace
     rage::grcRenderTargetPC* SavedRT = nullptr;     // the back buffer while the rendered frame is presented
     bool bHudLessCaptured = false;  // this frame
 
-    // Sharpening: the post processing leaves it to the frames as they are shown (SharpenShownFrame in postfx.ixx), from
+    // Sharpening: the post processing leaves it to the frames as they are shown (SharpenShownFrame in sharpening.ixx), from
     // a frame into a target, with the finished frame and the one before the HUD to tell the HUD
     using Sharpener = bool (*)(IDirect3DDevice9* device, IDirect3DTexture9* frame, IDirect3DTexture9* present, IDirect3DTexture9* hudLess,
         IDirect3DSurface9* target);
@@ -497,22 +525,33 @@ namespace
     }
 
     // All at the back buffer's size, in the format of the helper's textures: A8R8G8B8 as the back buffer without HDR,
-    // where the helper can write it, 16-bit float otherwise
-    bool CreateTargets(uint32_t width, uint32_t height)
+    // where the helper can write it, 16-bit float otherwise. The finished frame always, the one before the HUD with hudLess
+    // (not while the helper only presents, without the frame generation); full: also the generated frame and the saved
+    // back buffer, which only the game's own presentation of the frames needs.
+    bool CreateTargets(uint32_t width, uint32_t height, bool full = false, bool hudLess = true)
     {
-        bool eightBit = Upscaler::IsFrameGenerationEightBit();
-        if (PresentRT && GeneratedRT && HudLessRT && SavedRT && TargetWidth == width && TargetHeight == height && bTargetsEightBit == eightBit)
+        // The game resets the device on the main thread while this thread draws: a target made now would be alive at the
+        // Reset (DD3D80), and the ones there may be released under it
+        if (rage::grcDevice::IsDeviceLost())
+            return false;
+        bool eightBit = Upscaler::IsPresentEightBit();
+        bool same = TargetWidth == width && TargetHeight == height && bTargetsEightBit == eightBit;
+        if (same && PresentRT && (!hudLess || HudLessRT) && (!full || (GeneratedRT && SavedRT)))
             return true;
-        ReleaseTargets();
+        if (!same)
+            ReleaseTargets();
 
         auto desc = rage::OwnRenderTargetDesc(eightBit ? rage::GRCFMT_A8R8G8B8 : rage::GRCFMT_A16B16G16R16F);
         uint32_t bits = eightBit ? 32 : 64;
-        PresentRT = rage::CreateEmptyRenderTarget("FrameGenerationPresent", width, height, bits, desc);
-        GeneratedRT = rage::CreateEmptyRenderTarget("FrameGenerationGenerated", width, height, bits, desc);
-        HudLessRT = rage::CreateEmptyRenderTarget("FrameGenerationHudLess", width, height, bits, desc);
-        SavedRT = rage::CreateEmptyRenderTarget("FrameGenerationSaved", width, height, bits, desc);
-        if (!PresentRT || !PresentRT->mD3DTexture || !GeneratedRT || !GeneratedRT->mD3DTexture || !HudLessRT || !HudLessRT->mD3DTexture ||
-            !SavedRT || !SavedRT->mD3DTexture)
+        auto make = [&](rage::grcRenderTargetPC*& rt, const char* name)
+        {
+            if (!rt)
+                rt = rage::CreateEmptyRenderTarget(name, width, height, bits, desc);
+            return rt && rt->mD3DTexture;
+        };
+        bool made = make(PresentRT, "FrameGenerationPresent") && (!hudLess || make(HudLessRT, "FrameGenerationHudLess")) &&
+            (!full || (make(GeneratedRT, "FrameGenerationGenerated") && make(SavedRT, "FrameGenerationSaved")));
+        if (!made)
         {
             ReleaseTargets();
             return false;
@@ -520,7 +559,8 @@ namespace
         TargetWidth = width;
         TargetHeight = height;
         bTargetsEightBit = eightBit;
-        Log("Targets: %ux%u, %s", width, height, eightBit ? "A8R8G8B8" : "A16B16G16R16F");
+        Log("Targets: %ux%u, %s%s", width, height, eightBit ? "A8R8G8B8" : "A16B16G16R16F",
+            full ? "" : HudLessRT ? ", the finished frame and the one before the HUD" : ", the finished frame");
         return true;
     }
 
@@ -544,10 +584,10 @@ namespace
         return ok;
     }
 
-    // Debug::Marker: which of the frames reach the screen
+    // DebugView::Marker: which of the frames reach the screen
     void Mark(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer, bool generated)
     {
-        if (!(nDebug & Debug::Marker))
+        if (!(GetDebugView() & DebugView::Marker))
             return;
         RECT square{ 0, 0, 64, 64 };
         device->ColorFill(backBuffer, &square, generated ? D3DCOLOR_XRGB(255, 0, 255) : D3DCOLOR_XRGB(0, 255, 0));
@@ -717,6 +757,9 @@ namespace
         if (GetCurrentThreadId() != RenderThread)
             return;
         ++DrawsThisFrame;
+        // The targets and the queries go at the Reset
+        if (rage::grcDevice::IsDeviceLost())
+            return;
         if (bGpuRecording && !bInPresent && DrawsThisFrame % CheckpointEvery == 0)
             Checkpoint(device);
         if (bInPresent || bEndOfFrameOnly)
@@ -801,14 +844,7 @@ namespace
         return RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
     }
 
-    template <class F>
-    void Patch(void** vtable, int index, F& real, F hook)
-    {
-        if (vtable[index] == reinterpret_cast<void*>(hook))
-            return;
-        real = reinterpret_cast<F>(vtable[index]);
-        injector::WriteMemory(&vtable[index], reinterpret_cast<void*>(hook), true);
-    }
+    void InstallPresentHooks(IDirect3DDevice9* device);
 
     // On the D3D9 runtime's own device, as the render scale's hooks
     void InstallHooks(IDirect3DDevice9* device)
@@ -817,13 +853,19 @@ namespace
         auto vtable = *reinterpret_cast<void***>(device);
         if (vtable == hooked)
             return;
-        Patch(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
-        Patch(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
-        Patch(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
-        Patch(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
+        PatchVTable(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
+        PatchVTable(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
+        PatchVTable(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
+        PatchVTable(vtable, 84, RealDrawIndexedPrimitiveUP, &DrawIndexedPrimitiveUP);
         hooked = vtable;
         Log("Draw call hooks installed");
+        InstallPresentHooks(device);
+    }
 
+    // The game's Present, which a frame presented another way leaves out (bSkipPresent)
+    void InstallPresentHooks(IDirect3DDevice9* device)
+    {
+        auto vtable = *reinterpret_cast<void***>(device);
         if (!shPresent)
         {
             auto target = vtable[17];
@@ -843,45 +885,27 @@ namespace
         }
     }
 
-    // The settings of [TEMPORAL], read again whenever the ini changes while the game runs
-    std::filesystem::path IniPath;
-    std::filesystem::file_time_type IniTime{};
-
-    void ReadSettings()
+    // The frame generation's settings, at startup and on Ctrl+Shift+F10 (IniReload)
+    void ReadSettings(CIniReader& iniReader)
     {
-        CIniReader iniReader("");
-        IniPath = iniReader.GetIniPath();
-        std::error_code error;
-        IniTime = std::filesystem::last_write_time(IniPath, error);
-
-        fDelay = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
-        Upscaler::SetTimingLog(iniReader.ReadInteger("TEMPORAL", "UpscalerTimingLog", 0) != 0);
-        nDebug = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDebug", 0);
-        nPacing = std::clamp(iniReader.ReadInteger("TEMPORAL", "FrameGenerationPacing", 2), 0, 2);
-        bDeferredSetting = iniReader.ReadInteger("TEMPORAL", "FrameGenerationDeferred", 1) != 0;
-        bAsyncCompute = iniReader.ReadInteger("TEMPORAL", "FrameGenerationAsyncCompute", 1) != 0;
-        fShowGeneratedAt = std::clamp(iniReader.ReadFloat("TEMPORAL", "FrameGenerationShowGeneratedAt", 0.2f), 0.0f, 0.9f);
+        fDelay = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FrameGenerationDelay", 0.5f), 0.0f, 1.0f);
+        Upscaler::SetTimingLog(iniReader.ReadInteger("DEBUG", "UpscalerTimingLog", 0) != 0);
+        nDebug = iniReader.ReadInteger("DEBUG", "FrameGenerationDebug", 0) & (Debug::Similarity | Debug::PacingLog);
+        nPacing = std::clamp(iniReader.ReadInteger("ANTIALIASING", "FrameGenerationPacing", 2), 0, 2);
+        bDeferredSetting = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationDeferred", 1) != 0;
+        bAsyncCompute = iniReader.ReadInteger("ANTIALIASING", "FrameGenerationAsyncCompute", 1) != 0;
+        fShowGeneratedAt = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FrameGenerationShowGeneratedAt", 0.2f), 0.0f, 0.9f);
+        auto helperPresent = std::clamp(iniReader.ReadInteger("ANTIALIASING", "HelperPresent", 1), 0, 2);
+        bHelperPresent = helperPresent != 0;
+        bAmdPacing = helperPresent == 1;
         // The aims may have changed
         TargetDraws[0] = TargetDraws[1] = 0.0;
-        Log("Frame generation settings: delay %.2f, pacing %d, deferred %d (generated frame at %.2f), compute queue %d, debug %d", fDelay, nPacing,
-            int(bDeferredSetting), fShowGeneratedAt, int(bAsyncCompute), nDebug);
+        Log("Frame generation settings: delay %.2f, pacing %d, deferred %d (generated frame at %.2f), compute queue %d, debug %d, helper presents %d", fDelay, nPacing,
+            int(bDeferredSetting), fShowGeneratedAt, int(bAsyncCompute), nDebug, bAmdPacing ? 1 : bHelperPresent ? 2 : 0);
 
         // A fresh start for the statistics
         Stats = {};
         GpuStats = {};
-    }
-
-    void CheckSettings()
-    {
-        static ULONGLONG checked = 0;
-        auto now = GetTickCount64();
-        if (now - checked < 1000)
-            return;
-        checked = now;
-        std::error_code error;
-        auto time = std::filesystem::last_write_time(IniPath, error);
-        if (!error && time != IniTime)
-            ReadSettings();
     }
 
     // DLSS-IV, another DLSS and FSR for the game, records the D3D9 calls of the render thread and replays them on a thread
@@ -907,7 +931,7 @@ namespace
         static auto pref = FusionFixSettings.GetRef("PREF_FRAME_GENERATION");
         auto previous = mode;
         bool on = pref && pref->get() != 0 && Upscaler::IsFrameGenerationAvailable() && !IsDlssIvLoaded();
-        mode = !on ? Mode::Off : (nDebug & Debug::ShowGenerated) ? Mode::ShowGenerated : Mode::On;
+        mode = !on ? Mode::Off : (GetDebugView() & DebugView::ShowGenerated) ? Mode::ShowGenerated : Mode::On;
         if (mode != previous)
         {
             Log("Frame generation: %s", mode == Mode::Off ? "off" : mode == Mode::ShowGenerated ? "showing the generated frames" : "on");
@@ -982,11 +1006,90 @@ namespace
         backBuffer->Release();
     }
 
+    // HelperPresent: the presentation is set up
+    bool IsHelperPresenting()
+    {
+        return bHelperPresent && !bHelperPresentBroken && bGameWindowed && Upscaler::IsPresentReady();
+    }
+
+    // HelperPresent: the finished frame copied for the helper, which presents it, with generate the generated frame before
+    // it too, from the frame before the HUD (hudLess: captured this frame); the game's Present is left out
+    bool PresentThroughHelper(IDirect3DDevice9* device, bool generate, bool hudLess)
+    {
+        if (!bHelperPresent || bHelperPresentBroken)
+            return false;
+
+        // The window and the mode the helper presents for, also before the presentation is set up: Evaluate asks for it
+        IDirect3DSwapChain9* swapChain = nullptr;
+        D3DPRESENT_PARAMETERS pp{};
+        if (FAILED(device->GetSwapChain(0, &swapChain)) || !swapChain || FAILED(swapChain->GetPresentParameters(&pp)))
+        {
+            SAFE_RELEASE(swapChain);
+            return false;
+        }
+        swapChain->Release();
+        GameWindow = pp.hDeviceWindow ? pp.hDeviceWindow : gWnd;
+        bGameWindowed = pp.Windowed != FALSE;
+        GameSyncInterval = pp.PresentationInterval == D3DPRESENT_INTERVAL_IMMEDIATE ? 0 :
+            pp.PresentationInterval == D3DPRESENT_INTERVAL_TWO ? 2 : pp.PresentationInterval == D3DPRESENT_INTERVAL_THREE ? 3 :
+            pp.PresentationInterval == D3DPRESENT_INTERVAL_FOUR ? 4 : 1;
+        if (!bGameWindowed || !Upscaler::IsPresentReady())
+            return false;
+
+        // The game's Present after the last frame should have been left out: it went another way, and both were shown
+        if (bSkipPresent)
+        {
+            bSkipPresent = false;
+            bHelperPresentBroken = true;
+            Log("The game's Present did not come through the device's Present: the game presents again");
+            return false;
+        }
+
+        RenderThread = GetCurrentThreadId();
+        InstallPresentHooks(device);
+        if (!shPresent)
+        {
+            bHelperPresentBroken = true;
+            return false;
+        }
+
+        IDirect3DSurface9* backBuffer = nullptr;
+        if (FAILED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) || !backBuffer)
+            return false;
+        D3DSURFACE_DESC desc{};
+        backBuffer->GetDesc(&desc);
+        bool posted = false;
+        bool generated = false;
+        if (CreateTargets(desc.Width, desc.Height, false, mode != Mode::Off) && CopyInto(device, backBuffer, PresentRT))
+        {
+            if (generate && hudLess)
+                ApplyFinishingPasses();
+            auto hdr = HDROutput::IsActive();
+            posted = Upscaler::PostPresent(PresentRT->mD3DTexture, generate && hudLess ? HudLessRT->mD3DTexture : nullptr, GameSyncInterval,
+                generate, hdr ? HDROutput::GetPeakNits() : 0.0f, fDelay, &generated);
+        }
+        backBuffer->Release();
+        if (!posted)
+        {
+            LogOnce(10, "A frame could not be handed to the helper to present: the game presents it");
+            return false;
+        }
+        static bool first = true, firstGenerated = true;
+        if (first)
+            Log("First frame presented by the helper at %ux%u, sync interval %u", desc.Width, desc.Height, GameSyncInterval);
+        if (firstGenerated && generated)
+            Log("First generated frame presented by the helper");
+        first = false;
+        firstGenerated = firstGenerated && !generated;
+        FusionFix::bFrameGenerationPresenting = generated;
+        bSkipPresent = true;
+        return true;
+    }
+
     // Render thread, after the frame is finished
     void OnBeforePresent()
     {
         ++FrameNumber;
-        CheckSettings();
         UpdateMode();
         bool hudLess = bHudLessCaptured;
         bHudLessCaptured = false;
@@ -997,6 +1100,35 @@ namespace
         auto device = RageDirect3DDevice9::GetRuntimeDevice();
         if (!device)
             return;
+        // While the device is reset the targets go (onBeforeReset) and none may be made: the frame goes as it is, and the
+        // waiting frames, which were in the targets, with them
+        if (rage::grcDevice::IsDeviceLost())
+        {
+            bPending = bPendingGenerated = bSkipPresent = false;
+            bGpuRecording = false;
+            Upscaler::DropGenerated();
+            return;
+        }
+        // The helper presents the frames, and generates them: the game neither keeps nor presents any
+        if (bHelperPresent && !bHelperPresentBroken)
+        {
+            // Frames of the game's own presentation still waiting are stale once the helper presents; while it does not
+            // (Wine, exclusive fullscreen, before it is set up) they go below, as without HelperPresent
+            if (IsHelperPresenting() && (bPending || bPendingGenerated))
+            {
+                bPending = bPendingGenerated = false;
+                Upscaler::DropGenerated();
+            }
+            bool generate = mode != Mode::Off && Upscaler::IsFrameGenerationReady() && !IsMenuActive();
+            bPresentedByHelper = PresentThroughHelper(device, generate, hudLess);
+            if (bPresentedByHelper)
+            {
+                // Sharpened by the post processing as without the frame generation (DefersSharpening)
+                if (sharpen)
+                    LogOnce(11, "The frame was left unsharpened for the frame generation while the helper presents it");
+                return;
+            }
+        }
         if (mode == Mode::Off)
         {
             if (sharpen)
@@ -1071,7 +1203,7 @@ namespace
 
         D3DSURFACE_DESC desc{};
         backBuffer->GetDesc(&desc);
-        if (!CreateTargets(desc.Width, desc.Height))
+        if (!CreateTargets(desc.Width, desc.Height, true))
         {
             LogOnce(1, "The targets could not be created");
             backBuffer->Release();
@@ -1213,6 +1345,12 @@ namespace
 
 export namespace FrameGeneration
 {
+    // Frames being presented from inside a draw call of the render thread (CheckPending): their draws are not the game's
+    bool PresentingInDraw()
+    {
+        return bInPresent;
+    }
+
     // Evaluate prepares the frame generation
     bool IsEnabled()
     {
@@ -1223,6 +1361,18 @@ export namespace FrameGeneration
     bool UsesHudLess()
     {
         return mode != Mode::Off;
+    }
+
+    // HelperPresent: the window the helper presents over, null while it does not
+    HWND HelperPresentWindow()
+    {
+        return bHelperPresent && !bHelperPresentBroken && bGameWindowed ? GameWindow : nullptr;
+    }
+
+    // HelperPresent 1: AMD's swap chain paces the frames the helper generates
+    bool UsesAmdPacing()
+    {
+        return bAmdPacing;
     }
 
     // The helper generates on its compute queue, beside the game's next frame
@@ -1243,7 +1393,8 @@ export namespace FrameGeneration
     // generation moves a sharpened shadow under a moving car with the ground, and the shadow is shown twice.
     bool DefersSharpening()
     {
-        bSharpenDeferred = Sharpen && mode != Mode::Off && Upscaler::IsFrameGenerationReady() && !IsMenuActive();
+        // Not while the helper presents: it shows the generated frames itself, unsharpened
+        bSharpenDeferred = Sharpen && mode != Mode::Off && Upscaler::IsFrameGenerationReady() && !IsMenuActive() && !IsHelperPresenting();
         return bSharpenDeferred;
     }
 
@@ -1256,7 +1407,7 @@ export namespace FrameGeneration
     // Render thread, right after the post processing: the back buffer holds the scene without the HUD
     void CaptureHudLess(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer)
     {
-        if (!UsesHudLess() || !Upscaler::IsFrameGenerationReady() || !device || !backBuffer)
+        if (!UsesHudLess() || !Upscaler::IsFrameGenerationReady() || !device || !backBuffer || rage::grcDevice::IsDeviceLost())
             return;
 
         D3DSURFACE_DESC desc{};
@@ -1282,7 +1433,9 @@ public:
         FusionFix::onInitEventAsync() += []()
         {
             QueryPerformanceFrequency(&Frequency);
-            ReadSettings();
+            CIniReader iniReader("");
+            ReadSettings(iniReader);
+            IniReload::Add([](CIniReader& reader) { ReadSettings(reader); });
 
             // Offered once the helper found AMD's frame generation library, and not with DLSS-IV. The choice comes back
             // with them: the cfg keeps it.
@@ -1305,7 +1458,10 @@ public:
             FusionFix::onBeforePresent() += []()
             {
                 auto start = Upscaler::TimingStart();
+                bPresentedByHelper = false;
                 OnBeforePresent();
+                if (!bPresentedByHelper)
+                    Upscaler::PresentedByGame();
                 if (mode != Mode::Off)
                     Upscaler::TimingAdd(Upscaler::TimingPart::FrameGenerationEnd, start);
             };

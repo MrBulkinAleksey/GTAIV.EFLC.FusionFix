@@ -256,7 +256,7 @@ public:
         FusionFix::onInitEvent() += []()
         {
             CIniReader iniReader("");
-            if (iniReader.ReadInteger("MISC", "UnpinMainThread", 1) == 0)
+            if (iniReader.ReadInteger("PERFORMANCE", "UnpinMainThread", 1) == 0)
                 return;
 
             // push 1 / mov esi, ecx / call GetCurrentThread / push eax / call SetThreadAffinityMask
@@ -272,6 +272,66 @@ public:
             injector::MakeNOP(p + 4, 6, true);  // call GetCurrentThread
             injector::MakeNOP(p + 10, 7, true); // push eax / call SetThreadAffinityMask
             FusionLog::Write("Threads", "Affinity", "Main thread affinity pin removed at %p\n", p);
+        };
+
+        // On shutdown (0xb1ee80 → 0xaf7450 → 0xaf7400) the game lets go of the weapons' models: for each of the 60 weapon
+        // infos (0x15f8bc0, 0x110 bytes, model hash at +0x24) it looks the model info up and releases its index
+        // (movsx [edi+0x52]) in the streaming (0x8d8830) and in a pool (0xaf73b0: dec [base + index * size + 4]). An index
+        // of -1 (a model with nothing loaded) writes before the pool and corrupts the heap: MMA10 on exit. Both releases
+        // are skipped for a negative index.
+        FusionFix::onInitEventAsync() += []()
+        {
+            // movsx ecx, word [edi+52h]; push [streaming module]; push ecx; call; movsx eax, word [edi+52h]; push eax; call;
+            // add esp, 0Ch; add esi, 110h
+            auto pattern = hook::pattern("0F BF 4F 52 FF 35 ? ? ? ? 51 E8 ? ? ? ? 0F BF 47 52 50 E8 ? ? ? ? 83 C4 0C 81 C6 10 01 00 00");
+            if (pattern.empty())
+            {
+                FusionLog::Write("Fixes", "WeaponModels", "weapon model release on shutdown not found, not guarded\n");
+                return;
+            }
+            static uintptr_t next = reinterpret_cast<uintptr_t>(pattern.get_first(0x1d));
+            static auto releaseHook = safetyhook::create_mid(pattern.get_first(4), [](SafetyHookContext& regs)
+            {
+                if (int32_t(regs.ecx) < 0)
+                    regs.eip = next;
+            });
+            FusionLog::Write("Fixes", "WeaponModels", "weapon model release on shutdown guarded against index -1 at %p\n", pattern.get_first(0));
+        };
+
+        // The four-head industrial floodlight CJ_IND_LIGHT_1 (docks, port, airport) has its point lights about 11 m up
+        // with a 10 m radius: the ground under it gets no light once its real lights replace the far LOD lights. In
+        // 0xc1e200 (2dfx light of an entity, only caller 0xc1e1a4 with the entity in ESI, saved at [esp+1Ch] here) the
+        // point light's radius is read from the effect (+0x38) for the submit 0xabcc50; for this model's lights with no
+        // projected texture (+0x54 == 0, which also leaves them the default direction (0,0,-1)) it is raised to 32 m.
+        // Position, colour and power stay.
+        FusionFix::onInitEventAsync() += []()
+        {
+            // movss xmm0, [edi+38h]; movss [esp], xmm0; push [ebp+2Ch]; push [edi+54h]; ... push 0 (point); push [ebp+8]; call
+            auto pattern = hook::pattern("F3 0F 10 47 38 F3 0F 11 04 24 FF 75 2C FF 77 54 51 8D 8C 24 ? ? ? ? F3 0F 11 0C 24 51 50 8D 44 24 ? 50 8D 84 24 ? ? ? ? 50 FF 74 24 ? 6A 00 FF 75 08 E8");
+            if (pattern.empty())
+            {
+                FusionLog::Write("Fixes", "FloodlightRange", "point light submit of 2dfx lights not found, not changed\n");
+                return;
+            }
+            static const uintptr_t modelInfos = GameBase() + 0xE95CD8; // CE 0x1295cd8, model infos by index
+            static auto rangeHook = safetyhook::create_mid(pattern.get_first(5), [](SafetyHookContext& regs)
+            {
+                constexpr uint32_t IndustrialFloodlight = 0x42945123; // CJ_IND_LIGHT_1
+                constexpr float Range = 32.0f;
+                const float radius = regs.xmm0.f32[0];
+                if (!(radius > 0.0f && radius < Range) || *reinterpret_cast<const uint32_t*>(regs.edi + 0x54))
+                    return;
+                const auto entity = *reinterpret_cast<const uintptr_t*>(regs.esp + 0x1C);
+                if (entity < 0x10000)
+                    return;
+                const auto index = *reinterpret_cast<const int16_t*>(entity + 0x2E);
+                if (index < 0 || index >= 31000)
+                    return;
+                const auto info = *reinterpret_cast<const uintptr_t*>(modelInfos + index * 4);
+                if (info >= 0x10000 && *reinterpret_cast<const uint32_t*>(info + 0x3C) == IndustrialFloodlight)
+                    regs.xmm0.f32[0] = Range;
+            });
+            FusionLog::Write("Fixes", "FloodlightRange", "CJ_IND_LIGHT_1 point lights reach 32 m, hook at %p\n", pattern.get_first(5));
         };
 
         FusionFix::onInitEventAsync() += []()

@@ -1,0 +1,27 @@
+diff --git a/win32_30_nv8/water/waterPS1.asm b/win32_30_nv8/water/waterPS1.asm
+index 6601c7c..6da0583 100644
+--- a/win32_30_nv8/water/waterPS1.asm
++++ b/win32_30_nv8/water/waterPS1.asm
+@@ -84,6 +84,12 @@
+     texld r1, r1.zyzw, s2
+     mov r2.zw, c0.w
+     texldl r2, r2, s1
++    // FusionFix car mirrors: the reflection on s1 is the main view's water reflection, read at the mirror's pixels,
++    // whatever stood in front of the car there; in a car mirror's pass (c204.z 1) the sky's colour at the horizon,
++    // brought to the reflection's HDR scale by c72.w as the water's own colour below is
++    mul r19.xyz, c72, c72.w
++    add r19.xyz, r19, -r2
++    mad r2.xyz, c204.z, r19, r2
+     mul r0.xyz, r2, c73.x
+     
+     // LogDepth Read
+@@ -97,6 +103,9 @@
+     cmp r1.x, r1.x, r1.z, c0.w
+     pow r2.x, r1_abs.x, c0.z
+     add_sat r1.x, r2.x, c3.w
++    // FusionFix car mirrors: the depth on s2 is the main view's, read at the mirror's pixels; c204.z 1 in a car
++    // mirror's pass (carmirrors.ixx) keeps the water opaque, as over deep water
++    max r1.x, r1.x, c204.z
+     rcp r1.z, r1.x
+     mul r0.xyz, r0, r1.z
+     add r1.z, r0.w, c1.w

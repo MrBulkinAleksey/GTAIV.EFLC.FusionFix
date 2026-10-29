@@ -5,6 +5,10 @@ module;
 #include <mmsystem.h>
 #pragma comment(lib, "winmm.lib") // needed for timeBeginPeriod()/timeEndPeriod()
 
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
 export module framelimit;
 
 import common;
@@ -29,9 +33,13 @@ public:
 private:
     double TIME_Frequency = 0.0;
     double TIME_Ticks = 0.0;
-    double TIME_Frametime = 0.0;
     float  fFPSLimit = 0.0f;
     bool   bFpsLimitWasUpdated = false;
+    LONGLONG nFrequency = 1;
+    LONGLONG nPeriod = 0;
+    LONGLONG nLastRelease = 0;
+    HANDLE hTimer = nullptr;
+    bool   bTimerTried = false;
 public:
     void Init(FPSLimitMode mode, float fps_limit)
     {
@@ -43,16 +51,13 @@ public:
         QueryPerformanceFrequency(&frequency);
         static constexpr auto TICKS_PER_FRAME = 1;
         auto TICKS_PER_SECOND = (TICKS_PER_FRAME * fFPSLimit);
-        if (mFPSLimitMode == FPS_ACCURATE)
-        {
-            TIME_Frametime = 1000.0 / (double)fFPSLimit;
-            TIME_Frequency = (double)frequency.QuadPart / 1000.0; // ticks are milliseconds
-        }
-        else // FPS_REALTIME
+        nFrequency = frequency.QuadPart;
+        nPeriod = fFPSLimit > 0.0f ? LONGLONG((double)frequency.QuadPart / (double)fFPSLimit) : 0;
+        if (mFPSLimitMode == FPS_REALTIME)
         {
             TIME_Frequency = (double)frequency.QuadPart / (double)TICKS_PER_SECOND; // ticks are 1/n frames (n = fFPSLimit)
+            Ticks();
         }
-        Ticks();
     }
     DWORD Sync_RT()
     {
@@ -72,29 +77,58 @@ public:
 
         return (currentTicks > lastTicks) ? currentTicks - lastTicks : 0;
     }
-    DWORD Sync_SLP()
+    // FPS_ACCURATE: frames are released on a fixed schedule, one period after the last release while on time, so a
+    // wait that overshoots doesn't lengthen every frame after it; a late frame starts the schedule afresh. A high
+    // resolution waitable timer carries the wait and a spin only the last half millisecond, so the CPU (and on an
+    // iGPU the power it shares with the GPU) isn't kept busy; Sleep(1) where the timer can't be made.
+    void Sync_Schedule()
     {
-        if (bFpsLimitWasUpdated)
-        {
-            bFpsLimitWasUpdated = false;
-            return 1;
-        }
-
         LARGE_INTEGER counter;
         QueryPerformanceCounter(&counter);
-        double millis_current = (double)counter.QuadPart / TIME_Frequency;
-        double millis_delta = millis_current - TIME_Ticks;
-        if (TIME_Frametime <= millis_delta)
+        auto now = counter.QuadPart;
+        if (bFpsLimitWasUpdated || !nLastRelease)
         {
-            TIME_Ticks = millis_current;
-            return 1;
+            bFpsLimitWasUpdated = false;
+            nLastRelease = now;
+            return;
         }
-        else if (TIME_Frametime - millis_delta > 2.0) // > 2ms
-            Sleep(1); // Sleep for ~1ms
-        else
-            Sleep(0); // yield thread's time-slice (does not actually sleep)
 
-        return 0;
+        auto due = nLastRelease + nPeriod;
+        if (now < due)
+        {
+            if (!bTimerTried)
+            {
+                bTimerTried = true;
+                hTimer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+            }
+
+            auto spin = nFrequency / 2000;
+            auto wait = due - now - spin;
+            if (wait > 0)
+            {
+                LARGE_INTEGER rel;
+                rel.QuadPart = -(wait * 10000000 / nFrequency); // 100 ns units, relative
+                if (hTimer && SetWaitableTimerEx(hTimer, &rel, 0, nullptr, nullptr, nullptr, 0))
+                    WaitForSingleObject(hTimer, INFINITE);
+                else
+                {
+                    while (due - counter.QuadPart > nFrequency / 500) // > 2ms
+                    {
+                        Sleep(1);
+                        QueryPerformanceCounter(&counter);
+                    }
+                }
+            }
+
+            do
+            {
+                YieldProcessor();
+                QueryPerformanceCounter(&counter);
+            } while (counter.QuadPart < due);
+            now = due;
+        }
+
+        nLastRelease = (now - due < nPeriod) ? due : now;
     }
     void Sync()
     {
@@ -104,7 +138,7 @@ public:
         if (mFPSLimitMode == FPS_REALTIME)
             while (!Sync_RT());
         else if (mFPSLimitMode == FPS_ACCURATE)
-            while (!Sync_SLP());
+            Sync_Schedule();
     }
 private:
     void Ticks()

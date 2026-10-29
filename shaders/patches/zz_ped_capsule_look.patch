@@ -1,0 +1,749 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+index 744537d9..ee8abf94 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+@@ -64,9 +64,13 @@
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+     def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
+     def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+-    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
+-    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
++    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
++    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
++    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
++    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -553,7 +557,20 @@
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+     add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
+-    call l4
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     rsq r25.w, r25.w
+     rcp r25.w, r25.w
+     add r25.w, r25.w, -r18.w
+@@ -564,6 +581,11 @@
+     add r25.x, r15.z, -r25.x
+     cmp r25.w, r25.x, r25.w, c138.y
+     cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+@@ -644,19 +666,46 @@
+     rcp r21.y, r21.y
+     mul_sat r24.x, -r21.x, r21.y
+     mad r22.xyz, r16, r24.x, r15
+-    // the axis between foot and head, each a radius in
+-    add r25.x, r18.z, c154.x
++    // the axis between foot and head, each its own radius in (FusionFix: zz_ped_capsule_look.patch: c107.x and c109.w of c154.x)
++    mov r25.w, c154.x
++    mad r25.x, r25.w, c107.x, r18.z
+     add r25.y, r18.z, r18.w
+-    add r25.y, r25.y, -c154.x
++    mad r25.y, r25.w, -c109.w, r25.y
+     max r23.z, r22.z, r25.x
+     min r23.z, r23.z, r25.y
+     mov r23.xy, r18
++    // --- FusionFix: zz_ped_capsule_look.patch: a body's outline rather than a tube, its radius by the height u up the ped
++    // --- (0 foot, 1 head), in c154.x: 0.35 at the ankles, the legs' 0.62 from the knees up (u 0-0.25, c47.xy), the hips
++    // --- widen to 0.85 over u 0.45-0.6 (c108.xy), the shoulders narrow to the neck's 0.3 over 0.78-0.84 (c108.zw), the head
++    // --- 0.45 from 0.85 to 0.9 (c109.xy). A tube as wide at the foot cut its shadow off square across the feet.
++    add r25.z, r23.z, -r18.z
++    rcp r25.w, r18.w
++    mul r25.z, r25.z, r25.w
++    mul_sat r24.z, r25.z, c47.x
++    mad r21.w, r24.z, c47.y, c47.z
++    mad_sat r24.z, r25.z, c108.x, c108.y
++    mad r21.w, r24.z, c107.z, r21.w
++    mad_sat r24.z, r25.z, c108.z, c108.w
++    mad r21.w, r24.z, c107.w, r21.w
++    mad_sat r24.z, r25.z, c109.x, c109.y
++    mad r21.w, r24.z, c109.z, r21.w
++    mul r21.w, r21.w, c154.x
+     add r20.xyz, r22, -r23
+     dp3 r20.w, r20, r20
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+-    add r20.w, r20.w, -c154.x // how far the way passes outside the capsule
+-    call l4
++    add r20.w, r20.w, -r21.w // how far the way passes outside the body
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra with the people's own light size c154.z (PedCapsuleLightSize,
++    // --- larger for a high light) and at least c154.w (PedCapsuleBaseSoftness): at the feet the part of the way r24.x is
++    // --- near 0, and l4's 5 cm floor drew the shadow's foot with sharp corners
++    mul r24.y, r24.x, c154.z
++    add r24.y, r24.y, c154.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     // a ped's or the player's own pixel, within 0.3 m of the capsule (c154.y less), keeps its light
+     max r20.z, r15.z, r25.x
+     min r20.z, r20.z, r25.y
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+index cfe5b855..3438d398 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+@@ -67,9 +67,13 @@
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+     def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
+     def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+-    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
+-    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
++    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
++    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
++    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
++    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -562,7 +566,20 @@
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+     add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
+-    call l4
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     rsq r25.w, r25.w
+     rcp r25.w, r25.w
+     add r25.w, r25.w, -r18.w
+@@ -573,6 +590,11 @@
+     add r25.x, r15.z, -r25.x
+     cmp r25.w, r25.x, r25.w, c138.y
+     cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+@@ -653,19 +675,46 @@
+     rcp r21.y, r21.y
+     mul_sat r24.x, -r21.x, r21.y
+     mad r22.xyz, r16, r24.x, r15
+-    // the axis between foot and head, each a radius in
+-    add r25.x, r18.z, c154.x
++    // the axis between foot and head, each its own radius in (FusionFix: zz_ped_capsule_look.patch: c107.x and c109.w of c154.x)
++    mov r25.w, c154.x
++    mad r25.x, r25.w, c107.x, r18.z
+     add r25.y, r18.z, r18.w
+-    add r25.y, r25.y, -c154.x
++    mad r25.y, r25.w, -c109.w, r25.y
+     max r23.z, r22.z, r25.x
+     min r23.z, r23.z, r25.y
+     mov r23.xy, r18
++    // --- FusionFix: zz_ped_capsule_look.patch: a body's outline rather than a tube, its radius by the height u up the ped
++    // --- (0 foot, 1 head), in c154.x: 0.35 at the ankles, the legs' 0.62 from the knees up (u 0-0.25, c47.xy), the hips
++    // --- widen to 0.85 over u 0.45-0.6 (c108.xy), the shoulders narrow to the neck's 0.3 over 0.78-0.84 (c108.zw), the head
++    // --- 0.45 from 0.85 to 0.9 (c109.xy). A tube as wide at the foot cut its shadow off square across the feet.
++    add r25.z, r23.z, -r18.z
++    rcp r25.w, r18.w
++    mul r25.z, r25.z, r25.w
++    mul_sat r24.z, r25.z, c47.x
++    mad r21.w, r24.z, c47.y, c47.z
++    mad_sat r24.z, r25.z, c108.x, c108.y
++    mad r21.w, r24.z, c107.z, r21.w
++    mad_sat r24.z, r25.z, c108.z, c108.w
++    mad r21.w, r24.z, c107.w, r21.w
++    mad_sat r24.z, r25.z, c109.x, c109.y
++    mad r21.w, r24.z, c109.z, r21.w
++    mul r21.w, r21.w, c154.x
+     add r20.xyz, r22, -r23
+     dp3 r20.w, r20, r20
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+-    add r20.w, r20.w, -c154.x // how far the way passes outside the capsule
+-    call l4
++    add r20.w, r20.w, -r21.w // how far the way passes outside the body
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra with the people's own light size c154.z (PedCapsuleLightSize,
++    // --- larger for a high light) and at least c154.w (PedCapsuleBaseSoftness): at the feet the part of the way r24.x is
++    // --- near 0, and l4's 5 cm floor drew the shadow's foot with sharp corners
++    mul r24.y, r24.x, c154.z
++    add r24.y, r24.y, c154.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     // a ped's or the player's own pixel, within 0.3 m of the capsule (c154.y less), keeps its light
+     max r20.z, r15.z, r25.x
+     min r20.z, r20.z, r25.y
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+index 58972675..913feec6 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+@@ -67,9 +67,13 @@
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+     def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
+     def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+-    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
+-    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
++    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
++    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
++    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
++    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -564,7 +568,20 @@
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+     add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
+-    call l4
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     rsq r25.w, r25.w
+     rcp r25.w, r25.w
+     add r25.w, r25.w, -r18.w
+@@ -575,6 +592,11 @@
+     add r25.x, r15.z, -r25.x
+     cmp r25.w, r25.x, r25.w, c138.y
+     cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+@@ -655,19 +677,46 @@
+     rcp r21.y, r21.y
+     mul_sat r24.x, -r21.x, r21.y
+     mad r22.xyz, r16, r24.x, r15
+-    // the axis between foot and head, each a radius in
+-    add r25.x, r18.z, c154.x
++    // the axis between foot and head, each its own radius in (FusionFix: zz_ped_capsule_look.patch: c107.x and c109.w of c154.x)
++    mov r25.w, c154.x
++    mad r25.x, r25.w, c107.x, r18.z
+     add r25.y, r18.z, r18.w
+-    add r25.y, r25.y, -c154.x
++    mad r25.y, r25.w, -c109.w, r25.y
+     max r23.z, r22.z, r25.x
+     min r23.z, r23.z, r25.y
+     mov r23.xy, r18
++    // --- FusionFix: zz_ped_capsule_look.patch: a body's outline rather than a tube, its radius by the height u up the ped
++    // --- (0 foot, 1 head), in c154.x: 0.35 at the ankles, the legs' 0.62 from the knees up (u 0-0.25, c47.xy), the hips
++    // --- widen to 0.85 over u 0.45-0.6 (c108.xy), the shoulders narrow to the neck's 0.3 over 0.78-0.84 (c108.zw), the head
++    // --- 0.45 from 0.85 to 0.9 (c109.xy). A tube as wide at the foot cut its shadow off square across the feet.
++    add r25.z, r23.z, -r18.z
++    rcp r25.w, r18.w
++    mul r25.z, r25.z, r25.w
++    mul_sat r24.z, r25.z, c47.x
++    mad r21.w, r24.z, c47.y, c47.z
++    mad_sat r24.z, r25.z, c108.x, c108.y
++    mad r21.w, r24.z, c107.z, r21.w
++    mad_sat r24.z, r25.z, c108.z, c108.w
++    mad r21.w, r24.z, c107.w, r21.w
++    mad_sat r24.z, r25.z, c109.x, c109.y
++    mad r21.w, r24.z, c109.z, r21.w
++    mul r21.w, r21.w, c154.x
+     add r20.xyz, r22, -r23
+     dp3 r20.w, r20, r20
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+-    add r20.w, r20.w, -c154.x // how far the way passes outside the capsule
+-    call l4
++    add r20.w, r20.w, -r21.w // how far the way passes outside the body
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra with the people's own light size c154.z (PedCapsuleLightSize,
++    // --- larger for a high light) and at least c154.w (PedCapsuleBaseSoftness): at the feet the part of the way r24.x is
++    // --- near 0, and l4's 5 cm floor drew the shadow's foot with sharp corners
++    mul r24.y, r24.x, c154.z
++    add r24.y, r24.y, c154.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     // a ped's or the player's own pixel, within 0.3 m of the capsule (c154.y less), keeps its light
+     max r20.z, r15.z, r25.x
+     min r20.z, r20.z, r25.y
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+index dfaffe50..f3f7eed6 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -67,9 +67,13 @@
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+     def c188, -0.600000024, 0, 0, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it
+     def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+-    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
+-    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
++    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
++    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
++    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
++    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -566,7 +570,20 @@
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+     add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
+-    call l4
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     rsq r25.w, r25.w
+     rcp r25.w, r25.w
+     add r25.w, r25.w, -r18.w
+@@ -577,6 +594,11 @@
+     add r25.x, r15.z, -r25.x
+     cmp r25.w, r25.x, r25.w, c138.y
+     cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+@@ -657,19 +679,46 @@
+     rcp r21.y, r21.y
+     mul_sat r24.x, -r21.x, r21.y
+     mad r22.xyz, r16, r24.x, r15
+-    // the axis between foot and head, each a radius in
+-    add r25.x, r18.z, c154.x
++    // the axis between foot and head, each its own radius in (FusionFix: zz_ped_capsule_look.patch: c107.x and c109.w of c154.x)
++    mov r25.w, c154.x
++    mad r25.x, r25.w, c107.x, r18.z
+     add r25.y, r18.z, r18.w
+-    add r25.y, r25.y, -c154.x
++    mad r25.y, r25.w, -c109.w, r25.y
+     max r23.z, r22.z, r25.x
+     min r23.z, r23.z, r25.y
+     mov r23.xy, r18
++    // --- FusionFix: zz_ped_capsule_look.patch: a body's outline rather than a tube, its radius by the height u up the ped
++    // --- (0 foot, 1 head), in c154.x: 0.35 at the ankles, the legs' 0.62 from the knees up (u 0-0.25, c47.xy), the hips
++    // --- widen to 0.85 over u 0.45-0.6 (c108.xy), the shoulders narrow to the neck's 0.3 over 0.78-0.84 (c108.zw), the head
++    // --- 0.45 from 0.85 to 0.9 (c109.xy). A tube as wide at the foot cut its shadow off square across the feet.
++    add r25.z, r23.z, -r18.z
++    rcp r25.w, r18.w
++    mul r25.z, r25.z, r25.w
++    mul_sat r24.z, r25.z, c47.x
++    mad r21.w, r24.z, c47.y, c47.z
++    mad_sat r24.z, r25.z, c108.x, c108.y
++    mad r21.w, r24.z, c107.z, r21.w
++    mad_sat r24.z, r25.z, c108.z, c108.w
++    mad r21.w, r24.z, c107.w, r21.w
++    mad_sat r24.z, r25.z, c109.x, c109.y
++    mad r21.w, r24.z, c109.z, r21.w
++    mul r21.w, r21.w, c154.x
+     add r20.xyz, r22, -r23
+     dp3 r20.w, r20, r20
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+-    add r20.w, r20.w, -c154.x // how far the way passes outside the capsule
+-    call l4
++    add r20.w, r20.w, -r21.w // how far the way passes outside the body
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra with the people's own light size c154.z (PedCapsuleLightSize,
++    // --- larger for a high light) and at least c154.w (PedCapsuleBaseSoftness): at the feet the part of the way r24.x is
++    // --- near 0, and l4's 5 cm floor drew the shadow's foot with sharp corners
++    mul r24.y, r24.x, c154.z
++    add r24.y, r24.y, c154.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     // a ped's or the player's own pixel, within 0.3 m of the capsule (c154.y less), keeps its light
+     max r20.z, r15.z, r25.x
+     min r20.z, r20.z, r25.y
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index 67cd84cc..91b22170 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -99,9 +99,13 @@
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+     def c188, -0.600000024, -3.33333325, 0.150000006, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it; FusionFix: local_light_with_shadow_blend.patch: -1 over the skirt's height (0.3 m), its width (0.15 m)
+     def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+-    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
+-    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
++    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
++    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
++    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
++    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -774,7 +778,20 @@
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+     add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
+-    call l4
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     rsq r25.w, r25.w
+     rcp r25.w, r25.w
+     add r25.w, r25.w, -r18.w
+@@ -785,6 +802,11 @@
+     add r25.x, r15.z, -r25.x
+     cmp r25.w, r25.x, r25.w, c138.y
+     cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+@@ -865,19 +887,46 @@
+     rcp r21.y, r21.y
+     mul_sat r24.x, -r21.x, r21.y
+     mad r22.xyz, r16, r24.x, r15
+-    // the axis between foot and head, each a radius in
+-    add r25.x, r18.z, c154.x
++    // the axis between foot and head, each its own radius in (FusionFix: zz_ped_capsule_look.patch: c107.x and c109.w of c154.x)
++    mov r25.w, c154.x
++    mad r25.x, r25.w, c107.x, r18.z
+     add r25.y, r18.z, r18.w
+-    add r25.y, r25.y, -c154.x
++    mad r25.y, r25.w, -c109.w, r25.y
+     max r23.z, r22.z, r25.x
+     min r23.z, r23.z, r25.y
+     mov r23.xy, r18
++    // --- FusionFix: zz_ped_capsule_look.patch: a body's outline rather than a tube, its radius by the height u up the ped
++    // --- (0 foot, 1 head), in c154.x: 0.35 at the ankles, the legs' 0.62 from the knees up (u 0-0.25, c47.xy), the hips
++    // --- widen to 0.85 over u 0.45-0.6 (c108.xy), the shoulders narrow to the neck's 0.3 over 0.78-0.84 (c108.zw), the head
++    // --- 0.45 from 0.85 to 0.9 (c109.xy). A tube as wide at the foot cut its shadow off square across the feet.
++    add r25.z, r23.z, -r18.z
++    rcp r25.w, r18.w
++    mul r25.z, r25.z, r25.w
++    mul_sat r24.z, r25.z, c47.x
++    mad r21.w, r24.z, c47.y, c47.z
++    mad_sat r24.z, r25.z, c108.x, c108.y
++    mad r21.w, r24.z, c107.z, r21.w
++    mad_sat r24.z, r25.z, c108.z, c108.w
++    mad r21.w, r24.z, c107.w, r21.w
++    mad_sat r24.z, r25.z, c109.x, c109.y
++    mad r21.w, r24.z, c109.z, r21.w
++    mul r21.w, r21.w, c154.x
+     add r20.xyz, r22, -r23
+     dp3 r20.w, r20, r20
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+-    add r20.w, r20.w, -c154.x // how far the way passes outside the capsule
+-    call l4
++    add r20.w, r20.w, -r21.w // how far the way passes outside the body
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra with the people's own light size c154.z (PedCapsuleLightSize,
++    // --- larger for a high light) and at least c154.w (PedCapsuleBaseSoftness): at the feet the part of the way r24.x is
++    // --- near 0, and l4's 5 cm floor drew the shadow's foot with sharp corners
++    mul r24.y, r24.x, c154.z
++    add r24.y, r24.y, c154.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     // a ped's or the player's own pixel, within 0.3 m of the capsule (c154.y less), keeps its light
+     max r20.z, r15.z, r25.x
+     min r20.z, r20.z, r25.y
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+index cad5264c..64854794 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -69,9 +69,13 @@
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+     def c188, -0.600000024, -3.33333325, 0.150000006, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it; FusionFix: local_light_with_shadow_blend.patch: -1 over the skirt's height (0.3 m), its width (0.15 m)
+     def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+-    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
+-    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
++    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
++    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
++    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
++    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -587,7 +591,20 @@
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+     add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
+-    call l4
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     rsq r25.w, r25.w
+     rcp r25.w, r25.w
+     add r25.w, r25.w, -r18.w
+@@ -598,6 +615,11 @@
+     add r25.x, r15.z, -r25.x
+     cmp r25.w, r25.x, r25.w, c138.y
+     cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+@@ -678,19 +700,46 @@
+     rcp r21.y, r21.y
+     mul_sat r24.x, -r21.x, r21.y
+     mad r22.xyz, r16, r24.x, r15
+-    // the axis between foot and head, each a radius in
+-    add r25.x, r18.z, c154.x
++    // the axis between foot and head, each its own radius in (FusionFix: zz_ped_capsule_look.patch: c107.x and c109.w of c154.x)
++    mov r25.w, c154.x
++    mad r25.x, r25.w, c107.x, r18.z
+     add r25.y, r18.z, r18.w
+-    add r25.y, r25.y, -c154.x
++    mad r25.y, r25.w, -c109.w, r25.y
+     max r23.z, r22.z, r25.x
+     min r23.z, r23.z, r25.y
+     mov r23.xy, r18
++    // --- FusionFix: zz_ped_capsule_look.patch: a body's outline rather than a tube, its radius by the height u up the ped
++    // --- (0 foot, 1 head), in c154.x: 0.35 at the ankles, the legs' 0.62 from the knees up (u 0-0.25, c47.xy), the hips
++    // --- widen to 0.85 over u 0.45-0.6 (c108.xy), the shoulders narrow to the neck's 0.3 over 0.78-0.84 (c108.zw), the head
++    // --- 0.45 from 0.85 to 0.9 (c109.xy). A tube as wide at the foot cut its shadow off square across the feet.
++    add r25.z, r23.z, -r18.z
++    rcp r25.w, r18.w
++    mul r25.z, r25.z, r25.w
++    mul_sat r24.z, r25.z, c47.x
++    mad r21.w, r24.z, c47.y, c47.z
++    mad_sat r24.z, r25.z, c108.x, c108.y
++    mad r21.w, r24.z, c107.z, r21.w
++    mad_sat r24.z, r25.z, c108.z, c108.w
++    mad r21.w, r24.z, c107.w, r21.w
++    mad_sat r24.z, r25.z, c109.x, c109.y
++    mad r21.w, r24.z, c109.z, r21.w
++    mul r21.w, r21.w, c154.x
+     add r20.xyz, r22, -r23
+     dp3 r20.w, r20, r20
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+-    add r20.w, r20.w, -c154.x // how far the way passes outside the capsule
+-    call l4
++    add r20.w, r20.w, -r21.w // how far the way passes outside the body
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra with the people's own light size c154.z (PedCapsuleLightSize,
++    // --- larger for a high light) and at least c154.w (PedCapsuleBaseSoftness): at the feet the part of the way r24.x is
++    // --- near 0, and l4's 5 cm floor drew the shadow's foot with sharp corners
++    mul r24.y, r24.x, c154.z
++    add r24.y, r24.y, c154.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     // a ped's or the player's own pixel, within 0.3 m of the capsule (c154.y less), keeps its light
+     max r20.z, r15.z, r25.x
+     min r20.z, r20.z, r25.y
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index b7aad4d1..a037a8a2 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -101,9 +101,13 @@
+     def c189, 0.0625, 16, 0.0666666701, 0 // FusionFix vehicle box shadows: a sixteenth, 16, a fifteenth: the strength packed in c143.w
+     def c188, -0.600000024, -3.33333325, 0.150000006, 0 // FusionFix vehicle box shadows: how near a box a car's or ped's pixel is its own and escapes it; FusionFix: local_light_with_shadow_blend.patch: -1 over the skirt's height (0.3 m), its width (0.15 m)
+     def c187, -0.45, -0.25, 0.909090936, 0.0909090936 // FusionFix vehicle box shadows: the cabin's length and width at the roof less 1; from the box's middle up, how far past the waist (0.45 of its height)
+-    def c139, 0, 0.1, 0.03125, 0.0078125 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle
+-    def c140, 0.015625, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
+-    defi i3, 32, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
++    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
++    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
++    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
++    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -790,7 +794,20 @@
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+     add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
+-    call l4
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     rsq r25.w, r25.w
+     rcp r25.w, r25.w
+     add r25.w, r25.w, -r18.w
+@@ -801,6 +818,11 @@
+     add r25.x, r15.z, -r25.x
+     cmp r25.w, r25.x, r25.w, c138.y
+     cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+@@ -881,19 +903,46 @@
+     rcp r21.y, r21.y
+     mul_sat r24.x, -r21.x, r21.y
+     mad r22.xyz, r16, r24.x, r15
+-    // the axis between foot and head, each a radius in
+-    add r25.x, r18.z, c154.x
++    // the axis between foot and head, each its own radius in (FusionFix: zz_ped_capsule_look.patch: c107.x and c109.w of c154.x)
++    mov r25.w, c154.x
++    mad r25.x, r25.w, c107.x, r18.z
+     add r25.y, r18.z, r18.w
+-    add r25.y, r25.y, -c154.x
++    mad r25.y, r25.w, -c109.w, r25.y
+     max r23.z, r22.z, r25.x
+     min r23.z, r23.z, r25.y
+     mov r23.xy, r18
++    // --- FusionFix: zz_ped_capsule_look.patch: a body's outline rather than a tube, its radius by the height u up the ped
++    // --- (0 foot, 1 head), in c154.x: 0.35 at the ankles, the legs' 0.62 from the knees up (u 0-0.25, c47.xy), the hips
++    // --- widen to 0.85 over u 0.45-0.6 (c108.xy), the shoulders narrow to the neck's 0.3 over 0.78-0.84 (c108.zw), the head
++    // --- 0.45 from 0.85 to 0.9 (c109.xy). A tube as wide at the foot cut its shadow off square across the feet.
++    add r25.z, r23.z, -r18.z
++    rcp r25.w, r18.w
++    mul r25.z, r25.z, r25.w
++    mul_sat r24.z, r25.z, c47.x
++    mad r21.w, r24.z, c47.y, c47.z
++    mad_sat r24.z, r25.z, c108.x, c108.y
++    mad r21.w, r24.z, c107.z, r21.w
++    mad_sat r24.z, r25.z, c108.z, c108.w
++    mad r21.w, r24.z, c107.w, r21.w
++    mad_sat r24.z, r25.z, c109.x, c109.y
++    mad r21.w, r24.z, c109.z, r21.w
++    mul r21.w, r21.w, c154.x
+     add r20.xyz, r22, -r23
+     dp3 r20.w, r20, r20
+     rsq r20.w, r20.w
+     rcp r20.w, r20.w
+-    add r20.w, r20.w, -c154.x // how far the way passes outside the capsule
+-    call l4
++    add r20.w, r20.w, -r21.w // how far the way passes outside the body
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra with the people's own light size c154.z (PedCapsuleLightSize,
++    // --- larger for a high light) and at least c154.w (PedCapsuleBaseSoftness): at the feet the part of the way r24.x is
++    // --- near 0, and l4's 5 cm floor drew the shadow's foot with sharp corners
++    mul r24.y, r24.x, c154.z
++    add r24.y, r24.y, c154.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
+     // a ped's or the player's own pixel, within 0.3 m of the capsule (c154.y less), keeps its light
+     max r20.z, r15.z, r25.x
+     min r20.z, r20.z, r25.y

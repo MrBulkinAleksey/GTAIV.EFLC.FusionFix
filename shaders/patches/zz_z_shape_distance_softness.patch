@@ -1,0 +1,189 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+index a869df63..9cd23aa7 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+@@ -729,6 +729,10 @@
+     mul r24.y, r12.x, r24.x
+     max r24.y, r24.y, c138.w
+     mad r24.w, r24.x, c154.z, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light (r22.x holds 1 over its
++    // --- square), as the shadow map blurs by an angle: from a far light the bones' shadow was far sharper than the map's
++    rsq r25.x, r22.x
++    mad r24.w, r25.x, c142.x, r24.w
+     cmp r24.y, r24.z, r24.y, r24.w
+     rcp r24.y, r24.y
+     mul r24.y, r20.w, r24.y
+@@ -865,6 +869,11 @@
+     // --- near 0, and l4's 5 cm floor drew the shadow's foot with sharp corners
+     mul r24.y, r24.x, c154.z
+     add r24.y, r24.y, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light
++    dp3 r21.x, r16, r16
++    rsq r21.x, r21.x
++    rcp r21.x, r21.x
++    mad r24.y, r21.x, c142.x, r24.y
+     rcp r24.y, r24.y
+     mul r24.y, r20.w, r24.y
+     mad_sat r24.y, r24.y, c138.z, c138.z
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+index d8f704f9..5b0944e4 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+@@ -738,6 +738,10 @@
+     mul r24.y, r12.x, r24.x
+     max r24.y, r24.y, c138.w
+     mad r24.w, r24.x, c154.z, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light (r22.x holds 1 over its
++    // --- square), as the shadow map blurs by an angle: from a far light the bones' shadow was far sharper than the map's
++    rsq r25.x, r22.x
++    mad r24.w, r25.x, c142.x, r24.w
+     cmp r24.y, r24.z, r24.y, r24.w
+     rcp r24.y, r24.y
+     mul r24.y, r20.w, r24.y
+@@ -874,6 +878,11 @@
+     // --- near 0, and l4's 5 cm floor drew the shadow's foot with sharp corners
+     mul r24.y, r24.x, c154.z
+     add r24.y, r24.y, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light
++    dp3 r21.x, r16, r16
++    rsq r21.x, r21.x
++    rcp r21.x, r21.x
++    mad r24.y, r21.x, c142.x, r24.y
+     rcp r24.y, r24.y
+     mul r24.y, r20.w, r24.y
+     mad_sat r24.y, r24.y, c138.z, c138.z
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+index 55f737c0..fca0c8b6 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+@@ -740,6 +740,10 @@
+     mul r24.y, r12.x, r24.x
+     max r24.y, r24.y, c138.w
+     mad r24.w, r24.x, c154.z, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light (r22.x holds 1 over its
++    // --- square), as the shadow map blurs by an angle: from a far light the bones' shadow was far sharper than the map's
++    rsq r25.x, r22.x
++    mad r24.w, r25.x, c142.x, r24.w
+     cmp r24.y, r24.z, r24.y, r24.w
+     rcp r24.y, r24.y
+     mul r24.y, r20.w, r24.y
+@@ -876,6 +880,11 @@
+     // --- near 0, and l4's 5 cm floor drew the shadow's foot with sharp corners
+     mul r24.y, r24.x, c154.z
+     add r24.y, r24.y, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light
++    dp3 r21.x, r16, r16
++    rsq r21.x, r21.x
++    rcp r21.x, r21.x
++    mad r24.y, r21.x, c142.x, r24.y
+     rcp r24.y, r24.y
+     mul r24.y, r20.w, r24.y
+     mad_sat r24.y, r24.y, c138.z, c138.z
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+index 3075afc0..1b1d9a1c 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -743,6 +743,10 @@
+     mul r24.y, r12.x, r24.x
+     max r24.y, r24.y, c138.w
+     mad r24.w, r24.x, c154.z, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light (r22.x holds 1 over its
++    // --- square), as the shadow map blurs by an angle: from a far light the bones' shadow was far sharper than the map's
++    rsq r25.x, r22.x
++    mad r24.w, r25.x, c142.x, r24.w
+     cmp r24.y, r24.z, r24.y, r24.w
+     rcp r24.y, r24.y
+     mul r24.y, r20.w, r24.y
+@@ -879,6 +883,11 @@
+     // --- near 0, and l4's 5 cm floor drew the shadow's foot with sharp corners
+     mul r24.y, r24.x, c154.z
+     add r24.y, r24.y, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light
++    dp3 r21.x, r16, r16
++    rsq r21.x, r21.x
++    rcp r21.x, r21.x
++    mad r24.y, r21.x, c142.x, r24.y
+     rcp r24.y, r24.y
+     mul r24.y, r20.w, r24.y
+     mad_sat r24.y, r24.y, c138.z, c138.z
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index 1e7fdc1a..58f0a263 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -986,6 +986,10 @@
+     mul r24.y, r12.x, r24.x
+     max r24.y, r24.y, c138.w
+     mad r24.w, r24.x, c154.z, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light (r22.x holds 1 over its
++    // --- square), as the shadow map blurs by an angle: from a far light the bones' shadow was far sharper than the map's
++    rsq r25.x, r22.x
++    mad r24.w, r25.x, c142.x, r24.w
+     cmp r24.y, r24.z, r24.y, r24.w
+     rcp r24.y, r24.y
+     mul r24.y, r20.w, r24.y
+@@ -1122,6 +1126,11 @@
+     // --- near 0, and l4's 5 cm floor drew the shadow's foot with sharp corners
+     mul r24.y, r24.x, c154.z
+     add r24.y, r24.y, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light
++    dp3 r21.x, r16, r16
++    rsq r21.x, r21.x
++    rcp r21.x, r21.x
++    mad r24.y, r21.x, c142.x, r24.y
+     rcp r24.y, r24.y
+     mul r24.y, r20.w, r24.y
+     mad_sat r24.y, r24.y, c138.z, c138.z
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+index 42ceef27..a3d53a2e 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -763,6 +763,10 @@
+     mul r24.y, r12.x, r24.x
+     max r24.y, r24.y, c138.w
+     mad r24.w, r24.x, c154.z, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light (r22.x holds 1 over its
++    // --- square), as the shadow map blurs by an angle: from a far light the bones' shadow was far sharper than the map's
++    rsq r25.x, r22.x
++    mad r24.w, r25.x, c142.x, r24.w
+     cmp r24.y, r24.z, r24.y, r24.w
+     rcp r24.y, r24.y
+     mul r24.y, r20.w, r24.y
+@@ -899,6 +903,11 @@
+     // --- near 0, and l4's 5 cm floor drew the shadow's foot with sharp corners
+     mul r24.y, r24.x, c154.z
+     add r24.y, r24.y, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light
++    dp3 r21.x, r16, r16
++    rsq r21.x, r21.x
++    rcp r21.x, r21.x
++    mad r24.y, r21.x, c142.x, r24.y
+     rcp r24.y, r24.y
+     mul r24.y, r20.w, r24.y
+     mad_sat r24.y, r24.y, c138.z, c138.z
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index a0ca5aab..811db0dc 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -991,6 +991,10 @@
+     mul r24.y, r12.x, r24.x
+     max r24.y, r24.y, c138.w
+     mad r24.w, r24.x, c154.z, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light (r22.x holds 1 over its
++    // --- square), as the shadow map blurs by an angle: from a far light the bones' shadow was far sharper than the map's
++    rsq r25.x, r22.x
++    mad r24.w, r25.x, c142.x, r24.w
+     cmp r24.y, r24.z, r24.y, r24.w
+     rcp r24.y, r24.y
+     mul r24.y, r20.w, r24.y
+@@ -1127,6 +1131,11 @@
+     // --- near 0, and l4's 5 cm floor drew the shadow's foot with sharp corners
+     mul r24.y, r24.x, c154.z
+     add r24.y, r24.y, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light
++    dp3 r21.x, r16, r16
++    rsq r21.x, r21.x
++    rcp r21.x, r21.x
++    mad r24.y, r21.x, c142.x, r24.y
+     rcp r24.y, r24.y
+     mul r24.y, r20.w, r24.y
+     mad_sat r24.y, r24.y, c138.z, c138.z

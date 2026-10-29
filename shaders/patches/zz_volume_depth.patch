@@ -1,0 +1,279 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
+@@ -312,13 +312,8 @@
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+-    // LogDepth Write
+-    mul r19.x, v9.w, c209.x
+-    log r19.x, r19.x
+-    mul r19.x, r19.x, c209.y
+-    rcp r19.y, v9.w
+-    mul r19.y, r19.y, v9.z
+-    cmp oDepth, -v9_abs.y, r19.y, r19.x
++    // LogDepth Write: FusionFix: zz_volume_depth.patch: the light volume's vertex shader gives the log depth itself, so
++    // the depth test runs before this shader (a shader writing oDepth turns early depth testing off)
+ 
+ // approximately 36 instruction slots used (3 texture, 33 arithmetic)
+ 
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+@@ -322,13 +322,8 @@
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+-    // LogDepth Write
+-    mul r19.x, v9.w, c209.x
+-    log r19.x, r19.x
+-    mul r19.x, r19.x, c209.y
+-    rcp r19.y, v9.w
+-    mul r19.y, r19.y, v9.z
+-    cmp oDepth, -v9_abs.y, r19.y, r19.x
++    // LogDepth Write: FusionFix: zz_volume_depth.patch: the light volume's vertex shader gives the log depth itself, so
++    // the depth test runs before this shader (a shader writing oDepth turns early depth testing off)
+ 
+ // approximately 42 instruction slots used (4 texture, 38 arithmetic)
+ 
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
+@@ -322,13 +322,8 @@
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+-    // LogDepth Write
+-    mul r19.x, v9.w, c209.x
+-    log r19.x, r19.x
+-    mul r19.x, r19.x, c209.y
+-    rcp r19.y, v9.w
+-    mul r19.y, r19.y, v9.z
+-    cmp oDepth, -v9_abs.y, r19.y, r19.x
++    // LogDepth Write: FusionFix: zz_volume_depth.patch: the light volume's vertex shader gives the log depth itself, so
++    // the depth test runs before this shader (a shader writing oDepth turns early depth testing off)
+ 
+ // approximately 42 instruction slots used (4 texture, 38 arithmetic)
+ 
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -824,13 +824,8 @@
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+-    // LogDepth Write
+-    mul r19.x, v9.w, c209.x
+-    log r19.x, r19.x
+-    mul r19.x, r19.x, c209.y
+-    rcp r19.y, v9.w
+-    mul r19.y, r19.y, v9.z
+-    cmp oDepth, -v9_abs.y, r19.y, r19.x
++    // LogDepth Write: FusionFix: zz_volume_depth.patch: the light volume's vertex shader gives the log depth itself, so
++    // the depth test runs before this shader (a shader writing oDepth turns early depth testing off)
+ 
+ // approximately 122 instruction slots used (9 texture, 113 arithmetic)
+ 
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
+@@ -529,13 +529,8 @@
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+-    // LogDepth Write
+-    mul r19.x, v9.w, c209.x
+-    log r19.x, r19.x
+-    mul r19.x, r19.x, c209.y
+-    rcp r19.y, v9.w
+-    mul r19.y, r19.y, v9.z
+-    cmp oDepth, -v9_abs.y, r19.y, r19.x
++    // LogDepth Write: FusionFix: zz_volume_depth.patch: the light volume's vertex shader gives the log depth itself, so
++    // the depth test runs before this shader (a shader writing oDepth turns early depth testing off)
+ 
+ // approximately 92 instruction slots used (7 texture, 85 arithmetic)
+ 
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -626,13 +626,8 @@
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+-    // LogDepth Write
+-    mul r19.x, v9.w, c209.x
+-    log r19.x, r19.x
+-    mul r19.x, r19.x, c209.y
+-    rcp r19.y, v9.w
+-    mul r19.y, r19.y, v9.z
+-    cmp oDepth, -v9_abs.y, r19.y, r19.x
++    // LogDepth Write: FusionFix: zz_volume_depth.patch: the light volume's vertex shader gives the log depth itself, so
++    // the depth test runs before this shader (a shader writing oDepth turns early depth testing off)
+ 
+ // approximately 90 instruction slots used (8 texture, 82 arithmetic)
+ 
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -829,13 +829,8 @@
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+-    // LogDepth Write
+-    mul r19.x, v9.w, c209.x
+-    log r19.x, r19.x
+-    mul r19.x, r19.x, c209.y
+-    rcp r19.y, v9.w
+-    mul r19.y, r19.y, v9.z
+-    cmp oDepth, -v9_abs.y, r19.y, r19.x
++    // LogDepth Write: FusionFix: zz_volume_depth.patch: the light volume's vertex shader gives the log depth itself, so
++    // the depth test runs before this shader (a shader writing oDepth turns early depth testing off)
+ 
+ // approximately 144 instruction slots used (12 texture, 132 arithmetic)
+ 
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+@@ -592,13 +592,8 @@
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+-    // LogDepth Write
+-    mul r19.x, v9.w, c209.x
+-    log r19.x, r19.x
+-    mul r19.x, r19.x, c209.y
+-    rcp r19.y, v9.w
+-    mul r19.y, r19.y, v9.z
+-    cmp oDepth, -v9_abs.y, r19.y, r19.x
++    // LogDepth Write: FusionFix: zz_volume_depth.patch: the light volume's vertex shader gives the log depth itself, so
++    // the depth test runs before this shader (a shader writing oDepth turns early depth testing off)
+ 
+ // approximately 59 instruction slots used (4 texture, 55 arithmetic)
+ 
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+@@ -601,13 +601,8 @@
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+-    // LogDepth Write
+-    mul r19.x, v9.w, c209.x
+-    log r19.x, r19.x
+-    mul r19.x, r19.x, c209.y
+-    rcp r19.y, v9.w
+-    mul r19.y, r19.y, v9.z
+-    cmp oDepth, -v9_abs.y, r19.y, r19.x
++    // LogDepth Write: FusionFix: zz_volume_depth.patch: the light volume's vertex shader gives the log depth itself, so
++    // the depth test runs before this shader (a shader writing oDepth turns early depth testing off)
+ 
+ // approximately 64 instruction slots used (5 texture, 59 arithmetic)
+ 
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+@@ -603,13 +603,8 @@
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+-    // LogDepth Write
+-    mul r19.x, v9.w, c209.x
+-    log r19.x, r19.x
+-    mul r19.x, r19.x, c209.y
+-    rcp r19.y, v9.w
+-    mul r19.y, r19.y, v9.z
+-    cmp oDepth, -v9_abs.y, r19.y, r19.x
++    // LogDepth Write: FusionFix: zz_volume_depth.patch: the light volume's vertex shader gives the log depth itself, so
++    // the depth test runs before this shader (a shader writing oDepth turns early depth testing off)
+ 
+ // approximately 66 instruction slots used (5 texture, 61 arithmetic)
+ 
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -605,13 +605,8 @@
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+-    // LogDepth Write
+-    mul r19.x, v9.w, c209.x
+-    log r19.x, r19.x
+-    mul r19.x, r19.x, c209.y
+-    rcp r19.y, v9.w
+-    mul r19.y, r19.y, v9.z
+-    cmp oDepth, -v9_abs.y, r19.y, r19.x
++    // LogDepth Write: FusionFix: zz_volume_depth.patch: the light volume's vertex shader gives the log depth itself, so
++    // the depth test runs before this shader (a shader writing oDepth turns early depth testing off)
+ 
+ // approximately 68 instruction slots used (5 texture, 63 arithmetic)
+ 
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingVS3.asm b/win32_30_nv8/deferred_lighting/deferred_lightingVS3.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingVS3.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingVS3.asm
+@@ -36,6 +36,7 @@
+     def c0, -4, 0.159154937, 0.5, 1
+     def c1, 6.28318548, -3.14159274, -1.57079637, 1.57079637
+     def c2, 9.99999975e-005, -2, 9.99999975e-006, 0.662
++    def c229, 0.99999, 0, 0, 0 // FusionFix: zz_volume_depth.patch: just short of the far plane
+     dcl_position v0
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator
+@@ -125,6 +126,23 @@
+     mad r1, r0.x, c8, r1
+     mad r1, r0.z, c10, r1
+     add r1, r1, c11
++    // --- FusionFix: zz_volume_depth.patch: the depth the light shaders wrote (oDepth), here per vertex: log2(w / near) /
++    // --- log2(far / near) (c227, the z-fighting fix's constants), as the scene's depth is. Between the vertices it comes out
++    // --- a little farther than the surface's own (log is concave), and the volume's back faces pass where they lie farther than
++    // --- the scene (ZFUNC GREATER), so no lit pixel is lost. An orthographic view keeps its own depth, as the light shaders did.
++    // --- b5 off (LightVolumeDepth): the volume at the far plane, every pixel the scene covers passes.
++    if b5
++      mul r2.x, r1.w, c227.x
++      log r2.x, r2.x
++      mul r2.x, r2.x, c227.y
++      mul r2.x, r2.x, r1.w
++      dp3 r2.y, c10.xyw, c10.xyw
++      slt r2.y, c229.y, r2.y // 0 for an orthographic view (vs_3_0 has no cmp)
++      add r2.x, r2.x, -r1.z
++      mad r1.z, r2.y, r2.x, r1.z
++    else
++      mul r1.z, r1.w, c229.x
++    endif
+     add r0.xyz, r0, -c15
+     mov o1.xyz, -r0
+     mov o0, r1
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingVS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingVS6.asm
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingVS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingVS6.asm
+@@ -36,6 +36,7 @@
+     def c0, -4, 0.159154937, 0.5, 1
+     def c1, 6.28318548, -3.14159274, -1.57079637, 1.57079637
+     def c2, 9.99999975e-005, -2, 9.99999975e-006, 0.662
++    def c229, 0.99999, 0, 0, 0 // FusionFix: zz_volume_depth.patch: just short of the far plane
+     dcl_position v0
+     dcl_position o0
+     dcl_texcoord9 o10 // LogDepth Interpolator
+@@ -125,6 +126,23 @@
+     mad r1, r0.x, c8, r1
+     mad r1, r0.z, c10, r1
+     add r1, r1, c11
++    // --- FusionFix: zz_volume_depth.patch: the depth the light shaders wrote (oDepth), here per vertex: log2(w / near) /
++    // --- log2(far / near) (c227, the z-fighting fix's constants), as the scene's depth is. Between the vertices it comes out
++    // --- a little farther than the surface's own (log is concave), and the volume's back faces pass where they lie farther than
++    // --- the scene (ZFUNC GREATER), so no lit pixel is lost. An orthographic view keeps its own depth, as the light shaders did.
++    // --- b5 off (LightVolumeDepth): the volume at the far plane, every pixel the scene covers passes.
++    if b5
++      mul r2.x, r1.w, c227.x
++      log r2.x, r2.x
++      mul r2.x, r2.x, c227.y
++      mul r2.x, r2.x, r1.w
++      dp3 r2.y, c10.xyw, c10.xyw
++      slt r2.y, c229.y, r2.y // 0 for an orthographic view (vs_3_0 has no cmp)
++      add r2.x, r2.x, -r1.z
++      mad r1.z, r2.y, r2.x, r1.z
++    else
++      mul r1.z, r1.w, c229.x
++    endif
+     add r0.xyz, r0, -c15
+     mov o1.xyz, -r0
+     mov o0, r1

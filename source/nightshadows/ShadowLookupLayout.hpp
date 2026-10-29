@@ -1,0 +1,40 @@
+// OnyxOak modification project: Extra Night Shadows Fix and Better Headlights.
+// Project direction, integration and visual testing by OnyxOak; Codex-assisted development.
+// Modification notice: 2026-09-27. See ATTRIBUTION.md for upstream credits and GPL-3.0.
+// Official release: https://www.nexusmods.com/gta4/mods/1459
+
+#pragma once
+#include <cstdint>
+#include <cstring>
+#include "ShadowCacheCount.hpp"
+namespace shadow_lookup_layout {
+inline constexpr uintptr_t ReadBufferRva=0xD74794, DynamicKey0Rva=0xD9FAF8, StaticKey0Rva=0xD9D1D0;
+inline constexpr uint8_t Original[]{0x80,0x3D,0x80,0x67,0x03,0x01,0x00,0x75,0x04,0x83,0xC8,0xFF,0xC3,0x8B,0x15,0x94,0x47,0x17,0x01,0x56,0x8B,0x74,0x24,0x0C,0x57,0x8B,0x7C,0x24,0x0C,0x83,0xFF,0xFF,0x75,0x0A,0x83,0xFE,0xFF,0x75,0x0E,0x5F,0x33,0xC0,0x5E,0xC3,0x85,0xFF,0x74,0x47,0x83,0xFE,0xFF,0x74,0x0F,0x8B,0xC6,0xC1,0xE0,0x08,0xC7,0x80,0xEC,0x0B,0x1A,0x01,0x00,0x00,0x00,0x00,0xF6,0x44,0x24,0x14,0x04,0x74,0x2C,0x8B,0xCA,0x69,0xC9,0x80,0x08,0x00,0x00,0xB8,0x01,0x00,0x00,0x00,0x81,0xC1,0x08,0xFC,0x19,0x01,0x8B,0xFF,0x3B,0x39,0x74,0x0E,0x40,0x81,0xC1,0x10,0x01,0x00,0x00,0x83,0xF8,0x08,0x7C,0xF0,0xEB,0x05,0x83,0xF8,0xFF,0x75,0x1F,0x83,0xFE,0xFF,0x74,0x17,0xC1,0xE2,0x04,0x03,0xD6,0xC1,0xE2,0x08,0x83,0xBA,0xD0,0xD1,0x19,0x01,0x00,0x74,0x06,0x5F,0x8D,0x46,0x08,0x5E,0xC3,0x83,0xC8,0xFF,0x5F,0x5E,0xC3};
+inline constexpr unsigned Relocs[]{2,15,60,90,134};
+// moved: LampShadowCaches 32 has moved the cache records (operand 60, record 0's age) and their per-buffer copies
+// (operand 134, buffer 0's copy of record 0's key) and made the buffer step shl edx, 5 (byte 126)
+inline bool Validate(uintptr_t base, uint32_t movedAge = 0, uint32_t movedCopyKey = 0) noexcept {
+    // Every caller (night shadows' lookup guard, postfx's HasShadowMap) sees the move: postfx's had found the code
+    // changed, and without the layout HasShadowMap answers by the flags alone, so a lamp with no slot counted as
+    // having a map and gave a car under it neither the map's shadow nor its box
+    if(!movedAge && fusionfix::shadows::cacheRecordsAt) {
+        movedAge=static_cast<uint32_t>(fusionfix::shadows::CacheRecord(base,0)+0xDC);
+        movedCopyKey=static_cast<uint32_t>(fusionfix::shadows::CacheCopy(base,0,0)+0xE0);
+    }
+    const auto* p=reinterpret_cast<const uint8_t*>(base+0x525DB0);
+    // Our own inline hook on it (night shadows) puts a jump over the first instruction (cmp byte [flag],0, 7 bytes);
+    // the rest still shows the layout.
+    const unsigned start=p[0]==0xE9?7u:0u;
+    for(unsigned i=start;i<sizeof(Original);) {
+        bool reloc=false;
+        for(auto offset:Relocs) if(i==offset) {reloc=true;break;}
+        if(reloc) {
+            uint32_t expected,actual;std::memcpy(&expected,Original+i,4);std::memcpy(&actual,p+i,4);
+            const bool moved=(i==60 && movedAge && actual==movedAge) || (i==134 && movedCopyKey && actual==movedCopyKey);
+            if(!moved && actual!=expected-static_cast<uint32_t>(0x400000)+static_cast<uint32_t>(base)) return false;
+            i+=4;
+        } else { if(p[i]!=Original[i] && !(i==126 && movedCopyKey && p[i]==5)) return false; ++i; }
+    }
+    return true;
+}
+}

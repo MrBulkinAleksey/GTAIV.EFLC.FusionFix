@@ -208,6 +208,96 @@ Logitech LightSync RGB
 [SSRDbgGIHistory]
 История непрямого света
 
+[GroundDebug]
+Отладка поверхностей земли
+
+[WetGroundDebug]
+Отладка мокрой земли
+
+[CloudShDebug]
+Отладка теней облаков
+
+[CloudsDebug]
+Отладка объёмных облаков
+
+[GrassWindDebug]
+Отладка травы на ветру
+
+[GpuGrassDebug]
+Густая трава: цвет по поверхности
+
+[AerialDebug]
+Отладка воздушной перспективы
+
+[WetDbgMaterial]
+Категории материалов
+
+[WetDbgWetness]
+Влажность, лужи, круги
+
+[CloudShDbgAll]
+Вся земля в тени
+
+[CloudShDbgNoise]
+Шум облаков
+
+[CloudDbgSky]
+Яркость неба
+
+[CloudDbgBase]
+Тень и солнце
+
+[CloudDbgSilver]
+Серебристая кайма
+
+[CloudDbgSunset]
+Цвет заката
+
+[CloudDbgGlow]
+Свечение
+
+[CloudDbgPower]
+Сила солнца
+
+[CloudDbgTops]
+Вершины
+
+[CloudDbgRim]
+Кайма против солнца
+
+[CloudDbgHaze]
+Дымка
+
+[CloudDbgSun]
+Доля солнца внутри
+
+[CloudDbgMarch]
+Облако к солнцу
+
+[CloudDbgExtinct]
+Ослабление
+
+[CloudDbgAbsorb]
+Поглощение
+
+[CloudDbgOverhd]
+Солнце в зените
+
+[SSRFullDepth]
+Шаги SSR по полной глубине
+
+[FGDebug]
+Отладка генерации кадров
+
+[FGDbgMarker]
+Метка кадров
+
+[FGDbgGenerated]
+Только сгенерированные
+
+[FGDbgBoth]
+Метка и сгенерированные
+
 [Contact Shadows]
 Контактные тени
 
@@ -237,6 +327,18 @@ Logitech LightSync RGB
 
 [GroundSurf]
 Поверхности земли
+
+[VehiclePaint]
+Покраска машин
+
+[CarRaindrops]
+Капли на машинах
+
+[SunFlare]
+Блик солнца в объективе
+
+[CarMirrors]
+Отражения в зеркалах машины
 
 [FF_PROCDIST]
 Дальность травы и предметов
@@ -274,11 +376,20 @@ Logitech LightSync RGB
 [WorldLightShad]
 Тени от огней зданий
 
+[ImprovedGrass]
+Улучшенная трава
+
 [BuildingShad]
 Здания в тенях фар
 
 [VolumeClouds]
 Объёмные облака
+
+[PbrSky]
+Физическое небо
+
+[AerialPersp]
+Воздушная перспектива
 
 [Zoomed Movement]
 Разрешить движение при прицеливании
@@ -351,6 +462,9 @@ Steam Controller
 
 [FF_TEXTURES]
 Текстуры
+
+[FF_DEBUG]
+Отладка
 
 [FF_HREACH]
 Дальность теней от фар

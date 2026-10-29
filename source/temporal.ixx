@@ -9,11 +9,14 @@ import common;
 import comvars;
 import coronas;
 import d3dx9_43;
+import screenquad;
 import framegeneration;
 import hdr;
 import renderscale;
 import settings;
 import upscaler;
+import vtablepatch;
+import inireload;
 
 #define IDR_TEMPORAL_VS_RIGID           3001
 #define IDR_TEMPORAL_VS_SKINNED         3002
@@ -146,6 +149,12 @@ export namespace TemporalAA
 
     // Called at the end of the camera scene's G-buffer pass, whatever the antialiasing, with the device state saved
     // around it: the depth there reads as the G-buffer pass wrote it, which it does not in the lighting phase.
+    // The same, before the motion vectors are made from the depth: what is drawn into the G-buffer there (GPU grass)
+    // gets the camera's motion, and its depth reaches the resolve, DLAA and FSR. OnGBufferEnd follows, after them.
+    inline void (*OnGBufferBeforeMotion)(IDirect3DDevice9* device) = nullptr;
+    // Game thread, as the camera scene's G-buffer list is closed: commands appended here run in the pass, after its
+    // entities and before the end above (Far Prop Instancing draws its batches there, so they reach the depth and motion)
+    inline void (*AppendBeforeSceneEnd)() = nullptr;
     inline void (*OnGBufferEnd)(IDirect3DDevice9* device) = nullptr;
     // Marks the motion vectors' passes for the PostFx profiler (begin, then end), when it is set.
     inline void (*ProfileMotion)(IDirect3DDevice9* device, bool begin) = nullptr;
@@ -178,8 +187,13 @@ export namespace TemporalAA
     Mode GetMode();
     bool IsMotionVectorsReady();
     IDirect3DTexture9* GetMotionVectors();
+    // [ANTIALIASING] ObjectDepthBias: how much nearer than the G-buffer's depth a pass drawing motion vectors over it
+    // writes its own, so the depth test keeps it where its surface is what is seen
+    float ObjectDepthBias();
     bool HistoryValid();
+    bool IsSceneResolved();
     void OnFogDrawn();
+    void OnPostFXDrawn();
 }
 
 class Temporal
@@ -353,6 +367,7 @@ public:
         destroy(HistoryRT[0]);
         destroy(HistoryRT[1]);
         destroy(BoneRT);
+        SAFE_RELEASE(BoneUpload);
         destroy(DepthRT);
         destroy(OpaqueRT);
         destroy(ReactiveRT);
@@ -363,6 +378,9 @@ public:
         HistoryFrame = 0;
         UpscalerFrame = 0;
         OpaqueFrame = 0;
+        // Declarations by address: one made after the reset at the address of a released one is another. Emptied on
+        // the render thread, which reads them; the reset runs on the main thread
+        bDeclCacheStale = true;
     }
 
     static bool ResourcesReady()
@@ -397,22 +415,40 @@ public:
         if (TemporalAA::GetMode() == TemporalAA::Mode::Off)
             return false;
 
-        // Nothing in the menus is resolved, the camera's projection would only shake whatever draws with it
-        if (CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive)
-            return false;
-
         // Never jitter an image that is not resolved: e.g. post processing is off or failed to start. Counted in
         // frames, not scenes: frames without a scene would keep the last resolve recent forever.
         auto resolved = ResolvePresent.load();
-        return resolved != 0 && PresentFrame.load() - resolved < 10;
+        if (resolved == 0)
+            return false;
+        auto since = PresentFrame.load() - resolved;
+
+        // Menus: only while the scene behind them is resolved every frame, as in the graphics settings, where without
+        // the jitter DLSS and FSR had nothing to add and the scene stayed at the render size. A menu without the scene
+        // stops the frame after the last resolve. Never on the map screen (3): the game still resolves a scene there,
+        // and the map, drawn with the camera's projection, shook with FSR.
+        if (CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive)
+            return since < 2 && !(pMenuTab && *pMenuTab == 3);
+        return since < 10;
     }
 
-    static inline rage::grcViewport* CameraViewport = nullptr;
+    // CCamFinal sets up two camera viewports every frame: the game camera's and a second one (square, far clip 800)
+    // that the scene is not rendered with. Only the one the G-buffer phase copies is jittered: a jittered viewport
+    // that no resolve follows would show the jitter as it is.
+    static inline std::array<rage::grcViewport*, 4> CameraViewports{};
+    static inline rage::grcViewport* SceneViewport = nullptr;
+
+    // The near plane is left out: the game moves it as the camera closes in on a wall, and the copy can hold the one
+    // before, so those scenes went uncounted and every history (temporal AA's, the accumulations of SSR, SSGI and AO)
+    // was dropped while walking along a wall. P[0][0] and P[1][1] hold the field of view and the aspect ratio, the
+    // jitter only changes P[2][0] and P[2][1].
+    static bool SameCamera(const rage::grcViewport* a, const rage::grcViewport* b)
+    {
+        return a->mWidth == b->mWidth && a->mHeight == b->mHeight && a->mFov == b->mFov &&
+            a->mProjectionMatrix[0][0] == b->mProjectionMatrix[0][0] && a->mProjectionMatrix[1][1] == b->mProjectionMatrix[1][1];
+    }
 
     // The G-buffer phase of the game viewport, not of the phone camera or of front end scenes: its viewport
-    // is a copy of the camera viewport. The near plane is left out: the game moves it as the camera closes in
-    // on a wall, and the copy can hold the one before, so those scenes went uncounted and every history
-    // (temporal AA's, the accumulations of SSR, SSGI and AO) was dropped while walking along a wall.
+    // is a copy of the camera viewport, which becomes the one that is jittered
     static bool IsCameraScene()
     {
         if (!CRenderPhase::sm_pCurrent || !*CRenderPhase::sm_pCurrent)
@@ -422,19 +458,30 @@ public:
         if (!phaseViewport->mIsPerspective)
             return false;
 
-        if (!CameraViewport)
+        if (!CameraViewports[0])
             return true;
 
-        return phaseViewport->mWidth == CameraViewport->mWidth && phaseViewport->mHeight == CameraViewport->mHeight &&
-            phaseViewport->mFov == CameraViewport->mFov;
+        for (auto viewport : CameraViewports)
+        {
+            if (viewport && SameCamera(viewport, phaseViewport))
+            {
+                SceneViewport = viewport;
+                return true;
+            }
+        }
+        return false;
     }
 
     static inline injector::hook_back<void(__fastcall*)(void*, void*, rage::grcViewport*, float, float, float, float)> hbSetCameraPerspective;
     static void __fastcall SetCameraPerspective(void* _this, void* edx, rage::grcViewport* viewport, float fov, float aspect, float nearClip, float farClip)
     {
-        CameraViewport = viewport;
+        if (viewport && std::find(CameraViewports.begin(), CameraViewports.end(), viewport) == CameraViewports.end())
+        {
+            std::rotate(CameraViewports.rbegin(), CameraViewports.rbegin() + 1, CameraViewports.rend());
+            CameraViewports[0] = viewport;
+        }
 
-        if (!viewport || !IsJitterActive() || viewport->mWidth <= 0 || viewport->mHeight <= 0)
+        if (!viewport || viewport != SceneViewport || !IsJitterActive() || viewport->mWidth <= 0 || viewport->mHeight <= 0)
             return hbSetCameraPerspective.fun(_this, edx, viewport, fov, aspect, nearClip, farClip);
 
         // NVIDIA recommends at least 16 phases for DLSS, 32 or more preferred
@@ -450,7 +497,11 @@ public:
             auto scale = RenderScale::GetScale();
             phases = std::max(phases, static_cast<uint32_t>(std::ceil(8.0f / (scale * scale))));
         }
-        auto index = (JitterCounter++ % phases) + 1;
+        // One step of the sequence per game frame. A counter of the calls advanced twice per frame (both camera
+        // viewports): every frame got an odd index, and Halton(odd, 2) >= 0.5, so all samples were in the same half
+        // of the pixel horizontally.
+        auto frame = CTimer::m_frameCount ? *CTimer::m_frameCount : JitterCounter++;
+        auto index = (frame % phases) + 1;
         auto jitterX = Halton(index, 2) - 0.5f;
         auto jitterY = Halton(index, 3) - 0.5f;
 
@@ -521,15 +572,20 @@ public:
         static inline SafetyHookInline hook{};
         static int __fastcall AddToDrawList(void* entity, void* edx, int a2, int a3, int a4, int a5)
         {
-            if (bBuildingSceneList && CRenderPhaseDeferredLighting_SceneToGBuffer::SkipEntity &&
-                CRenderPhaseDeferredLighting_SceneToGBuffer::SkipEntity(entity))
-                return 0;
+            const auto around = bBuildingSceneList ? CRenderPhaseDeferredLighting_SceneToGBuffer::AroundEntity : nullptr;
+            if (around)
+                around(entity, true);
+            int result;
             if (!bBuildingSceneList || !bObjectMotionVectors)
-                return hook.unsafe_thiscall<int>(entity, a2, a3, a4, a5);
-
-            Append(CTemporalDC::Type::EntityBegin, entity);
-            auto result = hook.unsafe_thiscall<int>(entity, a2, a3, a4, a5);
-            Append(CTemporalDC::Type::EntityEnd, entity);
+                result = hook.unsafe_thiscall<int>(entity, a2, a3, a4, a5);
+            else
+            {
+                Append(CTemporalDC::Type::EntityBegin, entity);
+                result = hook.unsafe_thiscall<int>(entity, a2, a3, a4, a5);
+                Append(CTemporalDC::Type::EntityEnd, entity);
+            }
+            if (around)
+                around(entity, false);
             return result;
         }
     };
@@ -556,6 +612,8 @@ public:
         camera.View = TemporalMath::Matrix::From(viewport->mViewMatrix);
         camera.Projection = TemporalMath::Matrix::From(viewport->mProjectionMatrix);
         camera.ProjectionNoJitter = camera.Projection;
+        SceneViewportWidth = viewport->mWidth;
+        SceneViewportHeight = viewport->mHeight;
         // The size the scene renders at
         camera.Width = static_cast<int32_t>(RenderScale::ToRenderWidth(static_cast<uint32_t>(viewport->mWidth)));
         camera.Height = static_cast<int32_t>(RenderScale::ToRenderHeight(static_cast<uint32_t>(viewport->mHeight)));
@@ -634,6 +692,7 @@ public:
     };
 
     static inline std::unordered_map<IDirect3DVertexDeclaration9*, DeclInfo> DeclCache;
+    static inline std::atomic<bool> bDeclCacheStale = false;
     static inline std::unordered_map<void*, EntityRecord> EntitiesCurrent;
     static inline std::unordered_map<void*, EntityRecord> EntitiesPrevious;
     static inline std::vector<float> BonesCurrent;
@@ -648,6 +707,8 @@ public:
     static void BeginCapture()
     {
         EndCaptureCleanup();
+        if (bDeclCacheStale.exchange(false))
+            DeclCache.clear();
 
         bCapturing = TemporalAA::GetMode() != TemporalAA::Mode::Off && TemporalAA::CurrentCamera.Valid && ResourcesReady() && bObjectMotionVectors;
         RenderThreadId = GetCurrentThreadId();
@@ -702,7 +763,25 @@ public:
         return DeclCache.emplace(decl, info).first->second;
     }
 
-    static const DrawRecord* FindPrevious(void* entity, size_t ordinal, IDirect3DIndexBuffer9* ib, IDirect3DVertexBuffer9* vb, UINT startIndex, UINT primitiveCount)
+    // Where a draw stands, to tell draws of one mesh apart: skinned, its first bone's offset from the entity (a car's
+    // draws hold only the car's position, each wheel's own place is in its bone), which the car's speed does not move;
+    // otherwise its world matrix's position (rows or columns, whichever holds it)
+    static void DrawPosition(const float* world, const float* bones, float out[3])
+    {
+        const bool rows = std::abs(world[12]) + std::abs(world[13]) + std::abs(world[14]) >= std::abs(world[3]) + std::abs(world[7]) + std::abs(world[11]);
+        for (int k = 0; k < 3; ++k)
+            out[k] = bones ? bones[k * 4 + 3] : rows ? world[12 + k] : world[k * 4 + 3];
+    }
+
+    static const float* PreviousBones(const DrawRecord& d)
+    {
+        return d.Bones >= 0 && static_cast<size_t>(d.Bones + BoneTexels * 4) <= BonesPrevious.size() ? &BonesPrevious[d.Bones] : nullptr;
+    }
+
+    // The same draw in the previous frame: the same mesh, and of those, a car's four wheels drawing one, the one that
+    // stood nearest (the same place in the entity's list first, as a tie). By the list's place alone, a draw more or
+    // fewer before them (lights, damage, a LOD) took another wheel's matrix, and the wheel smeared towards it.
+    static const DrawRecord* FindPrevious(void* entity, size_t ordinal, const DrawRecord& current)
     {
         auto it = EntitiesPrevious.find(entity);
         if (it == EntitiesPrevious.end())
@@ -711,17 +790,34 @@ public:
         auto& draws = it->second.Draws;
         auto matches = [&](const DrawRecord& d)
         {
-            return d.IndexBuffer == ib && d.VertexBuffer == vb && d.StartIndex == startIndex && d.PrimitiveCount == primitiveCount;
+            return d.IndexBuffer == current.IndexBuffer && d.VertexBuffer == current.VertexBuffer && d.StartIndex == current.StartIndex &&
+                d.PrimitiveCount == current.PrimitiveCount;
         };
 
-        if (ordinal < draws.size() && matches(draws[ordinal]))
-            return &draws[ordinal];
+        float position[3];
+        const float* bones = current.Bones >= 0 && static_cast<size_t>(current.Bones + BoneTexels * 4) <= BonesCurrent.size() ? &BonesCurrent[current.Bones] : nullptr;
+        DrawPosition(current.World, bones, position);
+        auto distance = [&](const DrawRecord& d)
+        {
+            float p[3];
+            DrawPosition(d.World, PreviousBones(d), p);
+            return (p[0] - position[0]) * (p[0] - position[0]) + (p[1] - position[1]) * (p[1] - position[1]) + (p[2] - position[2]) * (p[2] - position[2]);
+        };
 
+        const DrawRecord* best = ordinal < draws.size() && matches(draws[ordinal]) ? &draws[ordinal] : nullptr;
+        float bestDistance = best ? distance(*best) : 0.0f;
         for (auto& d : draws)
-            if (matches(d))
-                return &d;
-
-        return nullptr;
+        {
+            if (&d == best || !matches(d))
+                continue;
+            const float dd = distance(d);
+            if (!best || dd < bestDistance)
+            {
+                best = &d;
+                bestDistance = dd;
+            }
+        }
+        return best;
     }
 
     static void CaptureDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT baseVertex, UINT minIndex, UINT numVertices, UINT startIndex, UINT primitiveCount)
@@ -770,7 +866,7 @@ public:
 
         // Only draws that moved since the previous frame need their own motion vectors, the rest is
         // covered by the camera motion reprojected from depth
-        auto previous = FindPrevious(entity, ordinal, indices, stream0, startIndex, primitiveCount);
+        auto previous = FindPrevious(entity, ordinal, draw);
         bool moved = false;
         int32_t prevBones = -1;
         if (previous)
@@ -847,11 +943,9 @@ public:
 
         auto vtable = *reinterpret_cast<void***>(device);
         constexpr auto DrawIndexedPrimitiveIndex = 82;
-        if (vtable == HookedVTable || vtable[DrawIndexedPrimitiveIndex] == reinterpret_cast<void*>(&DrawIndexedPrimitive))
+        if (vtable == HookedVTable)
             return;
-
-        RealDrawIndexedPrimitive = reinterpret_cast<decltype(RealDrawIndexedPrimitive)>(vtable[DrawIndexedPrimitiveIndex]);
-        injector::WriteMemory(&vtable[DrawIndexedPrimitiveIndex], &DrawIndexedPrimitive, true);
+        PatchVTable(vtable, DrawIndexedPrimitiveIndex, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
         HookedVTable = vtable;
     }
 
@@ -1000,24 +1094,11 @@ public:
         device->SetSamplerState(sampler, D3DSAMP_SRGBTEXTURE, FALSE);
     }
 
-    struct ScreenVertex
-    {
-        float x, y, z, rhw;
-        float u, v;
-    };
-
     static void DrawFullscreen(IDirect3DDevice9* device, float width, float height)
     {
-        ScreenVertex vertices[4] =
-        {
-            { -0.5f,         -0.5f,          0.0f, 1.0f, 0.0f, 0.0f },
-            { -0.5f,          height - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
-            { width - 0.5f,  -0.5f,          0.0f, 1.0f, 1.0f, 0.0f },
-            { width - 0.5f,   height - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f },
-        };
         device->SetVertexShader(nullptr);
-        device->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
-        device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(ScreenVertex));
+        device->SetFVF(kScreenVertexFVF);
+        ScreenQuad::Full(width, height).Draw(device);
     }
 
     // Render states of a plain fullscreen pass, StateBackup restores them
@@ -1044,6 +1125,15 @@ public:
         bCapturing = false;
 
         auto device = RageDirect3DDevice9::GetRuntimeDevice();
+        if (device && OnGBufferBeforeMotion)
+        {
+            bInternalDraw = true;
+            {
+                StateBackup backup(device);
+                OnGBufferBeforeMotion(device);
+            }
+            bInternalDraw = false;
+        }
         if (device && GetMode() != Mode::Off && CurrentCamera.Valid && ResourcesReady())
         {
             bInternalDraw = true;
@@ -1155,64 +1245,49 @@ public:
         device->SetTexture(0, nullptr);
     }
 
+    // The previous bones go to BoneRT from a system memory copy (UpdateSurface), a row of BoneTexels for each skinned
+    // capture: a point list of BoneTexels vertices a capture, made and sent through DrawPrimitiveUP each frame, was 2.3%
+    // of the render thread looking at a busy street (profile at Firefly Island, 2026-10-28)
+    static inline IDirect3DSurface9* BoneUpload = nullptr;
+
     static void UploadPreviousBones(IDirect3DDevice9* device)
     {
         if (!BoneRT || !BoneRT->mD3DTexture || !bVertexTextureSupported)
             return;
 
-        struct BoneVertex
+        if (!BoneUpload && FAILED(device->CreateOffscreenPlainSurface(BoneTexels, BoneRows, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &BoneUpload, nullptr)))
         {
-            float position[4];
-            float value[4];
-        };
+            BoneUpload = nullptr;
+            return;
+        }
 
-        static std::vector<BoneVertex> vertices;
-        vertices.clear();
-
-        int32_t row = 0;
+        int32_t rows = 0;
+        D3DLOCKED_RECT locked{};
         for (auto& capture : Captures)
         {
             if (!capture.Skinned || capture.PrevBones < 0)
                 continue;
-            if (row >= BoneRows)
+            if (rows >= BoneRows)
                 break;
+            if (!rows && FAILED(BoneUpload->LockRect(&locked, nullptr, 0)))
+                return;
 
-            capture.BoneRow = row;
-            auto y = 1.0f - 2.0f * static_cast<float>(row) / static_cast<float>(BoneRows);
-            for (int32_t i = 0; i < BoneTexels; ++i)
-            {
-                // D3D9 maps pixel centers to integer screen coordinates
-                BoneVertex v;
-                v.position[0] = 2.0f * static_cast<float>(i) / static_cast<float>(BoneTexels) - 1.0f;
-                v.position[1] = y;
-                v.position[2] = 0.0f;
-                v.position[3] = 1.0f;
-                std::memcpy(v.value, &BonesPrevious[capture.PrevBones + i * 4], sizeof(v.value));
-                vertices.push_back(v);
-            }
-            ++row;
+            capture.BoneRow = rows;
+            std::memcpy(static_cast<uint8_t*>(locked.pBits) + rows * locked.Pitch, &BonesPrevious[capture.PrevBones], BoneTexels * 4 * sizeof(float));
+            ++rows;
         }
 
-        if (vertices.empty())
+        if (!rows)
             return;
+        BoneUpload->UnlockRect();
 
         IDirect3DSurface9* boneSurface = nullptr;
         BoneRT->mD3DTexture->GetSurfaceLevel(0, &boneSurface);
         if (!boneSurface)
             return;
-
-        device->SetRenderTarget(0, boneSurface);
-        device->SetDepthStencilSurface(nullptr);
-        device->SetRenderState(D3DRS_ZENABLE, FALSE);
-        device->SetRenderState(D3DRS_COLORWRITEENABLE, 0x0F);
-        device->SetRenderState(D3DRS_POINTSIZE, 0x3F800000);
-        device->SetRenderState(D3DRS_POINTSCALEENABLE, FALSE);
-        device->SetRenderState(D3DRS_POINTSPRITEENABLE, FALSE);
-        device->SetVertexDeclaration(BoneWriteDecl);
-        device->SetVertexShader(BoneWriteVS);
-        device->SetPixelShader(BoneWritePS);
-        device->DrawPrimitiveUP(D3DPT_POINTLIST, static_cast<UINT>(vertices.size()), vertices.data(), sizeof(BoneVertex));
-
+        const RECT rect = { 0, 0, BoneTexels, rows };
+        const POINT origin = { 0, 0 };
+        device->UpdateSurface(BoneUpload, &rect, boneSurface, &origin);
         boneSurface->Release();
     }
 
@@ -1473,7 +1548,8 @@ public:
             SAFE_RELEASE(surface);
             SAFE_RELEASE(texture);
         }
-        if (bSceneTargetsFailed)
+        // Not made while the device is being reset: it would be alive at the Reset
+        if (bSceneTargetsFailed || rage::grcDevice::IsDeviceLost())
             return nullptr;
         if (FAILED(device->CreateTexture(width, height, 1, D3DUSAGE_RENDERTARGET, format, D3DPOOL_DEFAULT, &texture, nullptr)) || !texture ||
             FAILED(texture->GetSurfaceLevel(0, &surface)) || !surface)
@@ -1880,6 +1956,9 @@ public:
         frame.HighDynamicRange = HDROutput::IsActive();
         frame.HudLess = FrameGeneration::UsesHudLess();
         frame.AsyncGeneration = FrameGeneration::UsesAsyncCompute();
+        frame.PresentWindow = FrameGeneration::HelperPresentWindow();
+        frame.HelperPresent = frame.PresentWindow != nullptr;
+        frame.AmdPacing = FrameGeneration::UsesAmdPacing();
         auto world = CurrentCamera.View.Inverse();
         auto normalized = [&](int row, float sign, float (&out)[3])
         {
@@ -1914,7 +1993,32 @@ public:
         return true;
     }
 
+    // The size of the scene's viewport (the output size with a render scale), for RemoveJitterAfterResolve
+    static inline int32_t SceneViewportWidth = 0;
+    static inline int32_t SceneViewportHeight = 0;
+
 public:
+    // Rebuilds the composite matrices of a viewport and uploads them when it's the current one
+    static inline void(__fastcall* RegenerateMatrices)(rage::grcViewport*, void*) = nullptr;
+
+    // CRenderPhaseDrawScene keeps drawing after the post processing, into the resolved image and with the viewport
+    // of the scene: CoronasCB (time cycle, ped impostors), render list 10, Coronas::Render, 3D markers. Nothing
+    // resolves them, so the jitter would show as it is: they get the projection without it.
+    static void RemoveJitterAfterResolve()
+    {
+        if (!RegenerateMatrices || !TemporalAA::IsSceneResolved())
+            return;
+        auto viewport = rage::GetCurrentViewport();
+        if (!viewport || !viewport->mIsPerspective || viewport->mWidth != SceneViewportWidth || viewport->mHeight != SceneViewportHeight)
+            return;
+        // P[2][0] and P[2][1] are the projection offsets without jitter, see SetCameraPerspective
+        if (viewport->mProjectionMatrix[2][0] == viewport->field_2D8 && viewport->mProjectionMatrix[2][1] == viewport->field_2DC)
+            return;
+        viewport->mProjectionMatrix[2][0] = viewport->field_2D8;
+        viewport->mProjectionMatrix[2][1] = viewport->field_2DC;
+        RegenerateMatrices(viewport, nullptr);
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Resolve, called by PostFX on the HDR scene before any other post processing. Writes the result
     // into output (texture and its surface) and returns true, or leaves it untouched. The rain goes into whichever
@@ -2071,33 +2175,48 @@ public:
         return dot < 0.5;
     }
 
+    // At startup and on Ctrl+Shift+F10 (IniReload): each of these is looked at every frame; the ones that decide which
+    // targets are made are read at startup alone.
+    static void ReadSettings(CIniReader& iniReader)
+    {
+        nJitterPhases = std::clamp(iniReader.ReadInteger("ANTIALIASING", "JitterPhases", 8), 2, 128);
+        fCurrentWeightMin = std::clamp(iniReader.ReadFloat("ANTIALIASING", "CurrentFrameWeightMin", 0.08f), 0.01f, 1.0f);
+        fCurrentWeightMax = std::clamp(iniReader.ReadFloat("ANTIALIASING", "CurrentFrameWeightMax", 0.2f), fCurrentWeightMin, 1.0f);
+        fCurrentWeightPerPixel = std::max(iniReader.ReadFloat("ANTIALIASING", "CurrentFrameWeightPerPixelOfMotion", 0.1f), 0.0f);
+        fVarianceClipGamma = std::clamp(iniReader.ReadFloat("ANTIALIASING", "VarianceClipGamma", 1.25f), 0.5f, 4.0f);
+        fLumaWeight = std::clamp(iniReader.ReadFloat("ANTIALIASING", "LumaWeight", 1.0f), 0.0f, 16.0f);
+        fObjectDepthBias = std::clamp(iniReader.ReadFloat("ANTIALIASING", "ObjectDepthBias", 0.00002f), 0.0f, 0.01f);
+        bObjectMotionVectors = iniReader.ReadInteger("ANTIALIASING", "ObjectMotionVectors", 1) != 0;
+        fCameraCutDistance = std::max(iniReader.ReadFloat("ANTIALIASING", "CameraCutDistance", 25.0f), 1.0f);
+        nDLSSPreset = std::clamp(iniReader.ReadInteger("ANTIALIASING", "DLSSPreset", 0), 0, 15);
+        fFSRSharpness = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FSRSharpness", 0.0f), 0.0f, 1.0f);
+        fReactiveScale = std::clamp(iniReader.ReadFloat("ANTIALIASING", "ReactiveMaskScale", 2.0f), 0.0f, 64.0f);
+        fReactiveMax = std::clamp(iniReader.ReadFloat("ANTIALIASING", "ReactiveMaskMaximum", 0.75f), 0.0f, 1.0f);
+        bRainLayer = iniReader.ReadInteger("ANTIALIASING", "RainAfterAntialiasing", 1) != 0;
+    }
+
     Temporal()
     {
         FusionFix::onInitEventAsync() += []()
         {
             CIniReader iniReader("");
-            nJitterPhases = std::clamp(iniReader.ReadInteger("TEMPORAL", "JitterPhases", 8), 2, 128);
-            fCurrentWeightMin = std::clamp(iniReader.ReadFloat("TEMPORAL", "CurrentFrameWeightMin", 0.08f), 0.01f, 1.0f);
-            fCurrentWeightMax = std::clamp(iniReader.ReadFloat("TEMPORAL", "CurrentFrameWeightMax", 0.2f), fCurrentWeightMin, 1.0f);
-            fCurrentWeightPerPixel = std::max(iniReader.ReadFloat("TEMPORAL", "CurrentFrameWeightPerPixelOfMotion", 0.1f), 0.0f);
-            fVarianceClipGamma = std::clamp(iniReader.ReadFloat("TEMPORAL", "VarianceClipGamma", 1.25f), 0.5f, 4.0f);
-            fLumaWeight = std::clamp(iniReader.ReadFloat("TEMPORAL", "LumaWeight", 1.0f), 0.0f, 16.0f);
-            fObjectDepthBias = std::clamp(iniReader.ReadFloat("TEMPORAL", "ObjectDepthBias", 0.00002f), 0.0f, 0.01f);
-            bObjectMotionVectors = iniReader.ReadInteger("TEMPORAL", "ObjectMotionVectors", 1) != 0;
-            bSkinnedMotionVectors = iniReader.ReadInteger("TEMPORAL", "SkinnedMotionVectors", 1) != 0;
-            fCameraCutDistance = std::max(iniReader.ReadFloat("TEMPORAL", "CameraCutDistance", 25.0f), 1.0f);
-            nDLSSPreset = std::clamp(iniReader.ReadInteger("TEMPORAL", "DLSSPreset", 0), 0, 15);
-            fFSRSharpness = std::clamp(iniReader.ReadFloat("TEMPORAL", "FSRSharpness", 0.0f), 0.0f, 1.0f);
-            bReactiveMask = iniReader.ReadInteger("TEMPORAL", "ReactiveMask", 1) != 0;
-            fReactiveScale = std::clamp(iniReader.ReadFloat("TEMPORAL", "ReactiveMaskScale", 2.0f), 0.0f, 64.0f);
-            fReactiveMax = std::clamp(iniReader.ReadFloat("TEMPORAL", "ReactiveMaskMaximum", 0.75f), 0.0f, 1.0f);
-            bRainLayer = iniReader.ReadInteger("TEMPORAL", "RainAfterAntialiasing", 1) != 0;
-            bSteadyDepth = iniReader.ReadInteger("TEMPORAL", "SteadyDepth", 1) != 0;
+            // These size the targets (CreateResources): read at startup only
+            bSkinnedMotionVectors = iniReader.ReadInteger("ANTIALIASING", "SkinnedMotionVectors", 1) != 0;
+            bReactiveMask = iniReader.ReadInteger("ANTIALIASING", "ReactiveMask", 1) != 0;
+            bSteadyDepth = iniReader.ReadInteger("ANTIALIASING", "SteadyDepth", 1) != 0;
+            ReadSettings(iniReader);
+            IniReload::Add(ReadSettings);
 
             GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&Resolve, &hm);
 
+            // Rebuilds the composite matrices of a viewport (RemoveJitterAfterResolve)
+            auto pattern = find_pattern("55 8B EC 83 E4 F8 51 56 8B F1 8D 86 80 00 00 00 50 8D 86 80 01 00 00 50 8D 8E C0 00 00 00 E8",
+                "56 8B F1 8D 86 80 00 00 00 50 8D 86 80 01 00 00 50 8D 8E C0 00 00 00 E8");
+            if (!pattern.empty())
+                RegenerateMatrices = reinterpret_cast<decltype(RegenerateMatrices)>(pattern.get_first(0));
+
             // Main camera perspective, CCamFinal
-            auto pattern = hook::pattern("F3 0F 11 04 24 53 E8 ? ? ? ? 5F 5E 5B 8B E5");
+            pattern = hook::pattern("F3 0F 11 04 24 53 E8 ? ? ? ? 5F 5E 5B 8B E5");
             if (!pattern.empty())
                 hbSetCameraPerspective.fun = injector::MakeCALL(pattern.get_first(6), SetCameraPerspective, true).get();
             else
@@ -2142,9 +2261,6 @@ public:
             {
                 switch (value)
                 {
-                case FusionFixSettings.AntialiasingText.eSMAA:
-                    // hangs the game on D3D9on12
-                    return CSettings::GetRunningGraphicsAPI() != 2;
                 case FusionFixSettings.AntialiasingText.eTAA:
                     // resolved by Fusion Fix post processing
                     return GetD3DX9_43DLL() != nullptr;
@@ -2203,7 +2319,11 @@ public:
             CRenderPhaseDeferredLighting_SceneToGBuffer::OnAfterBuildRenderList() += []()
             {
                 if (bBuildingSceneList)
+                {
+                    if (TemporalAA::AppendBeforeSceneEnd)
+                        TemporalAA::AppendBeforeSceneEnd();
                     Append(CTemporalDC::Type::SceneEnd);
+                }
                 bBuildingSceneList = false;
             };
         };
@@ -2262,6 +2382,11 @@ export namespace TemporalAA
     bool IsMotionVectorsReady()
     {
         return Temporal::MotionFrame == SceneFrame && Temporal::MotionRT;
+    }
+
+    float ObjectDepthBias()
+    {
+        return Temporal::fObjectDepthBias;
     }
 
     // Render thread, after the G-buffer pass: the world matrix this frame's G-buffer drew the entity with, in CEntity's
@@ -2330,6 +2455,34 @@ export namespace TemporalAA
             }
         }
         return found;
+    }
+
+    // Render thread, after the G-buffer pass: where this frame's G-buffer drew the entity, its world matrix's position
+    // (a ped's draws, skinned, hold the ped's own there, the pose in the bones), of its draws the one nearest `around`
+    // within `reach` metres. nearest, where given: how far the nearest draw stood (-1 none recorded), for the log.
+    bool DrawnPosition(void* entity, const float around[3], float reach, float out[3], float* nearest)
+    {
+        if (nearest)
+            *nearest = -1.0f;
+        auto it = Temporal::EntitiesPrevious.find(entity);
+        if (it == Temporal::EntitiesPrevious.end())
+            return false;
+        float best = -1.0f;
+        for (auto& draw : it->second.Draws)
+        {
+            float p[3];
+            Temporal::DrawPosition(draw.World, nullptr, p);
+            const float dx = p[0] - around[0], dy = p[1] - around[1], dz = p[2] - around[2];
+            const float d2 = dx * dx + dy * dy + dz * dz;
+            if (std::isfinite(d2) && (best < 0.0f || d2 < best))
+            {
+                best = d2;
+                std::copy_n(p, 3, out);
+            }
+        }
+        if (nearest && best >= 0.0f)
+            *nearest = std::sqrt(best);
+        return best >= 0.0f && best < reach * reach;
     }
 
     // The box shadows' log: the entity's draws from the last G-buffer, nearest `around` first, at most 12, each with its
@@ -2439,6 +2592,12 @@ export namespace TemporalAA
     IDirect3DTexture9* GetSteadyDepth()
     {
         return Temporal::GetSteadyDepth();
+    }
+
+    // Called by PostFX once the post processing of the scene is drawn
+    void OnPostFXDrawn()
+    {
+        Temporal::RemoveJitterAfterResolve();
     }
 
     // Called by PostFX right after the fog pass of the scene

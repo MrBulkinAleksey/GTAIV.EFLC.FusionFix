@@ -8,6 +8,7 @@ export module framehistory;
 import common;
 import comvars;
 import temporal;
+import inireload;
 
 // What the effects of a frame share about the frames before it, for any effect that keeps a history (an
 // accumulation, a copy of the scene) and reprojects it: the camera of this scene and of the previous one, cuts
@@ -58,15 +59,20 @@ namespace FrameHistoryDetail
     FrameHistory::Camera previous;
     uint32_t converted = 0;
 
-    // Same threshold as the history of temporal AA: [TEMPORAL] CameraCutDistance, meters in one frame
+    // Same threshold as the history of temporal AA: [ANTIALIASING] CameraCutDistance, meters in one frame; read again on
+    // Ctrl+Shift+F10 (IniReload)
+    float cutDistance = 25.0f;
     float CutDistance()
     {
-        static float distance = []
+        static const bool registered = []
         {
+            auto read = [](CIniReader& iniReader) { cutDistance = std::max(iniReader.ReadFloat("ANTIALIASING", "CameraCutDistance", 25.0f), 1.0f); };
             CIniReader iniReader("");
-            return std::max(iniReader.ReadFloat("TEMPORAL", "CameraCutDistance", 25.0f), 1.0f);
+            read(iniReader);
+            IniReload::Add(read);
+            return true;
         }();
-        return distance;
+        return cutDistance;
     }
 
     void Update()

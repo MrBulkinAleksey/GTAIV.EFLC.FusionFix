@@ -1,0 +1,468 @@
+module;
+
+#include <common.hxx>
+#include <d3dx9tex.h>
+#include "FusionLog.hpp"
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <iterator>
+#include <string>
+
+export module skytrace;
+
+import common;
+import comvars;
+import d3dx9_43;
+import vtablepatch;
+
+// [DEBUG] SkyTrace: what the sky dome's draws (gta_atmoscatt_clouds, within postfx's DrawSky) are drawn with, to
+// GTAIV.EFLC.FusionFix.SkyTrace.log: the shaders, samplers 0 to 5 (the moon's technique reads the clouds' noise from s3-s5) with
+// their textures and states, and the vertex (c64-c76) and pixel (c64-c87) constants that hold the sky's parameters,
+// read back from the device at each draw. The first draw of each kind is written whole, later ones only where they
+// differ from the draw before them, so a value that changes as the camera turns shows up.
+export namespace SkyTrace
+{
+    bool bEnabled = false;
+    bool bInSky = false;
+    // [DEBUG] SkyMoonPass = 0: the sky never draws the moon pass, to tell whether it is what changes the clouds.
+    bool bMoonPass = true;
+}
+
+namespace SkyTrace
+{
+    constexpr UINT kVSFirst = 64, kVSCount = 13, kPSFirst = 64, kPSCount = 24, kSamplers = 6;
+    constexpr D3DSAMPLERSTATETYPE kStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_MIPFILTER };
+
+    // The moon pass against the plain sky of the same call: everything the two draws read, compared exactly, the
+    // registers and states that differ written for the first few calls with a moon pass. The moon technique's
+    // shader matches the plain one's clouds line for line, yet the clouds change where it draws.
+    uint32_t frame = 0, lines = 0;
+
+    constexpr UINT kAllVSConstants = 256, kAllPSConstants = 224;
+    constexpr DWORD kAllSamplers = 16;
+    constexpr D3DSAMPLERSTATETYPE kAllSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW, D3DSAMP_BORDERCOLOR,
+        D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_MIPMAPLODBIAS, D3DSAMP_MAXMIPLEVEL, D3DSAMP_MAXANISOTROPY,
+        D3DSAMP_SRGBTEXTURE };
+    constexpr D3DRENDERSTATETYPE kAllRenderStates[] = { D3DRS_ZENABLE, D3DRS_ZWRITEENABLE, D3DRS_ZFUNC, D3DRS_ALPHATESTENABLE,
+        D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP, D3DRS_SEPARATEALPHABLENDENABLE, D3DRS_COLORWRITEENABLE,
+        D3DRS_COLORWRITEENABLE1, D3DRS_SRGBWRITEENABLE, D3DRS_STENCILENABLE, D3DRS_CULLMODE, D3DRS_SCISSORTESTENABLE, D3DRS_CLIPPLANEENABLE,
+        D3DRS_FILLMODE };
+    struct FullState
+    {
+        float vsc[kAllVSConstants * 4] = {};
+        float psc[kAllPSConstants * 4] = {};
+        BOOL psb[16] = {};
+        int psi[16 * 4] = {};
+        void* stream = nullptr;
+        UINT streamOffset = 0, streamStride = 0;
+        void* declaration = nullptr;
+        void* indices = nullptr;
+        void* texture[kAllSamplers] = {};
+        DWORD samplers[kAllSamplers][std::size(kAllSamplerStates)] = {};
+        DWORD render[std::size(kAllRenderStates)] = {};
+        void* target[2] = {};
+    };
+    FullState plainSky;
+    bool plainSkyRead = false;
+    int moonCompares = 0;
+
+    void ReadFull(IDirect3DDevice9* device, FullState& s)
+    {
+        device->GetVertexShaderConstantF(0, s.vsc, kAllVSConstants);
+        device->GetPixelShaderConstantF(0, s.psc, kAllPSConstants);
+        device->GetPixelShaderConstantB(0, s.psb, 16);
+        device->GetPixelShaderConstantI(0, s.psi, 16);
+        IDirect3DVertexBuffer9* stream = nullptr;
+        device->GetStreamSource(0, &stream, &s.streamOffset, &s.streamStride);
+        s.stream = stream;
+        if (stream)
+            stream->Release();
+        IDirect3DVertexDeclaration9* declaration = nullptr;
+        device->GetVertexDeclaration(&declaration);
+        s.declaration = declaration;
+        if (declaration)
+            declaration->Release();
+        IDirect3DIndexBuffer9* indices = nullptr;
+        device->GetIndices(&indices);
+        s.indices = indices;
+        if (indices)
+            indices->Release();
+        for (DWORD i = 0; i < kAllSamplers; ++i)
+        {
+            IDirect3DBaseTexture9* texture = nullptr;
+            device->GetTexture(i, &texture);
+            s.texture[i] = texture;
+            if (texture)
+                texture->Release();
+            for (size_t j = 0; j < std::size(kAllSamplerStates); ++j)
+                device->GetSamplerState(i, kAllSamplerStates[j], &s.samplers[i][j]);
+        }
+        for (size_t j = 0; j < std::size(kAllRenderStates); ++j)
+            device->GetRenderState(kAllRenderStates[j], &s.render[j]);
+        for (DWORD i = 0; i < 2; ++i)
+        {
+            IDirect3DSurface9* target = nullptr;
+            device->GetRenderTarget(i, &target);
+            s.target[i] = target;
+            if (target)
+                target->Release();
+        }
+    }
+
+    void CompareMoon(const FullState& a, const FullState& b)
+    {
+        std::string text;
+        char buf[256];
+        for (UINT r = 0; r < kAllVSConstants; ++r)
+        {
+            if (std::memcmp(a.vsc + r * 4, b.vsc + r * 4, 16) != 0)
+            {
+                std::snprintf(buf, sizeof(buf), " vc%u (%g %g %g %g)/(%g %g %g %g);", r, a.vsc[r * 4], a.vsc[r * 4 + 1], a.vsc[r * 4 + 2],
+                              a.vsc[r * 4 + 3], b.vsc[r * 4], b.vsc[r * 4 + 1], b.vsc[r * 4 + 2], b.vsc[r * 4 + 3]);
+                text += buf;
+            }
+        }
+        for (UINT r = 0; r < kAllPSConstants; ++r)
+        {
+            if (std::memcmp(a.psc + r * 4, b.psc + r * 4, 16) != 0)
+            {
+                std::snprintf(buf, sizeof(buf), " pc%u (%g %g %g %g)/(%g %g %g %g);", r, a.psc[r * 4], a.psc[r * 4 + 1], a.psc[r * 4 + 2],
+                              a.psc[r * 4 + 3], b.psc[r * 4], b.psc[r * 4 + 1], b.psc[r * 4 + 2], b.psc[r * 4 + 3]);
+                text += buf;
+            }
+        }
+        for (UINT r = 0; r < 16; ++r)
+        {
+            if (a.psb[r] != b.psb[r])
+            {
+                std::snprintf(buf, sizeof(buf), " pb%u %d/%d;", r, a.psb[r], b.psb[r]);
+                text += buf;
+            }
+        }
+        for (UINT r = 0; r < 16; ++r)
+        {
+            if (std::memcmp(a.psi + r * 4, b.psi + r * 4, 16) != 0)
+            {
+                std::snprintf(buf, sizeof(buf), " pi%u (%d %d %d %d)/(%d %d %d %d);", r, a.psi[r * 4], a.psi[r * 4 + 1], a.psi[r * 4 + 2],
+                              a.psi[r * 4 + 3], b.psi[r * 4], b.psi[r * 4 + 1], b.psi[r * 4 + 2], b.psi[r * 4 + 3]);
+                text += buf;
+            }
+        }
+        std::snprintf(buf, sizeof(buf), " stream %p+%u/%u / %p+%u/%u decl %p/%p indices %p/%p;", a.stream, a.streamOffset, a.streamStride, b.stream,
+                      b.streamOffset, b.streamStride, a.declaration, b.declaration, a.indices, b.indices);
+        text += buf;
+        for (DWORD i = 0; i < kAllSamplers; ++i)
+        {
+            std::snprintf(buf, sizeof(buf), " s%lu %p/%p", static_cast<unsigned long>(i), a.texture[i], b.texture[i]);
+            text += buf;
+            for (size_t j = 0; j < std::size(kAllSamplerStates); ++j)
+            {
+                std::snprintf(buf, sizeof(buf), " %lu/%lu", static_cast<unsigned long>(a.samplers[i][j]), static_cast<unsigned long>(b.samplers[i][j]));
+                text += buf;
+            }
+            text += ";";
+        }
+        text += " render";
+        for (size_t j = 0; j < std::size(kAllRenderStates); ++j)
+        {
+            std::snprintf(buf, sizeof(buf), " %lu/%lu", static_cast<unsigned long>(a.render[j]), static_cast<unsigned long>(b.render[j]));
+            text += buf;
+        }
+        std::snprintf(buf, sizeof(buf), "; targets %p %p / %p %p", a.target[0], a.target[1], b.target[0], b.target[1]);
+        text += buf;
+        FusionLog::Write("SkyTrace", "MoonVsPlain", "frame %u plain/moon (sampler states: address u v w, border, mag min mip, lod bias, max mip, anisotropy, srgb; "
+                         "render: z, zwrite, zfunc, alphatest, blend, src, dest, op, separate alpha, write, write1, srgb write, stencil, cull, scissor, clip planes, fill):%s\n",
+                         frame, text.c_str());
+        ++lines;
+    }
+
+    constexpr D3DRENDERSTATETYPE kRenderStates[] = { D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_COLORWRITEENABLE,
+                                                     D3DRS_ZENABLE, D3DRS_ZWRITEENABLE, D3DRS_ALPHATESTENABLE };
+
+    struct DrawState
+    {
+        DWORD render[std::size(kRenderStates)] = {};
+        void* vs = nullptr;
+        void* ps = nullptr;
+        void* texture[kSamplers] = {};
+        UINT width[kSamplers] = {}, height[kSamplers] = {};
+        DWORD format[kSamplers] = {};
+        DWORD states[kSamplers][std::size(kStates)] = {};
+        float vsc[kVSCount * 4] = {};
+        float psc[kPSCount * 4] = {};
+    };
+
+    // Indexed by the draw's place within the sky's call, so each draw is compared with its own kind.
+    constexpr int kSlots = 8;
+    DrawState last[kSlots];
+    bool seen[kSlots] = {};
+    int drawInSky = 0;
+
+    // Ctrl+Shift+F6 saves what the sky's calls of the next frame leave in the target: the sky as the game drew it,
+    // before the fog, the post effects and the upscaler, to set beside a screenshot taken at the same time.
+    bool captureWasDown = false;
+    int captureArmed = 0, captureCount = 0, captureCall = 0;
+
+    HRESULT(__stdcall* RealDrawIndexedPrimitive)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT) = nullptr;
+    HRESULT(__stdcall* RealDrawPrimitive)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT) = nullptr;
+
+    void Read(IDirect3DDevice9* device, DrawState& s)
+    {
+        IDirect3DVertexShader9* vs = nullptr;
+        IDirect3DPixelShader9* ps = nullptr;
+        device->GetVertexShader(&vs);
+        device->GetPixelShader(&ps);
+        s.vs = vs;
+        s.ps = ps;
+        if (vs) vs->Release();
+        if (ps) ps->Release();
+        for (DWORD i = 0; i < kSamplers; ++i)
+        {
+            IDirect3DBaseTexture9* texture = nullptr;
+            device->GetTexture(i, &texture);
+            s.texture[i] = texture;
+            s.width[i] = s.height[i] = 0;
+            s.format[i] = 0;
+            if (texture && texture->GetType() == D3DRTYPE_TEXTURE)
+            {
+                D3DSURFACE_DESC desc{};
+                if (SUCCEEDED(static_cast<IDirect3DTexture9*>(texture)->GetLevelDesc(0, &desc)))
+                {
+                    s.width[i] = desc.Width;
+                    s.height[i] = desc.Height;
+                    s.format[i] = desc.Format;
+                }
+            }
+            if (texture) texture->Release();
+            for (size_t j = 0; j < std::size(kStates); ++j)
+                device->GetSamplerState(i, kStates[j], &s.states[i][j]);
+        }
+        for (size_t j = 0; j < std::size(kRenderStates); ++j)
+            device->GetRenderState(kRenderStates[j], &s.render[j]);
+        device->GetVertexShaderConstantF(kVSFirst, s.vsc, kVSCount);
+        device->GetPixelShaderConstantF(kPSFirst, s.psc, kPSCount);
+    }
+
+    bool Differs(float a, float b)
+    {
+        return std::fabs(a - b) > 1e-4f * (std::max)(1.0f, (std::max)(std::fabs(a), std::fabs(b)));
+    }
+
+    void Write(int slot, const DrawState& s, const DrawState* before)
+    {
+        std::string text;
+        char buf[256];
+        if (!before || before->vs != s.vs || before->ps != s.ps)
+        {
+            std::snprintf(buf, sizeof(buf), " vs %p ps %p;", s.vs, s.ps);
+            text += buf;
+        }
+        if (!before || std::memcmp(before->render, s.render, sizeof(s.render)) != 0)
+        {
+            std::snprintf(buf, sizeof(buf), " blend %lu src %lu dest %lu write %lx z %lu/%lu alphatest %lu;", s.render[0], s.render[1], s.render[2],
+                          s.render[3], s.render[4], s.render[5], s.render[6]);
+            text += buf;
+        }
+        for (UINT i = 0; i < kSamplers; ++i)
+        {
+            bool changed = !before || before->texture[i] != s.texture[i] || std::memcmp(before->states[i], s.states[i], sizeof(s.states[i])) != 0;
+            if (!changed)
+                continue;
+            std::snprintf(buf, sizeof(buf), " s%u %p %ux%u fmt %lu addr %lu/%lu filter %lu/%lu/%lu;", i, s.texture[i], s.width[i], s.height[i],
+                          s.format[i], s.states[i][0], s.states[i][1], s.states[i][2], s.states[i][3], s.states[i][4]);
+            text += buf;
+        }
+        auto constants = [&](const char* kind, UINT first, UINT count, const float* now, const float* then)
+        {
+            for (UINT r = 0; r < count; ++r)
+            {
+                const float* v = now + r * 4;
+                bool changed = !then;
+                for (int k = 0; k < 4 && !changed; ++k)
+                    changed = Differs(v[k], then[r * 4 + k]);
+                if (!changed)
+                    continue;
+                std::snprintf(buf, sizeof(buf), " %s%u (%g %g %g %g);", kind, first + r, v[0], v[1], v[2], v[3]);
+                text += buf;
+            }
+        };
+        constants("vc", kVSFirst, kVSCount, s.vsc, before ? before->vsc : nullptr);
+        constants("pc", kPSFirst, kPSCount, s.psc, before ? before->psc : nullptr);
+        if (text.empty())
+            return;
+        FusionLog::Write("SkyTrace", "Draw", "frame %u draw %d%s%s\n", frame, slot, before ? " changed:" : " first:", text.c_str());
+        ++lines;
+    }
+
+    // The dome's world matrix (gWorld, vertex c0-c3) against the camera the game renders with: the dome is meant to be
+    // centred on the eye, and one that lags behind it or sits elsewhere would show the clouds from another place as the
+    // camera swings around the player. Written at every draw, as it changes with the camera.
+    void WriteGeometry(IDirect3DDevice9* device, int slot)
+    {
+        float world[16] = {};
+        device->GetVertexShaderConstantF(0, world, 4);
+        const float* eye = nullptr;
+        const float* forward = nullptr;
+        if (auto vp = rage::pCurrentViewport ? rage::GetCurrentViewport() : nullptr)
+        {
+            eye = vp->mViewInverseMatrix[3];
+            forward = vp->mViewInverseMatrix[2];
+        }
+        const float zero[4] = {};
+        if (!eye)
+            eye = forward = zero;
+        // gWorld is row_major in the shader and set transposed: the translation is in the fourth column.
+        const float tx = world[3], ty = world[7], tz = world[11];
+        FusionLog::Write("SkyTrace", "Geometry", "frame %u draw %d world x (%g %g %g) y (%g %g %g) z (%g %g %g) t (%g %g %g) row3 (%g %g %g %g) eye (%g %g %g) forward (%g %g %g) eye - t (%g %g %g)\n",
+                         frame, slot, world[0], world[1], world[2], world[4], world[5], world[6], world[8], world[9], world[10], tx, ty, tz,
+                         world[12], world[13], world[14], world[15], eye[0], eye[1], eye[2], forward[0], forward[1], forward[2],
+                         eye[0] - tx, eye[1] - ty, eye[2] - tz);
+        ++lines;
+    }
+
+    void SaveTarget(IDirect3DDevice9* device, const char* what)
+    {
+        IDirect3DSurface9* target = nullptr;
+        if (FAILED(device->GetRenderTarget(0, &target)) || !target)
+            return;
+        D3DSURFACE_DESC desc{};
+        target->GetDesc(&desc);
+        char name[64];
+        std::snprintf(name, sizeof(name), "SkyCapture%d_%d_%s", captureCount, captureCall, what);
+        // DDS keeps the scene's half floats: a PNG clipped the sky's HDR values to white.
+        const auto path = FusionLog::PathFor(name, L".dds");
+        const HRESULT hr = D3DXSaveSurfaceToFileW(path.c_str(), D3DXIFF_DDS, target, nullptr, nullptr);
+        FusionLog::Write("SkyTrace", "Capture", "capture %d call %d frame %u %s: target %p %ux%u fmt %lu -> %s (hr %08lx)\n", captureCount,
+                         captureCall, frame, what, static_cast<void*>(target), desc.Width, desc.Height, static_cast<unsigned long>(desc.Format),
+                         path.filename().string().c_str(), static_cast<unsigned long>(hr));
+        target->Release();
+    }
+
+    void OnDraw(IDirect3DDevice9* device)
+    {
+        // Some 40000 lines are plenty to turn the camera around in; the log stops there.
+        if (!bInSky || lines > 40000)
+            return;
+        int slot = drawInSky++;
+        if (slot >= kSlots)
+            return;
+        if (slot == 1)
+        {
+            ReadFull(device, plainSky);
+            plainSkyRead = true;
+        }
+        else if (slot == 2)
+        {
+            if (plainSkyRead && moonCompares < 40)
+            {
+                FullState moon;
+                ReadFull(device, moon);
+                CompareMoon(plainSky, moon);
+                ++moonCompares;
+            }
+            if (captureArmed)
+                SaveTarget(device, "beforeMoon");
+        }
+        DrawState s;
+        Read(device, s);
+        Write(slot, s, seen[slot] ? &last[slot] : nullptr);
+        WriteGeometry(device, slot);
+        last[slot] = s;
+        seen[slot] = true;
+    }
+
+    HRESULT __stdcall DrawIndexedPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count)
+    {
+        OnDraw(device);
+        return RealDrawIndexedPrimitive(device, type, base, minIndex, vertices, start, count);
+    }
+
+    HRESULT __stdcall DrawPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT start, UINT count)
+    {
+        OnDraw(device);
+        return RealDrawPrimitive(device, type, start, count);
+    }
+}
+
+export namespace SkyTrace
+{
+    // Around the game's main sky draw (postfx's DrawSky); the device's draws are hooked on the first one.
+    void Begin()
+    {
+        if (!bEnabled)
+            return;
+        static bool installed = false;
+        if (!installed)
+        {
+            auto device = RageDirect3DDevice9::GetRuntimeDevice();
+            if (!device)
+                return;
+            auto vtable = *reinterpret_cast<void***>(device);
+            PatchVTable(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
+            PatchVTable(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
+            installed = true;
+            FusionLog::Write("SkyTrace", "Init", "tracing the sky's draws: samplers 0-5, blending, vertex c%u-c%u, pixel c%u-c%u\n",
+                             kVSFirst, kVSFirst + kVSCount - 1, kPSFirst, kPSFirst + kPSCount - 1);
+        }
+        ++frame;
+        drawInSky = 0;
+        bInSky = true;
+
+        const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+            (GetAsyncKeyState(VK_F6) & 0x8000);
+        if (down && !captureWasDown && !captureArmed)
+        {
+            // The main view's sky and the water reflection's take a call each; a few calls catch both.
+            captureArmed = 4;
+            captureCall = 0;
+            ++captureCount;
+        }
+        captureWasDown = down;
+    }
+
+    // The moon pass's test (postfx's SkyMoonScissor): the moon's centre as the game projects it, its w, whether it was
+    // in front and whether the game then drew the moon pass.
+    void Moon(const float* centre, float w, bool front, bool drawn)
+    {
+        if (!bEnabled || lines > 40000)
+            return;
+        D3DRECT scissor{};
+        if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
+        {
+            RECT rect{};
+            device->GetScissorRect(&rect);
+            scissor = { rect.left, rect.top, rect.right, rect.bottom };
+        }
+        FusionLog::Write("SkyTrace", "Moon", "frame %u centre (%g %g %g %g) w %g front %d drawn %d scissor (%ld %ld %ld %ld)\n", frame, centre[0],
+                         centre[1], centre[2], centre[3], w, int(front), int(drawn), scissor.x1, scissor.y1, scissor.x2, scissor.y2);
+        ++lines;
+    }
+
+    void End()
+    {
+        bInSky = false;
+        plainSkyRead = false;
+        if (!captureArmed)
+            return;
+        --captureArmed;
+        if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
+            SaveTarget(device, "after");
+        ++captureCall;
+    }
+}
+
+class SkyTraceInit
+{
+public:
+    SkyTraceInit()
+    {
+        FusionFix::onInitEventAsync() += []()
+        {
+            CIniReader iniReader("");
+            SkyTrace::bEnabled = iniReader.ReadInteger("DEBUG", "SkyTrace", 0) != 0;
+            SkyTrace::bMoonPass = iniReader.ReadInteger("DEBUG", "SkyMoonPass", 1) != 0;
+        };
+    }
+} SkyTraceInitInstance;

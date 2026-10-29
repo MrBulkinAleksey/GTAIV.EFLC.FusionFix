@@ -11,6 +11,7 @@ module;
 export module coronas;
 
 import common;
+import cpuscopes;
 import settings;
 
 static constexpr auto NewLimitExponent = 14;
@@ -233,6 +234,67 @@ namespace CoronaRender
     struct Vertex { float x, y, z, nx, ny, nz; uint32_t colour; float u, v; };
     static_assert(sizeof(Vertex) == 0x24);
 
+    // Run before each batch is drawn, the technique set: a pass from another view puts its own depth for the
+    // coronas' visibility test in (carmirrors.ixx)
+    export void (*pBeforeDraw)() = nullptr;
+    // A pass from another view than the game camera's, near it (a car's mirror, its reflected camera within half a metre
+    // of the eye and looking back): none left out as behind or outside the view, which took the main view's. Counted:
+    // the coronas listed, those behind the game camera, those drawn (carmirrors.ixx's log)
+    export bool bOtherView = false;
+    export uint32_t nOtherListed = 0, nOtherBehind = 0, nOtherDrawn = 0;
+    // For a pass from another view: the part of the list made for it (carmirrors.ixx puts the coronas its mirror sees
+    // after the game camera's), by the list's buffer; false draws none. Unset, the whole list.
+    export bool (*pOtherRange)(uint32_t buffer, int32_t& first, int32_t& count) = nullptr;
+    // True while the pass is one RenderSkip leaves out (its target never locked, its draws dropped): the water's
+    // reflection while no water is seen still called this every frame, 14000 quads built for nothing (renderskip.ixx)
+    export bool (*pPassDropped)() = nullptr;
+    // The occlusion grid's first level, for the game camera's pass to test its coronas against in the same loop as the
+    // view cone (occlusion.ixx fills it at the pass's start and holds the grid until its end): a corona whose quad lies
+    // wholly behind the world gets none built, its vertex shader hid it behind the depth anyway. A second loop over the
+    // list for it cost 2.3% of the render thread against the 3.7% the quads it left out had cost
+    export struct HiZPoints
+    {
+        const float* viewProjection = nullptr; // rows, clip = [x y z 1] * M, the camera the grid was drawn with
+        const float* depth = nullptr;          // the farthest view depth (metres) of each texel, rows width apart
+        int width = 0, height = 0;
+        float scaleU = 0.0f, scaleV = 0.0f;    // texels a width / height of the screen takes
+        float texelsPerMetreU = 0.0f, texelsPerMetreV = 0.0f; // texels a metre across the view takes at w = 1
+        float wLength = 1.0f, nearPlane = 0.0f;
+        float grow = 0.0f;                     // metres the camera moved since the grid was drawn
+        bool cull = false;                     // false: counted only
+    };
+    export bool (*pHiZBegin)(HiZPoints& points) = nullptr;
+    export void (*pHiZEnd)(uint32_t tested, uint32_t hidden) = nullptr;
+
+    // A ball (the quad's, moved toward the camera by toward) of a texel or two of the grid, inside its screen, behind
+    // the farthest depth of each; larger, at the screen's edge or too near: not hidden
+    export bool BehindWorld(const HiZPoints& h, const float* pos, float radius, float toward)
+    {
+        const float* m = h.viewProjection;
+        const float r = radius + h.grow;
+        const float w = pos[0] * m[3] + pos[1] * m[7] + pos[2] * m[11] + m[15];
+        const float nearest = w - (r + toward) * h.wLength;
+        if (!(nearest > h.nearPlane * 2.0f))
+            return false;
+        const float inverse = 1.0f / w;
+        const float x = pos[0] * m[0] + pos[1] * m[4] + pos[2] * m[8] + m[12];
+        const float y = pos[0] * m[1] + pos[1] * m[5] + pos[2] * m[9] + m[13];
+        const float cx = (x * inverse * 0.5f + 0.5f) * h.scaleU, cy = (0.5f - y * inverse * 0.5f) * h.scaleV;
+        const float ex = r * h.texelsPerMetreU * inverse, ey = r * h.texelsPerMetreV * inverse;
+        if (!(ex < 1.5f && ey < 1.5f && cx - ex >= 0.0f && cy - ey >= 0.0f && cx + ex < h.scaleU && cy + ey < h.scaleV))
+            return false;
+        const int tx0 = int(cx - ex), tx1 = std::min(int(cx + ex), h.width - 1);
+        const int ty0 = int(cy - ey), ty1 = std::min(int(cy + ey), h.height - 1);
+        for (int ty = ty0; ty <= ty1; ++ty)
+        {
+            const float* row = h.depth + size_t(ty) * h.width;
+            for (int tx = tx0; tx <= tx1; ++tx)
+                if (row[tx] >= nearest)
+                    return false;
+        }
+        return true;
+    }
+
     int32_t nMode = 1;                      // 0: the game's, 1: ours without what is out of view, 2: ours, all of them
     float* pCamera = nullptr;               // CE 0x128e340, the game camera's position, where it looks 8 floats before
     uint8_t* pFunction = nullptr;
@@ -326,8 +388,12 @@ namespace CoronaRender
     // In place of CCoronas::Render; false when the game's own is to run
     export bool Draw()
     {
+        static const CpuScopes::Id kCpuScope("Coronas.Draw");
+        CpuScopes::Scope cpuScope(kCpuScope);
         if (!nMode || !pFunction)
             return false;
+        if (pPassDropped && pPassDropped())
+            return true;
         if (!bReady && !bFailed)
         {
             bReady = Read();
@@ -344,17 +410,26 @@ namespace CoronaRender
         bool reflection = (flags >> 0x12) & 1;  // technique 0xf, and coronas with +0x1b set left out
         bool dim = (flags >> 0x11) & 1;
         uint32_t buffer = *pBufferIndex;
+        int32_t first = 0;
         int32_t count = pCounts[buffer];
-        if (count <= 0)
+        if (bOtherView && pOtherRange)
+        {
+            int32_t otherCount = 0;
+            if (!pOtherRange(buffer, first, otherCount))
+                return true;
+            count = first + otherCount;
+        }
+        if (count <= first)
             return true;
         auto list = (uint8_t*)(uintptr_t(*pFlagAddress) - 0x1B) + (size_t(buffer) * (3u << *pShift)) * 0x20;
 
-        // Behind the camera, only in a pass from the game camera itself: reflections and other views keep them all
+        // Behind the camera, only in a pass from the game camera itself: the water's reflection and other views keep
+        // them all (the paraboloid reflection has its own test below)
         auto viewport = *ppViewport;
         auto eye = (const float*)(viewport + 0x70);
         float forward[3] = {};
         bool skipBehind = false;
-        if (nMode == 1 && !reflection && pCamera)
+        if (nMode == 1 && !reflection && pCamera && !bOtherView)
         {
             auto right = (const float*)(viewport + 0x40), up = (const float*)(viewport + 0x50);
             const float* look = pCamera - 8;
@@ -369,6 +444,28 @@ namespace CoronaRender
                 skipBehind = std::fabs(cross[0] * forward[0] + cross[1] * forward[1] + cross[2] * forward[2]) > 0.95f;
             }
         }
+
+        // The paraboloid reflection (the reflection map, technique 0xf: paraboloid_corona, deferred_lighting VS13): its
+        // eye 512 m under the game camera, the paraboloid's centre C 512 m above that eye. The shader gives a corona no
+        // colour and no size unless its centre, moved toward the eye, is above C, and fades it out by the distance of
+        // its corners from C, none left 64 m away (1 - L/64 times 16, saturated). Those are left out here (99.5% of
+        // them in a night's log); the corners are within the size times the reflection's scale times 1.42 of the centre.
+        bool skipParaboloid = false;
+        float paraboloidCentre[3] = {};
+        if (nMode == 1 && reflection && pCamera && !bOtherView)
+        {
+            // The view's z axis (grcViewport +0x60) straight down, as the shader's distance takes it: L is from the eye
+            // plus 512 m along the view's z, C only so
+            float dx = eye[0] - pCamera[0], dy = eye[1] - pCamera[1], dz = eye[2] + 512.0f - pCamera[2];
+            if (dx * dx + dy * dy < 0.25f && dz * dz < 1.0f && ((const float*)(viewport + 0x60))[2] < -0.99f)
+            {
+                paraboloidCentre[0] = eye[0];
+                paraboloidCentre[1] = eye[1];
+                paraboloidCentre[2] = eye[2] + 512.0f;
+                skipParaboloid = true;
+            }
+        }
+        constexpr float ParaboloidFadeEnd = 64.0f;
 
         // Outside the view as well: a cone round where the camera looks, as wide as the projection's corner and a tenth
         // more (grcViewport +0x1c0, its x and y scales), each corona a ball 1.5 times its size (its quad's corners are
@@ -389,9 +486,33 @@ namespace CoronaRender
             }
         }
 
+        // Any other view from the game's own camera list (the water's reflection: its eye under the water, so none of
+        // the tests above): the view's six frustum planes, as grcViewport::IsSphereVisible (CE 0x431e40) reads them at
+        // +0x300 (normal, then distance; inside when n.p + d + r >= 0). That pass drew all 15000 coronas of a dawn, 1.2 ms
+        // of the render thread. The ball takes the shift toward the camera (+0x14) in as well, which can bring a corona
+        // over the far plane
+        const float* frustum = nullptr;
+        if (nMode == 1 && !reflection && !skipBehind && !bOtherView)
+        {
+            auto planes = (const float*)(viewport + 0x300);
+            bool valid = true;
+            for (int k = 0; k < 6 && valid; k++)
+            {
+                const float* p = planes + k * 4;
+                float lengthSquared = p[0] * p[0] + p[1] * p[1] + p[2] * p[2];
+                valid = lengthSquared > 0.81f && lengthSquared < 1.21f && std::isfinite(p[3]);
+            }
+            if (valid)
+                frustum = planes;
+        }
+
+        HiZPoints hiZ;
+        const bool testHiZ = skipBehind && pHiZBegin && pHiZBegin(hiZ);
+        uint32_t hiZTested = 0, hiZHidden = 0;
+
         static std::vector<uint32_t> drawn;
         drawn.clear();
-        for (int32_t i = 0; i < count; i++)
+        for (int32_t i = first; i < count; i++)
         {
             auto item = list + size_t(i) * 0x20;
             if (reflection && item[0x1B])
@@ -417,8 +538,70 @@ namespace CoronaRender
                     if (margin < 0.0f || lateralSquared * coneCos * coneCos > margin * margin)
                         continue;
                 }
+                if (testHiZ)
+                {
+                    ++hiZTested;
+                    if (BehindWorld(hiZ, pos, 1.5f * size + 0.5f, std::fabs(*(const float*)(item + 0x14))))
+                    {
+                        ++hiZHidden;
+                        if (hiZ.cull)
+                            continue;
+                    }
+                }
+            }
+            else if (frustum)
+            {
+                auto pos = (const float*)item;
+                float size = std::fabs(*(const float*)(item + 0xC));
+                if (size == 0.0f)
+                    continue;
+                float radius = 1.5f * size + 0.5f + std::fabs(*(const float*)(item + 0x14));
+                bool inside = true;
+                for (int k = 0; k < 6 && inside; k++)
+                {
+                    const float* p = frustum + k * 4;
+                    inside = p[0] * pos[0] + p[1] * pos[1] + p[2] * pos[2] + p[3] + radius >= 0.0f;
+                }
+                if (!inside)
+                    continue;
+            }
+            else if (skipParaboloid)
+            {
+                // As the draw moves it toward the eye (the vertices' centre the shader reads)
+                auto pos = (const float*)item;
+                float toward = *(const float*)(item + 0x14);
+                float d[3] = { pos[0] - eye[0], pos[1] - eye[1], pos[2] - eye[2] };
+                float lengthSquared = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                float inverse = lengthSquared == 0.0f ? 0.0f : *pOne / std::sqrt(lengthSquared);
+                float P[3];
+                for (int k = 0; k < 3; k++)
+                    P[k] = pos[k] - d[k] * inverse * toward;
+                if (P[2] - paraboloidCentre[2] <= 0.0f)
+                    continue;
+                float corner = std::fabs(*(const float*)(item + 0xC)) * std::fabs(*pReflectSize) * 1.5f;
+                float c[3] = { P[0] - paraboloidCentre[0], P[1] - paraboloidCentre[1], P[2] - paraboloidCentre[2] };
+                float reach = ParaboloidFadeEnd + corner + 0.5f;
+                if (c[0] * c[0] + c[1] * c[1] + c[2] * c[2] > reach * reach)
+                    continue;
             }
             drawn.push_back(uint32_t(i));
+        }
+        if (testHiZ && pHiZEnd)
+            pHiZEnd(hiZTested, hiZHidden);
+        if (bOtherView)
+        {
+            nOtherListed += uint32_t(count - first);
+            nOtherDrawn += uint32_t(drawn.size());
+            if (pCamera)
+            {
+                const float* look = pCamera - 8;
+                for (int32_t i = first; i < count; i++)
+                {
+                    auto pos = (const float*)(list + size_t(i) * 0x20);
+                    if ((pos[0] - pCamera[0]) * look[0] + (pos[1] - pCamera[1]) * look[1] + (pos[2] - pCamera[2]) * look[2] < 0.0f)
+                        ++nOtherBehind;
+                }
+            }
         }
         if (drawn.empty())
             return true;
@@ -435,7 +618,10 @@ namespace CoronaRender
         const float axisRight[3] = { ((float*)(viewport + 0x40))[0], ((float*)(viewport + 0x40))[1], ((float*)(viewport + 0x40))[2] };
         const float axisUp[3] = { -((float*)(viewport + 0x50))[0], -((float*)(viewport + 0x50))[1], -((float*)(viewport + 0x50))[2] };
         const float camera[3] = { ((float*)(viewport + 0x70))[0], ((float*)(viewport + 0x70))[1], ((float*)(viewport + 0x70))[2] };
-        SetTechnique(reflection ? 0xF : 0xE, reflection ? 0 : (dim ? 1 : 0));
+        // Another view's pass takes the corona technique's second pass, as the dimmed ones do: tested against the depth
+        // buffer (ZEnable 1), not against the main view's depth texture in the vertex shader (the first pass, depth off),
+        // which had a car mirror show the city's lights through the buildings
+        SetTechnique(reflection ? 0xF : 0xE, reflection ? 0 : ((dim || bOtherView) ? 1 : 0));
 
         for (size_t first = 0; first < drawn.size();)
         {
@@ -505,6 +691,8 @@ namespace CoronaRender
                 memcpy(v, quad, sizeof(quad));
                 *ppVertex = v + 6;
             }
+            if (pBeforeDraw)
+                pBeforeDraw();
             End();
             first += n;
         }

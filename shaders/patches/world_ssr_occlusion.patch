@@ -1,0 +1,104 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+index fc37e203..c8bbf8f7 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS1.asm
+@@ -113,6 +113,7 @@
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
+     def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
++    def c192, 1, 0, 0, 0 // FusionFix world_ssr_occlusion.patch: one
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+@@ -641,7 +642,12 @@
+       mad r0.z, r11.w, r10.w, r0.z
+       mul r1.yzw, r0.z, r3.xxyz
+       mul r0.xzw, r0.x, r1.yyzw
+-      mul r0.xzw, r4.z, r0
++      // --- FusionFix world_ssr_occlusion.patch: the occlusion (r4.z) fades out where SSR found the scene (r10.w), the occluder already in it
++      add r11.w, c192.x, -r4.z
++      mul r11.w, r11.w, r10.w
++      mul r11.w, r11.w, c155.x
++      add r11.w, r11.w, r4.z
++      mul r0.xzw, r11.w, r0 // FusionFix world_ssr_occlusion.patch: was r4.z
+       mul r0.xzw, r0, c39.w
+       // --- FusionFix GGX lights, the sky's reflection (c165.z: LightsGGXEnvironment in postfx.ixx): on rough surfaces
+       // --- (concrete, plaster) the Fresnel is the split sum environment BRDF, fitted, at the game's 0.25 head on, so
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+index 79a28da0..7001adbe 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS2.asm
+@@ -114,6 +114,7 @@
+     def c172, 0.125, 512, 0, 100000000 // FusionFix GGX lights: the reflectance head on, the gloss scale, the sun's distance squared
+     def c173, 0.00100000005, 0.00130000005, 0.000699999975, 0.5 // FusionFix GGX lights: keeps the tangent of a surface facing the light from vanishing; a half
+     def c180, 12.5, -2, 3, 0.5 // FusionFix GGX lights: one over the view angle's fade, the smoothstep's terms, a half
++    def c192, 1, 0, 0, 0 // FusionFix world_ssr_occlusion.patch: one
+     // ----------------------------------------------------------------------------------------------------------------------------------------------
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+@@ -655,7 +656,12 @@
+       mad r0.x, r11.w, r10.w, r0.x
+       mul r3.xyz, r0.x, r7
+       mul r0.xzw, r0.z, r3.xyyz
+-      mul r0.xzw, r4.z, r0
++      // --- FusionFix world_ssr_occlusion.patch: the occlusion (r4.z) fades out where SSR found the scene (r10.w), the occluder already in it
++      add r11.w, c192.x, -r4.z
++      mul r11.w, r11.w, r10.w
++      mul r11.w, r11.w, c155.x
++      add r11.w, r11.w, r4.z
++      mul r0.xzw, r11.w, r0 // FusionFix world_ssr_occlusion.patch: was r4.z
+       mul r0.xzw, r0, c39.w
+       // --- FusionFix GGX lights, the sky's reflection (c165.z: LightsGGXEnvironment in postfx.ixx): on rough surfaces
+       // --- (concrete, plaster) the Fresnel is the split sum environment BRDF, fitted, at the game's 0.25 head on, so
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
+index 65eff52b..5d6d8812 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS3.asm
+@@ -55,6 +55,7 @@
+     def c176, -9.28, -1.04, 1.04, 0.25 // FusionFix GGX lights: the environment BRDF fit; the game's reflectance head on
+     def c177, 2, 512, 5, 4 // FusionFix GGX lights: the gloss scale, unused, four
+     def c179, 0.360000014, 11.1111107, -2, 3 // FusionFix GGX lights: where rough begins, over how much, the smoothstep's terms
++    def c192, 1, 0, 0, 0 // FusionFix world_ssr_occlusion.patch: one
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+     dcl_2d s0
+@@ -144,7 +145,12 @@
+       mad r0.w, r11.w, r10.w, r0.w
+       mul r0.yzw, r0.w, r2.xxyz
+       mul r0.yzw, r1.w, r0
+-      mul r0.yzw, r3.z, r0
++      // --- FusionFix world_ssr_occlusion.patch: the occlusion (r3.z) fades out where SSR found the scene (r10.w), the occluder already in it
++      add r11.w, c192.x, -r3.z
++      mul r11.w, r11.w, r10.w
++      mul r11.w, r11.w, c155.x
++      add r11.w, r11.w, r3.z
++      mul r0.yzw, r11.w, r0 // FusionFix world_ssr_occlusion.patch: was r3.z
+       mul r0.yzw, r0, c39.w
+       // --- FusionFix GGX lights, the sky's reflection (c165.z: LightsGGXEnvironment in postfx.ixx): on rough surfaces
+       // --- (concrete, plaster) the Fresnel is the split sum environment BRDF, fitted, at the game's 0.25 head on, so
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
+index f8570f01..f2377c79 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS4.asm
+@@ -56,6 +56,7 @@
+     def c176, -9.28, -1.04, 1.04, 0.25 // FusionFix GGX lights: the environment BRDF fit; the game's reflectance head on
+     def c177, 2, 512, 5, 4 // FusionFix GGX lights: the gloss scale, unused, four
+     def c179, 0.360000014, 11.1111107, -2, 3 // FusionFix GGX lights: where rough begins, over how much, the smoothstep's terms
++    def c192, 1, 0, 0, 0 // FusionFix world_ssr_occlusion.patch: one
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1
+     dcl_2d s0
+@@ -157,7 +158,12 @@
+       mad r0.w, r11.w, r10.w, r0.w
+       mul r2.xyz, r0.w, r2
+       mul r2.xyz, r1.w, r2
+-      mul r2.xyz, r3.z, r2
++      // --- FusionFix world_ssr_occlusion.patch: the occlusion (r3.z) fades out where SSR found the scene (r10.w), the occluder already in it
++      add r11.w, c192.x, -r3.z
++      mul r11.w, r11.w, r10.w
++      mul r11.w, r11.w, c155.x
++      add r11.w, r11.w, r3.z
++      mul r2.xyz, r11.w, r2 // FusionFix world_ssr_occlusion.patch: was r3.z
+       mul r2.xyz, r2, c39.w
+       // --- FusionFix GGX lights, the sky's reflection (c165.z: LightsGGXEnvironment in postfx.ixx): on rough surfaces
+       // --- (concrete, plaster) the Fresnel is the split sum environment BRDF, fitted, at the game's 0.25 head on, so

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Writes world_wd_local_shadow_depth.patch: wd_local_draw / wd_local_masked_draw techniques for the static world
 # shaders, so the map's buildings can be drawn into the dynamic (paraboloid) shadow maps of lights (Building Shadows,
-# source/LibertyLighting20Runtime.inl). Ported from Liberty's Shadows 2.0 (OnyxOak), GPL-3.0, whose generator works
+# source/nightshadows/LibertyLighting20Runtime.inl). Ported from Liberty's Shadows 2.0 (OnyxOak), GPL-3.0, whose generator works
 # on compiled .fxc files; this one works on the submodule's asm and XML.
 #
 # Each new technique keeps its material's wd_draw / wd_masked_draw pixel shader (texture alpha, stochastic cutout) and

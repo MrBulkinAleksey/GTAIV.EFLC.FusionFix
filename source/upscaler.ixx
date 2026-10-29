@@ -189,9 +189,12 @@ namespace
                 CloseHandle(reinterpret_cast<HANDLE>(handle));
             handle = 0;
         }
-        if (shared.FenceHandle)
-            CloseHandle(reinterpret_cast<HANDLE>(shared.FenceHandle));
-        shared.FenceHandle = 0;
+        for (auto handle : { &shared.InputFenceHandle, &shared.OutputFenceHandle, &shared.PresentFenceHandle })
+        {
+            if (*handle)
+                CloseHandle(reinterpret_cast<HANDLE>(*handle));
+            *handle = 0;
+        }
     }
 
     // GTAIV.EFLC.FusionFix.Upscaler.log next to the plugin (FusionLog, Upscaler.Game): what the game side did
@@ -245,25 +248,28 @@ namespace
         bool frameGeneration = false; // Present and Generated were imported
         bool eightBitFrames = false;  // ConfigureFlags::EightBitFrames: the frame generation's textures are B8G8R8A8
         bool wine = false;            // ConfigureFlags::Wine
-        bool gameFence = false;       // Wine: the helper opened the game's semaphore, else both sides wait on the CPU
+        bool gameFence = false;       // Wine: the helper opened the game's semaphores, else both sides wait on the CPU
 
         virtual ~Bridge() = default;
-        // Wine: a semaphore of the game for the helper's fence, its handle duplicated into the helper. Before Configure.
+        // Wine: semaphores of the game for the helper's fences, their handles duplicated into the helper. Before Configure.
         virtual bool PrepareGameFence(Protocol::Shared& shared, HANDLE helperProcess) { return false; }
         // Opens the shared textures and the fence of a configuration, and closes their handles
         virtual bool Import(Protocol::Shared& shared, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh) = 0;
         bool WaitOnCpu() const { return wine && !gameFence; }
         virtual void ReleaseImports() = 0;
-        // Game textures -> shared textures, then the fence reaches signalValue. Null inputs are skipped.
-        virtual bool SubmitInputs(const Textures& inputs, uint64_t signalValue) = 0;
-        // Once the fence reaches waitValue: shared texture (Output or Generated) -> game texture. afterInputs: right after
+        // Game textures -> shared textures, then the input fence reaches signalValue. Null inputs are skipped, a texture
+        // given twice is copied from once into both. waitValue: of the present fence, the helper done with the textures
+        // before (the frame it presented); 0 for none.
+        virtual bool SubmitInputs(const Textures& inputs, uint64_t signalValue, uint64_t waitValue = 0) = 0;
+        // Once the output fence reaches waitValue: shared texture (Output or Generated) -> game texture. afterInputs: right after
         // SubmitInputs, with no D3D9 call in between, so the game's work has reached the queue already.
         virtual bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue, bool afterInputs) = 0;
 
         // Size of a shared texture
         uint32_t Width(size_t index) const { return Protocol::IsOutputSize(static_cast<Protocol::Texture>(index)) ? outputWidth : width; }
         uint32_t Height(size_t index) const { return Protocol::IsOutputSize(static_cast<Protocol::Texture>(index)) ? outputHeight : height; }
-        // The helper won't signal value any more: the GPU work that waits for it is let go from the CPU
+        // The helper won't signal value on the output and present fences any more: the GPU work that waits for it is let go
+        // from the CPU
         virtual void SignalFromCpu(uint64_t value) = 0;
     };
     struct Vulkan
@@ -433,7 +439,19 @@ namespace
             VkFormat format = VK_FORMAT_UNDEFINED;
         };
         std::array<SharedImage, TextureCount> images{};
-        VkSemaphore semaphore = VK_NULL_HANDLE;
+        VkSemaphore inputSemaphore = VK_NULL_HANDLE;    // the game signals it, the helper waits
+        VkSemaphore outputSemaphore = VK_NULL_HANDLE;   // the helper signals it, the game waits
+        VkSemaphore presentSemaphore = VK_NULL_HANDLE;  // presentation: the helper is done with Present and HudLess
+
+        void DestroySemaphores()
+        {
+            for (auto semaphore : { &inputSemaphore, &outputSemaphore, &presentSemaphore })
+            {
+                if (*semaphore)
+                    vk.vkDestroySemaphore(device, *semaphore, nullptr);
+                *semaphore = VK_NULL_HANDLE;
+            }
+        }
 
         // Vulkan formats of the shared textures and of the game textures copied from and to them
         static constexpr VkFormat Formats[TextureCount] =
@@ -514,9 +532,7 @@ namespace
                     vk.vkFreeMemory(device, image.memory, nullptr);
                 image = {};
             }
-            if (semaphore)
-                vk.vkDestroySemaphore(device, semaphore, nullptr);
-            semaphore = VK_NULL_HANDLE;
+            DestroySemaphores();
             width = height = outputWidth = outputHeight = 0;
             frameGeneration = false;
             eightBitFrames = false;
@@ -610,11 +626,9 @@ namespace
             return true;
         }
 
-        bool PrepareGameFence(Protocol::Shared& shared, HANDLE helperProcess) override
+        // A timeline semaphore of the game, its handle duplicated into the helper
+        bool ExportSemaphore(VkSemaphore& semaphore, HANDLE helperProcess, uint64_t& target)
         {
-            if (!wine || !vk.vkGetSemaphoreWin32HandleKHR || !helperProcess)
-                return false;
-
             VkExportSemaphoreCreateInfo exportInfo{ VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO };
             exportInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
             VkSemaphoreTypeCreateInfo type{ VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
@@ -638,12 +652,43 @@ namespace
                 !DuplicateHandle(GetCurrentProcess(), handle, helperProcess, &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE))
             {
                 Log("game fence: the semaphore could not be shared (%d, handle %p)", vr, handle);
-                vk.vkDestroySemaphore(device, semaphore, nullptr);
+                return false;
+            }
+            target = reinterpret_cast<uint64_t>(duplicate);
+            return true;
+        }
+
+        bool PrepareGameFence(Protocol::Shared& shared, HANDLE helperProcess) override
+        {
+            if (!wine || !vk.vkGetSemaphoreWin32HandleKHR || !helperProcess)
+                return false;
+            if (ExportSemaphore(inputSemaphore, helperProcess, shared.InputFenceHandle) &&
+                ExportSemaphore(outputSemaphore, helperProcess, shared.OutputFenceHandle))
+                return true;
+            // A handle already duplicated into the helper stays in shared: the helper closes it, without GameFence
+            DestroySemaphores();
+            return false;
+        }
+
+        // A D3D12 fence of the helper as a timeline semaphore
+        bool ImportFence(VkSemaphore& semaphore, HANDLE handle)
+        {
+            if (!handle)
+                return false;
+            VkSemaphoreTypeCreateInfo type{ VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
+            type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+            VkSemaphoreCreateInfo info{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+            info.pNext = &type;
+            if (vk.vkCreateSemaphore(device, &info, nullptr, &semaphore) != VK_SUCCESS)
+            {
                 semaphore = VK_NULL_HANDLE;
                 return false;
             }
-            shared.FenceHandle = reinterpret_cast<uint64_t>(duplicate);
-            return true;
+            VkImportSemaphoreWin32HandleInfoKHR import{ VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR };
+            import.semaphore = semaphore;
+            import.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT;
+            import.handle = handle;
+            return vk.vkImportSemaphoreWin32HandleKHR(device, &import) == VK_SUCCESS;
         }
 
         // Evaluate released the previous imports before the helper's Configure
@@ -667,36 +712,19 @@ namespace
                 }
             }
 
-            auto fenceHandle = reinterpret_cast<HANDLE>(shared.FenceHandle);
             if (ok && wine)
             {
-                // The game's own semaphore, or without it the CPU waits
-                if (!gameFence && semaphore)
-                {
-                    vk.vkDestroySemaphore(device, semaphore, nullptr);
-                    semaphore = VK_NULL_HANDLE;
-                }
+                // The game's own semaphores, or without them the CPU waits
+                if (!gameFence)
+                    DestroySemaphores();
             }
-            else if (ok && fenceHandle)
+            else if (ok)
             {
-                VkSemaphoreTypeCreateInfo type{ VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
-                type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-                VkSemaphoreCreateInfo info{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
-                info.pNext = &type;
-                ok = vk.vkCreateSemaphore(device, &info, nullptr, &semaphore) == VK_SUCCESS;
-
-                if (ok)
-                {
-                    VkImportSemaphoreWin32HandleInfoKHR import{ VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR };
-                    import.semaphore = semaphore;
-                    import.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT;
-                    import.handle = fenceHandle;
-                    ok = vk.vkImportSemaphoreWin32HandleKHR(device, &import) == VK_SUCCESS;
-                }
-            }
-            else
-            {
-                ok = false;
+                ok = ImportFence(inputSemaphore, reinterpret_cast<HANDLE>(shared.InputFenceHandle)) &&
+                    ImportFence(outputSemaphore, reinterpret_cast<HANDLE>(shared.OutputFenceHandle)) &&
+                    (!shared.PresentFenceHandle || ImportFence(presentSemaphore, reinterpret_cast<HANDLE>(shared.PresentFenceHandle)));
+                if (!ok)
+                    Log("import: the helper's fences could not be imported");
             }
             CloseSharedHandles(shared);
 
@@ -728,7 +756,7 @@ namespace
             return s;
         }
 
-        bool Submit(VkCommandBuffer buffer, VkSemaphore waitSemaphore, uint64_t waitValue, uint64_t signalValue, VkFence fence)
+        bool Submit(VkCommandBuffer buffer, VkSemaphore waitSemaphore, uint64_t waitValue, VkSemaphore signalSemaphore, uint64_t signalValue, VkFence fence)
         {
             VkTimelineSemaphoreSubmitInfo timeline{ VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
             VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
@@ -748,7 +776,7 @@ namespace
             if (signalValue)
             {
                 submit.signalSemaphoreCount = 1;
-                submit.pSignalSemaphores = &semaphore;
+                submit.pSignalSemaphores = &signalSemaphore;
                 timeline.signalSemaphoreValueCount = 1;
                 timeline.pSignalSemaphoreValues = &signalValue;
             }
@@ -760,7 +788,7 @@ namespace
             return result == VK_SUCCESS;
         }
 
-        bool SubmitInputs(const Textures& inputs, uint64_t signalValue) override
+        bool SubmitInputs(const Textures& inputs, uint64_t signalValue, uint64_t waitValue) override
         {
             // Everything the game rendered so far must reach the queue first. Before the images are asked for, too: DXVK
             // can give a texture new storage (relocation), which only its command thread knows about.
@@ -803,8 +831,15 @@ namespace
                 if (!inputs[i])
                     continue;
                 auto shared = images[i].image;
-                before[barriers] = ImageBarrier(sources[i].image, sources[i].layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-                after[barriers++] = ImageBarrier(sources[i].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sources[i].layout, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+                // A texture given twice (the frame before the HUD missing) is transitioned once
+                bool repeated = false;
+                for (size_t j = 0; j < i; ++j)
+                    repeated = repeated || (inputs[j] && sources[j].image == sources[i].image);
+                if (!repeated)
+                {
+                    before[barriers] = ImageBarrier(sources[i].image, sources[i].layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+                    after[barriers++] = ImageBarrier(sources[i].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sources[i].layout, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+                }
                 before[barriers] = ImageBarrier(shared, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
                 // Handed over to D3D12, where it is in the common state
                 after[barriers++] = ImageBarrier(shared, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_WRITE_BIT, 0, queueFamily, VK_QUEUE_FAMILY_EXTERNAL);
@@ -823,14 +858,14 @@ namespace
 
             if (!WaitOnCpu())
             {
-                if (!Submit(cmd, VK_NULL_HANDLE, 0, signalValue, s.fence))
+                if (!Submit(cmd, waitValue ? presentSemaphore : VK_NULL_HANDLE, waitValue, inputSemaphore, signalValue, s.fence))
                     return false;
                 s.submitted = true;
                 return true;
             }
 
             // Wine: done before the helper is asked to read them
-            if (!Submit(cmd, VK_NULL_HANDLE, 0, 0, s.fence))
+            if (!Submit(cmd, VK_NULL_HANDLE, 0, VK_NULL_HANDLE, 0, s.fence))
                 return false;
             Timing::Scope timed(Upscaler::TimingPart::CpuWait);
             auto done = vk.vkWaitForFences(device, 1, &s.fence, VK_TRUE, 2000000000ull) == VK_SUCCESS;
@@ -890,7 +925,7 @@ namespace
             vk.vkEndCommandBuffer(cmd);
 
             // Wine: the helper answered Evaluate once the output was ready
-            if (!Submit(cmd, WaitOnCpu() ? VK_NULL_HANDLE : semaphore, WaitOnCpu() ? 0 : waitValue, 0, s.fence))
+            if (!Submit(cmd, WaitOnCpu() ? VK_NULL_HANDLE : outputSemaphore, WaitOnCpu() ? 0 : waitValue, VK_NULL_HANDLE, 0, s.fence))
                 return false;
             s.submitted = true;
             return true;
@@ -898,15 +933,18 @@ namespace
 
         void SignalFromCpu(uint64_t value) override
         {
-            if (!semaphore || !vk.vkSignalSemaphore || !vk.vkGetSemaphoreCounterValue)
+            if (!vk.vkSignalSemaphore || !vk.vkGetSemaphoreCounterValue)
                 return;
-            uint64_t current = 0;
-            if (vk.vkGetSemaphoreCounterValue(device, semaphore, &current) != VK_SUCCESS || current >= value)
-                return;
-            VkSemaphoreSignalInfo signal{ VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO };
-            signal.semaphore = semaphore;
-            signal.value = value;
-            vk.vkSignalSemaphore(device, &signal);
+            for (auto semaphore : { outputSemaphore, presentSemaphore })
+            {
+                uint64_t current = 0;
+                if (!semaphore || vk.vkGetSemaphoreCounterValue(device, semaphore, &current) != VK_SUCCESS || current >= value)
+                    continue;
+                VkSemaphoreSignalInfo signal{ VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO };
+                signal.semaphore = semaphore;
+                signal.value = value;
+                vk.vkSignalSemaphore(device, &signal);
+            }
         }
     };
 
@@ -967,7 +1005,9 @@ namespace
         uint32_t slot = 0;
 
         std::array<ID3D12Resource*, TextureCount> images{};
-        ID3D12Fence* sharedFence = nullptr;
+        ID3D12Fence* inputFence = nullptr;      // signalled here, waited for by the helper
+        ID3D12Fence* outputFence = nullptr;     // signalled by the helper, waited for here
+        ID3D12Fence* presentFence = nullptr;    // presentation: the helper is done with Present and HudLess
 
         bool Init(IDirect3DDevice9* realDevice)
         {
@@ -1060,8 +1100,9 @@ namespace
 
         void SignalFromCpu(uint64_t value) override
         {
-            if (sharedFence && sharedFence->GetCompletedValue() < value)
-                sharedFence->Signal(value);
+            for (auto shared : { outputFence, presentFence })
+                if (shared && shared->GetCompletedValue() < value)
+                    shared->Signal(value);
         }
 
         void ReleaseImports() override
@@ -1073,9 +1114,12 @@ namespace
                     image->Release();
                 image = nullptr;
             }
-            if (sharedFence)
-                sharedFence->Release();
-            sharedFence = nullptr;
+            for (auto shared : { &inputFence, &outputFence, &presentFence })
+            {
+                if (*shared)
+                    (*shared)->Release();
+                *shared = nullptr;
+            }
             width = height = outputWidth = outputHeight = 0;
             frameGeneration = false;
             eightBitFrames = false;
@@ -1092,8 +1136,12 @@ namespace
                     continue;
                 ok = ok && handle && SUCCEEDED(device->OpenSharedHandle(handle, IID_PPV_ARGS(&images[i])));
             }
-            auto fenceHandle = reinterpret_cast<HANDLE>(shared.FenceHandle);
-            ok = ok && fenceHandle && SUCCEEDED(device->OpenSharedHandle(fenceHandle, IID_PPV_ARGS(&sharedFence)));
+            auto inputHandle = reinterpret_cast<HANDLE>(shared.InputFenceHandle);
+            auto outputHandle = reinterpret_cast<HANDLE>(shared.OutputFenceHandle);
+            ok = ok && inputHandle && SUCCEEDED(device->OpenSharedHandle(inputHandle, IID_PPV_ARGS(&inputFence)));
+            ok = ok && outputHandle && SUCCEEDED(device->OpenSharedHandle(outputHandle, IID_PPV_ARGS(&outputFence)));
+            if (auto presentHandle = reinterpret_cast<HANDLE>(shared.PresentFenceHandle))
+                ok = ok && SUCCEEDED(device->OpenSharedHandle(presentHandle, IID_PPV_ARGS(&presentFence)));
             CloseSharedHandles(shared);
 
             if (!ok)
@@ -1111,7 +1159,7 @@ namespace
             return true;
         }
 
-        bool SubmitInputs(const Textures& inputs, uint64_t signalValue) override
+        bool SubmitInputs(const Textures& inputs, uint64_t signalValue, uint64_t waitValue) override
         {
             // D3D9on12 records into command lists of its own, which have to reach the GPU before this queue can
             // wait for them. An event query is the D3D9 way to submit them.
@@ -1128,14 +1176,22 @@ namespace
 
             // Unwrapping makes the queue wait for the D3D9 work on the resource, and leaves it in the common state
             ID3D12Resource* sources[TextureCount]{};
+            bool unwrapped[TextureCount]{};     // a texture given twice is unwrapped, transitioned and returned once
             bool ok = true;
             auto imagesStart = Timing::Start();
             for (size_t i = 0; i < TextureCount && ok; ++i)
             {
                 if (!inputs[i])
                     continue;
-                ok = images[i] && SUCCEEDED(on12->UnwrapUnderlyingResource(inputs[i], queue, IID_PPV_ARGS(&sources[i]))) && sources[i] &&
-                    Matches(sources[i], images[i]);
+                for (size_t j = 0; j < i && !sources[i]; ++j)
+                    if (inputs[j] == inputs[i])
+                        sources[i] = sources[j];
+                if (!sources[i])
+                {
+                    ok = SUCCEEDED(on12->UnwrapUnderlyingResource(inputs[i], queue, IID_PPV_ARGS(&sources[i]))) && sources[i];
+                    unwrapped[i] = ok;
+                }
+                ok = ok && images[i] && Matches(sources[i], images[i]);
             }
             Timing::Add(Upscaler::TimingPart::Images, imagesStart);
 
@@ -1149,8 +1205,11 @@ namespace
                 {
                     if (!sources[i])
                         continue;
-                    before[barriers] = Transition(sources[i], D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
-                    after[barriers++] = Transition(sources[i], D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+                    if (unwrapped[i])
+                    {
+                        before[barriers] = Transition(sources[i], D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                        after[barriers++] = Transition(sources[i], D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+                    }
                     before[barriers] = Transition(images[i], D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
                     after[barriers++] = Transition(images[i], D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COMMON);
                 }
@@ -1163,9 +1222,11 @@ namespace
 
                 if (ok)
                 {
+                    if (waitValue && presentFence)
+                        queue->Wait(presentFence, waitValue);
                     ID3D12CommandList* lists[] = { s.list };
                     queue->ExecuteCommandLists(1, lists);
-                    queue->Signal(sharedFence, signalValue);
+                    queue->Signal(inputFence, signalValue);
                 }
                 s.value = SignalCopies();
             }
@@ -1175,7 +1236,7 @@ namespace
             }
 
             for (size_t i = 0; i < TextureCount; ++i)
-                if (sources[i])
+                if (unwrapped[i])
                     Return(inputs[i], sources[i]);
             return ok;
         }
@@ -1211,7 +1272,7 @@ namespace
 
                 if (ok)
                 {
-                    queue->Wait(sharedFence, waitValue);
+                    queue->Wait(outputFence, waitValue);
                     ID3D12CommandList* lists[] = { s.list };
                     queue->ExecuteCommandLists(1, lists);
                 }
@@ -1384,7 +1445,8 @@ namespace
         Idle, Starting, Ready, Failed
     };
 
-    State state = State::Idle;
+    // Render thread; read by the menus on the main thread too
+    std::atomic<State> state = State::Idle;
     uint64_t startedAt = 0; // GetTickCount64 when the helper was started, for the log
     DXVKBridge dxvkBridge;
     D3D12Bridge d3d12Bridge;
@@ -1403,6 +1465,13 @@ namespace
     uint32_t configuredPreset = 0;
     uint32_t configuredFlags = 0;
     bool configureFailed = false;
+    // A request the helper did not answer in time, the helper still running: configured again once this tick count is
+    // reached, a few times, rather than left to temporal AA until the mode or the size changes. The new configuration
+    // also brings new fences, which a late signal of the helper can't take back down past the one signalled from the CPU.
+    uint64_t retryConfigureAt = 0;
+    uint32_t configureRetries = 0;
+    // Wine without the game's semaphores: the helper answers once its GPU work is done, which it waits up to 2 s for
+    constexpr DWORD CpuSyncTimeout = 2500;
     uint64_t fenceValue = 0;
     uint64_t pendingOutputValue = 0;   // signalled by the helper for the request posted last
     Protocol::Command pendingCommand = Protocol::Command::None;
@@ -1416,6 +1485,13 @@ namespace
     bool preparedHudLess = false;
     bool generatedReset = false;       // the last Generate had nothing to interpolate from
     uint64_t generatedValue = 0;       // the helper signals it once the frame posted by PostGenerate is generated; 0 when none waits
+
+    // Presentation by the helper (ConfigureFlags::HelperPresent): its child window over the game's window, until the next
+    // configuration; presentFailed until then once a Present failed
+    HWND presentWindow = nullptr;
+    bool presentFailed = false;
+    uint64_t presentedValue = 0;       // the helper signals it once the frame posted last by PostPresent is copied out
+    bool hideSent = false;             // Hide asked for since the last PostPresent
 
     std::filesystem::path HelperPath()
     {
@@ -1459,9 +1535,12 @@ namespace
         helper.Close();
         configuredBackend = 0;
         configureFailed = false;
+        retryConfigureAt = 0;
         generationFailed = false;
         preparedFrameId = 0;
         generatedValue = 0;
+        presentWindow = nullptr;    // went with the helper
+        presentedValue = 0;
         if (!helper.Start(HelperPath(), bridge->luid))
         {
             Log("The helper could not be started: error %lu", GetLastError());
@@ -1475,7 +1554,20 @@ namespace
 
     const char* CommandName(Protocol::Command command)
     {
-        return command == Protocol::Command::Generate ? "Generate" : "Evaluate";
+        return command == Protocol::Command::Generate ? "Generate" : command == Protocol::Command::Present ? "Present" :
+            command == Protocol::Command::Hide ? "Hide" : "Evaluate";
+    }
+
+    // No answer in time from a helper that still runs
+    void ScheduleRetry()
+    {
+        configureFailed = true;
+        if (configureRetries < 5)
+        {
+            ++configureRetries;
+            retryConfigureAt = GetTickCount64() + 2000;
+            Log("Configured again in 2 s (%u of 5)", configureRetries);
+        }
     }
 
     // The request posted last without waiting is answered before anything else is written. The answer came long
@@ -1504,12 +1596,16 @@ namespace
         }
         if (answer == HelperProcess::Answer::None)
         {
-            configureFailed = true;
+            ScheduleRetry();
             return false;
         }
-        // A failed Generate leaves the upscaler working
-        if (pendingCommand == Protocol::Command::Generate)
+        // A failed Generate leaves the upscaler working, a failed Hide too
+        if (pendingCommand == Protocol::Command::Hide)
+            ;
+        else if (pendingCommand == Protocol::Command::Generate)
             generationFailed = true;
+        else if (pendingCommand == Protocol::Command::Present)
+            presentFailed = true;
         else
             configureFailed = true;
         return true;
@@ -1556,6 +1652,9 @@ export namespace Upscaler
         bool HighDynamicRange = false;    // the frame given to Generate is scRGB
         bool HudLess = false;             // Generate of this frame comes with the frame before the HUD
         bool AsyncGeneration = false;     // Generate on the helper's compute queue
+        bool HelperPresent = false;       // the helper presents the frames (PostPresent), not with FrameGeneration
+        HWND PresentWindow = nullptr;     // the game's window, for HelperPresent
+        bool AmdPacing = false;           // with HelperPresent and FrameGeneration: AMD's swap chain generates and paces the frames
         float CameraPosition[3]{};        // world space
         float CameraUp[3]{};
         float CameraRight[3]{};
@@ -1669,8 +1768,17 @@ export namespace Upscaler
             flags |= Protocol::ConfigureFlags::FrameGeneration |
                 (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : Protocol::ConfigureFlags::EightBitFrames) |
                 (frame.AsyncGeneration ? Protocol::ConfigureFlags::AsyncGeneration : 0u);
+        // Not under Wine: the game's own semaphores would be three, and Wine's child windows of another process are unknown
+        if (frame.HelperPresent && frame.PresentWindow && !bridge->wine)
+            flags |= Protocol::ConfigureFlags::HelperPresent | (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : 0u) |
+                (frame.AmdPacing && (flags & Protocol::ConfigureFlags::FrameGeneration) ? Protocol::ConfigureFlags::AmdPacing : 0u);
         auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
         auto outputHeight = frame.OutputHeight ? frame.OutputHeight : frame.Height;
+        if (retryConfigureAt && GetTickCount64() >= retryConfigureAt)
+        {
+            retryConfigureAt = 0;
+            configuredBackend = 0;
+        }
         bool reconfigure = configuredBackend != backendId || configuredWidth != frame.Width || configuredHeight != frame.Height ||
             configuredOutputWidth != outputWidth || configuredOutputHeight != outputHeight ||
             configuredPreset != frame.DLSSPreset || configuredFlags != flags;
@@ -1679,6 +1787,11 @@ export namespace Upscaler
             bridge->ReleaseImports();
             // A generated frame not taken yet went with the shared textures
             generatedValue = 0;
+            // The helper hides its window without the presentation, or shows it again with its first frame
+            presentWindow = nullptr;
+            hideSent = false;
+            presentFailed = false;
+            presentedValue = 0;
             configuredBackend = backendId;
             configuredWidth = frame.Width;
             configuredHeight = frame.Height;
@@ -1696,7 +1809,10 @@ export namespace Upscaler
             shared.OutputHeight = outputHeight;
             shared.DLSSPreset = frame.DLSSPreset;
             shared.Flags = flags;
-            shared.FenceHandle = 0;
+            shared.InputFenceHandle = shared.OutputFenceHandle = 0;
+            shared.PresentWindow = reinterpret_cast<uint64_t>(frame.PresentWindow);
+            shared.ChildWindow = 0;
+            shared.PresentFenceHandle = 0;
             if (bridge->PrepareGameFence(shared, helper.process))
                 shared.Flags |= Protocol::ConfigureFlags::GameFence;
             const auto configureStart = GetTickCount64();
@@ -1714,17 +1830,24 @@ export namespace Upscaler
                 Log("Synchronization: %s", bridge->gameFence ? "the game's semaphore, on the GPU" : "on the CPU");
             if ((flags & Protocol::ConfigureFlags::FrameGeneration) && !(shared.Flags & Protocol::ConfigureFlags::FrameGeneration))
                 Log("Frame generation could not be set up, the upscaler works without it");
+            if ((flags & Protocol::ConfigureFlags::HelperPresent) && !(shared.Flags & Protocol::ConfigureFlags::HelperPresent))
+                Log("The helper could not set up its presentation, the game presents");
+            else if ((flags & Protocol::ConfigureFlags::AmdPacing) && !(shared.Flags & Protocol::ConfigureFlags::AmdPacing))
+                Log("AMD's frame generation swap chain could not be set up: the helper paces the frames itself");
             if (!bridge->Import(shared, frame.Width, frame.Height, outputWidth, outputHeight))
             {
                 Log("Configure %ux%u -> %ux%u: the shared resources could not be imported", frame.Width, frame.Height, outputWidth, outputHeight);
                 return false;
             }
+            if (shared.Flags & Protocol::ConfigureFlags::HelperPresent)
+                presentWindow = reinterpret_cast<HWND>(shared.ChildWindow);
             // The render thread waits for it: a long one holds the game, as the end of loading
             Log("Configured %ux%u -> %ux%u in %llu ms: %s", frame.Width, frame.Height, outputWidth, outputHeight,
                 GetTickCount64() - configureStart, shared.Message);
 
             configureFailed = false;
             generationFailed = false;
+            retryConfigureAt = 0;
             fenceValue = 0;
         }
         else if (configureFailed)
@@ -1790,9 +1913,10 @@ export namespace Upscaler
             return bridge->SubmitOutput(frame.Output, Protocol::Texture::Output, outputValue, true);
         }
 
-        // On the CPU: the helper answers once its GPU work, which signals outputValue, has finished
+        // On the CPU: the helper answers once its GPU work, which signals outputValue, has finished; it waits up to
+        // CpuSyncTimeout for it
         auto waitStart = Timing::Start();
-        bool answered = helper.Request(Protocol::Command::Evaluate, 500);
+        bool answered = helper.Request(Protocol::Command::Evaluate, CpuSyncTimeout);
         Timing::Add(TimingPart::CpuWait, waitStart);
         if (!answered)
         {
@@ -1803,7 +1927,7 @@ export namespace Upscaler
             if (exited)
                 Lost();
             else
-                configureFailed = true;
+                ScheduleRetry();
             return false;
         }
 
@@ -1884,7 +2008,7 @@ export namespace Upscaler
         }
 
         auto waitStart = Timing::Start();
-        bool answered = helper.Request(Protocol::Command::Generate, 500);
+        bool answered = helper.Request(Protocol::Command::Generate, CpuSyncTimeout);
         Timing::Add(TimingPart::CpuWait, waitStart);
         if (!answered)
         {
@@ -1927,6 +2051,89 @@ export namespace Upscaler
     bool Generate(IDirect3DTexture9* present, IDirect3DTexture9* hudLess, IDirect3DTexture9* generated, float maxLuminance)
     {
         return generated && PostGenerate(present, hudLess, maxLuminance) && TakeGenerated(generated, true);
+    }
+
+    // Presentation by the helper: set up, and no Present failed since
+    bool IsPresentReady()
+    {
+        // The helper answers with its window only once Present is made
+        return state == State::Ready && presentWindow && !presentFailed && !configureFailed && bridge;
+    }
+
+    // The game's textures for PostPresent are A8R8G8B8, A16B16G16R16F with HDR
+    bool IsPresentEightBit()
+    {
+        return bridge && bridge->eightBitFrames;
+    }
+
+    // Render thread, at the frame's end: the helper presents frame (the back buffer's copy, at the output size). With generate
+    // and the frame generation prepared by this frame's Evaluate, it generates the frame between the one before and this
+    // one first, from hudLess as PostGenerate, and shows it delay of the frame time before this one. The game leaves its
+    // own Present out on true; *generated: a generated frame goes before it.
+    bool PostPresent(IDirect3DTexture9* frame, IDirect3DTexture9* hudLess, uint32_t syncInterval, bool generate, float maxLuminance, float delay,
+        bool* generated = nullptr)
+    {
+        if (generated)
+            *generated = false;
+        if (!IsPresentReady() || !frame)
+            return false;
+        bool withGeneration = generate && IsFrameGenerationReady();
+        auto id = preparedFrameId;
+        preparedFrameId = 0;
+        if (!CollectPending() || !IsPresentReady())
+            return false;
+        withGeneration = withGeneration && !generationFailed;
+
+        auto inputValue = ++fenceValue;
+        auto presentValue = ++fenceValue;
+        Textures inputs{};
+        inputs[static_cast<size_t>(Protocol::Texture::Present)] = frame;
+        // What Evaluate was told: without the frame before the HUD, the HUD can't be told apart and is interpolated
+        if (withGeneration)
+            inputs[static_cast<size_t>(Protocol::Texture::HudLess)] = preparedHudLess ? (hudLess ? hudLess : frame) : nullptr;
+        // The copies wait on the GPU for the helper to have copied the frame before out of Present
+        if (!bridge->SubmitInputs(inputs, inputValue, presentedValue))
+        {
+            static uint32_t reported = 0;
+            if (Report(reported))
+                Log("The frame to present could not be submitted: the game presents");
+            presentFailed = true;
+            return false;
+        }
+
+        auto& shared = *helper.shared;
+        shared.WaitValue = inputValue;
+        shared.SignalValue = presentValue;
+        shared.SyncInterval = syncInterval;
+        shared.PresentDelay = delay;
+        shared.PresentGenerate = withGeneration ? 1 : 0;
+        if (withGeneration)
+        {
+            shared.FrameId = id;
+            shared.MaxLuminance = maxLuminance;
+            // The frame before this one was not generated from: there is nothing to interpolate from
+            shared.GenerateReset = preparedReset || generatedFrameId + 1 != id ? 1 : 0;
+            generatedReset = shared.GenerateReset != 0;
+            generatedFrameId = id;
+            if (generated)
+                *generated = !generatedReset;
+        }
+        Post(Protocol::Command::Present, presentValue);
+        presentedValue = presentValue;
+        hideSent = false;
+        return true;
+    }
+
+    // Render thread: the game presented this frame itself, the helper's window would hide it
+    void PresentedByGame()
+    {
+        // Hidden by the helper, which shows it again with the next frame it presents: a hide from here lost the race with
+        // the frame it still had queued, which showed the window again over the game's own frames (switched to exclusive
+        // fullscreen, the picture froze)
+        if (!presentWindow || hideSent || state != State::Ready || !CollectPending())
+            return;
+        Post(Protocol::Command::Hide, 0);
+        hideSent = true;
     }
 
     // UpscalerTimingLog

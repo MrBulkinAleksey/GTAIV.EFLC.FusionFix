@@ -67,6 +67,8 @@ jobs:
         call buildshaders.bat || exit 1
         "source\dxsdk\lib\x86\fxc.exe" /T fx_2_0 /nologo /Fo "%TEMP%\SSR.fxo" "source\resources\SSR.fx" || exit 1
         "source\dxsdk\lib\x86\fxc.exe" /T fx_2_0 /nologo /Fo "%TEMP%\AO.fxo" "source\resources\AO.fx" || exit 1
+        "source\dxsdk\lib\x86\fxc.exe" /T fx_2_0 /nologo /Fo "%TEMP%\GpuGrass.fxo" "source\resources\GpuGrass.fx" || exit 1
+        "source\dxsdk\lib\x86\fxc.exe" /T fx_2_0 /nologo /Fo "%TEMP%\WaterFarLayer.fxo" "source\resources\WaterFarLayer.fx" || exit 1
 
   build:
     runs-on: windows-2025-vs2026
@@ -76,6 +78,35 @@ jobs:
       uses: actions/checkout@v7
       with:
         submodules: recursive
+
+    # The last build's objects (build/), for MSBuild to compile again only what changed. sccache is no help here: it
+    # caches neither MSVC's modules nor /MP's many files a call. Not bin/: release.bat embeds the PDB into its binaries
+    # and signs them in place, and a cached one would go through both again; linking them anew each run is cheap.
+    - name: Restore the build cache
+      uses: actions/cache@v4
+      with:
+        path: build
+        key: msbuild-${{ github.sha }}
+        restore-keys: msbuild-
+
+    # MSBuild compares file times, and the checkout gives every file the time of the checkout: what has not changed
+    # since the cached build's commit gets an old time, what has (and all of a moved submodule) the time of now. With
+    # no cached build, or its commit gone, nothing is kept.
+    - name: Mark what changed since the cached build
+      shell: bash
+      run: |
+        [ -f build/.cache-sha ] || { echo "no cached build"; rm -rf build bin; exit 0; }
+        old=$(cat build/.cache-sha)
+        if ! git cat-file -e "$old^{commit}" 2>/dev/null && ! git fetch -q --depth=1 origin "$old"; then
+          echo "cached commit $old is gone: full build"; rm -rf build bin; exit 0
+        fi
+        stamp=200001010000
+        git ls-files -z | xargs -0 -r touch -c -t $stamp
+        git submodule foreach -q --recursive "git ls-files -z | xargs -0 -r touch -c -t $stamp"
+        git diff --name-only "$old" HEAD | while read -r path; do
+          if [ -d "$path" ]; then find "$path" -type f -exec touch -c {} +; else touch -c "$path"; fi
+        done
+        echo "since $old: $(git diff --name-only "$old" HEAD | wc -l) changed path(s)"
 
     - name: Add msbuild to PATH
       uses: microsoft/setup-msbuild@main
@@ -97,6 +128,14 @@ jobs:
         msbuild -m build/GTAIV.EFLC.FusionFix.slnx /property:Configuration=Release /property:Platform=Win32
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         msbuild -m build/GTAIV.EFLC.FusionFix.Helper.slnx /property:Configuration=Release /property:Platform=x64
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        # (the commit this build is of, for the next run's "Mark what changed")
+        git rev-parse HEAD | Out-File -Encoding ascii -NoNewline build/.cache-sha
+
+    - name: Run tests
+      run: |
+        ./build/tests/Release/GTAIV.EFLC.FusionFix.Tests.exe
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     - name: Download Ultimate ASI Loader x86
       uses: robinraju/release-downloader@v1.13
