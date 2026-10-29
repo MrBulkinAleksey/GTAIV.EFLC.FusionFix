@@ -27,6 +27,7 @@ import framegeneration;
 import framehistory;
 import grasswind;
 import procedural;
+import shadowmerge;
 import temporal;
 import vtablepatch;
 
@@ -1393,6 +1394,7 @@ public:
             IniReload::Add(ReadIni);
             EntityClass::SetEntityCommandHook(&OnCommand);
             EntityClass::SetFragTypeCommandHook(&OnFragTypeCommand);
+            ShadowMerge::pInstancing = [] { return bInstancing; };
             ProceduralGround::DrawnInstanced = &DrawnInstanced;
             // push 0x92c740 / call / push 0 / push -1 / push [edi+938h] / call AddEntities: CRenderPhaseCascadeShadows'
             // list, for each cascade
