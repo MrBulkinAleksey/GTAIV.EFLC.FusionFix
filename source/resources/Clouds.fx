@@ -440,7 +440,10 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
     // light per few metres where the even steps gave at most half that). The scene's clouds slide the whole
     // series by up to a step, 2^u for u from a pixel's own noise that changes every frame, and the
     // accumulation averages the layers away; the reflections, without it, keep the fixed steps.
-    float lightScale = full ? exp2(frac(PixelJitter(vpos + 37.0 + fFrameShift) + fFrameJitter * 1.618034) * fLightJitter) : 1.0;
+    // Each sample along the ray slides by its own share (the golden ratio on from the pixel's): with one
+    // share for the whole ray, neighbouring pixels' light differed by up to half, and the 0.15 of this
+    // frame the accumulation takes showed the noise's pattern as a grid of dots on the sunlit sides.
+    float lightJitter = frac(PixelJitter(vpos + 37.0 + fFrameShift) + fFrameJitter * 1.618034);
     float t = t0 + max(vec4Layer.y / 24.0, t0 * FAR_STEP) * stepScale * COARSE_STEP * jitter;
     float fineLeft = 0.0;
     float lightDepth = 0.0;
@@ -498,6 +501,7 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
             if (sums.transmittance > LIGHT_CUTOFF)
             {
                 lightDepth = 0.0;
+                float lightScale = full ? exp2(frac(lightJitter + float(i) * 0.618034) * fLightJitter) : 1.0;
                 float stepLength = vec4Layer.y * lightStart * lightScale;
                 float3 q = p;
                 // A float counter, and no [fastopt]: with an int counter under [fastopt] the compiler
