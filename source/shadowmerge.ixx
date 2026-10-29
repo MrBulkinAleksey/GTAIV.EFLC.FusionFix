@@ -17,30 +17,30 @@ import inireload;
 import renderskip;
 
 // Shadow Mesh Merge ([PERFORMANCE] ShadowMeshMerge): in the sun's cascades and the lamps' shadow maps a building's model
-// draws each of its geometries on its own, one device draw each, though the pass draws them all with one forced depth
-// shader: a frame capture by day found one building of 306 draws in the cascades (about a hundred geometries, two
-// textures) and 1703 draws there for 129 entities, 1565 in four lamp maps for 65. The draws were most of the render
-// thread's time, the bound of the frame. Here a model's geometries that share a vertex declaration and stride are put
-// together into one vertex and index buffer (up to 65535 vertices each) the first time the model is drawn in such a pass,
-// and the game draws those instead, its own code drawing them as it does any geometry.
+// draws each of its geometries on its own, one device draw each, though the pass draws most of them with the same depth
+// shaders (its technique group picks each shader's depth technique): a frame capture by day found one building of 306
+// draws in the cascades (about a hundred geometries, two textures) and 1703 draws there for 129 entities, 1565 in four
+// lamp maps for 65. The draws were most of the render thread's time, the bound of the frame. Here a model's geometries
+// that share a shader, a vertex declaration and a stride are put together into one vertex and index buffer (up to 65535
+// vertices each) the first time the model is drawn in such a pass, and the game draws those instead, its own code drawing
+// them with that shader as it does any geometry.
 //
 // The game's pieces (CE): grmModel::Draw (0x444c50, thiscall, the shader group, the bucket and a flag; ret 0xc) walks the
 // model's geometries (+4 their array, +0x1a their count, +0x10 a u16 shader index each, +0xc a bounding sphere each after
-// the model's own, which it tests against the viewport) and draws each with its shader, or with the forced shader
-// ([0x17f59d4]) the shadow passes set, whose bucket (+9) is then every geometry's unless its +0xb is set; skinned
-// models go another way while [0x1b4f714] is set. A geometry (grmGeometryQB, Draw 0x463490): +0xc its vertex buffer,
-// +0x1c its index buffer (four of each, the first unless +0x48), +0x2c the index count, +0x36 the primitive type (3 a
-// triangle list), +0x40 the vertex declaration, +0x44 a second stream's buffer. Its draw (0x426180) binds the index buffer's
-// D3D buffer (+0xc) with its count (+4) and the vertex buffer's (+0x1c) with its stride (+0xc) and vertex count (u16 +4)
-// from their start. Both keep their data in memory (vertex buffer +0x20, CE 0x446140; index buffer +0x10, 16-bit, CE
-// 0x471fb0) to make the D3D buffer again after a reset, which is what is read here.
+// the model's own, which it tests against the viewport) and draws each with its shader, only those of the bucket asked
+// for (the shader's +9). A forced shader ([0x17f59d4]) is not set in the shadow passes: a first build that merged only
+// under one merged nothing. Skinned models go another way while [0x1b4f714] is set. A geometry (grmGeometryQB, Draw
+// 0x463490): +0xc its vertex buffer, +0x1c its index buffer (four of each, the first unless +0x48), +0x2c the index count,
+// +0x36 the primitive type (3 a triangle list), +0x40 the vertex declaration, +0x44 a second stream's buffer. Its draw
+// (0x426180) binds the index buffer's D3D buffer (+0xc) with its count (+4) and the vertex buffer's (+0x1c) with its
+// stride (+0xc) and vertex count (u16 +4) from their start. Both keep their data in memory (vertex buffer +0x20, CE
+// 0x446140; index buffer +0x10, 16-bit, CE 0x471fb0) to make the D3D buffer again after a reset, which is what is read here.
 //
 // The model drawn instead is a copy of the game's with its geometry array, count and shader indices replaced (merged
 // geometries first, then those left as they were) and no per-geometry spheres, so nothing is culled by them (a geometry
 // outside the viewport draws nothing in a depth pass anyway). Each merged geometry is a copy of its group's first with
 // copies of its buffers' objects holding the merged buffers (managed pool: a reset leaves them). Only buildings and
-// props (no skinning), only where every geometry takes the forced shader's bucket, and not while Far Prop Instancing makes
-// a sample's draws instanced.
+// props (no skinning), and not while Far Prop Instancing makes a sample's draws instanced.
 //
 // ShadowMeshMergeLog = 1 ([DEBUG]): every 600 frames, models merged and drawn, draws saved, the cache's size.
 export namespace ShadowMerge
@@ -60,7 +60,6 @@ namespace ShadowMerge
 
     bool bEnabled = true, bLog = false;
     SafetyHookInline shModelDraw{};
-    void** pForcedShader = nullptr;     // [0x17f59d4]
     void** pSkinning = nullptr;         // [0x1b4f714]
 
     EntityClass::Kind currentKind = EntityClass::Kind::Unknown;
@@ -94,7 +93,7 @@ namespace ShadowMerge
     {
         uint64_t drawn = 0, saved = 0, built = 0, noGain = 0, failed = 0, letGo = 0;
         // models of buildings and props in a shadow pass drawn the game's way, and why
-        uint64_t noForced = 0, perGeometry = 0, skinned = 0, instancing = 0, single = 0, budget = 0;
+        uint64_t skinned = 0, instancing = 0, single = 0, budget = 0;
     } stats;
 
     template <typename T> T Read(uintptr_t address, size_t offset) { return *reinterpret_cast<const T*>(address + offset); }
@@ -142,8 +141,9 @@ namespace ShadowMerge
         const uintptr_t geometries = Read<uintptr_t>(model, 4);
         const uint16_t count = Read<uint16_t>(model, 0x1a);
         const uintptr_t shaderMap = Read<uintptr_t>(model, 0x10);
-        // Groups by declaration and stride, in the model's order
-        struct Group { uintptr_t declaration; uint32_t stride; std::vector<int> members; };
+        // Groups by shader, declaration and stride, in the model's order: a merged geometry is drawn with its group's
+        // shader, as each of them was
+        struct Group { uint16_t shader; uintptr_t declaration; uint32_t stride; std::vector<int> members; };
         std::vector<Group> groups;
         std::vector<int> left;
         for (int i = 0; i < count; ++i)
@@ -154,11 +154,13 @@ namespace ShadowMerge
                 left.push_back(i);
                 continue;
             }
+            const uint16_t shader = shaderMap ? Read<uint16_t>(shaderMap, i * 2) : 0;
             const uintptr_t declaration = Read<uintptr_t>(g, 0x40);
             const uint32_t stride = Read<uint32_t>(Read<uintptr_t>(g, 0xc), 0xc);
-            auto it = std::find_if(groups.begin(), groups.end(), [&](const Group& x) { return x.declaration == declaration && x.stride == stride; });
+            auto it = std::find_if(groups.begin(), groups.end(), [&](const Group& x)
+                { return x.shader == shader && x.declaration == declaration && x.stride == stride; });
             if (it == groups.end())
-                groups.push_back({ declaration, stride, { i } });
+                groups.push_back({ shader, declaration, stride, { i } });
             else
                 it->members.push_back(i);
         }
@@ -251,9 +253,8 @@ namespace ShadowMerge
                 *reinterpret_cast<uint32_t*>(m.ibObject + 4) = indices;
                 *reinterpret_cast<IDirect3DIndexBuffer9**>(m.ibObject + 0xc) = m.ib;
                 entry.bytes += size_t(vertices) * group.stride + size_t(indices) * 2;
-                const uint16_t shader = shaderMap ? Read<uint16_t>(shaderMap, group.members[at] * 2) : 0;
                 entry.merged.push_back(m);
-                entry.shaders.push_back(shader);
+                entry.shaders.push_back(group.shader);
                 at = end;
                 ++drawsAfter;
             }
@@ -319,10 +320,9 @@ namespace ShadowMerge
             return original();
         if (!ShadowPass())
             return original();
-        const auto forced = pForcedShader ? reinterpret_cast<const uint8_t*>(*pForcedShader) : nullptr;
         const uint16_t count = Read<uint16_t>(m, 0x1a);
         const uintptr_t geometries = Read<uintptr_t>(m, 4);
-        uint64_t* reason = !forced ? &stats.noForced : forced[0xb] ? &stats.perGeometry : (pSkinning && *pSkinning) ? &stats.skinned
+        uint64_t* reason = (pSkinning && *pSkinning) ? &stats.skinned
                          : (pInstancing && pInstancing()) ? &stats.instancing : (count < 2 || !geometries) ? &stats.single : nullptr;
         if (reason)
         {
@@ -385,10 +385,10 @@ namespace ShadowMerge
         if (bLog && frame % kLogFrames == 0)
         {
             const double n = double(kLogFrames);
-            FusionLog::Write("ShadowMerge", "Stats", "per frame over %u: %.1f merged models drawn, %.0f draws saved; drawn the game's way: no forced "
-                "shader %.1f, buckets per geometry %.1f, skinned %.1f, instanced sample %.1f, one geometry %.1f, waiting to be built %.1f; built %llu, "
+            FusionLog::Write("ShadowMerge", "Stats", "per frame over %u: %.1f merged models drawn, %.0f draws saved; drawn the game's way: "
+                "skinned %.1f, instanced sample %.1f, one geometry %.1f, waiting to be built %.1f; built %llu, "
                 "nothing to merge %llu, failed %llu, let go %llu; cache %zu models, %.1f MB\n", kLogFrames, stats.drawn / n, stats.saved / n,
-                stats.noForced / n, stats.perGeometry / n, stats.skinned / n, stats.instancing / n, stats.single / n, stats.budget / n,
+                stats.skinned / n, stats.instancing / n, stats.single / n, stats.budget / n,
                 stats.built, stats.noGain, stats.failed, stats.letGo, entries.size(), totalBytes / 1048576.0);
             stats = {};
         }
@@ -414,7 +414,7 @@ public:
             IniReload::Add(ReadIni);
             // grmModel::Draw (CE 0x444c50): push ebp / mov ebp, esp / and esp, -8 / sub esp, 20h / mov eax, [skinning] / push esi /
             // push edi / mov edi, ecx / mov [esp+24h], eax / mov eax, [edi+0Ch] / test eax, eax / jz / cmp byte [x], 0 / jz /
-            // push ecx / mov ecx, [viewport]; the forced shader read at +0x78: mov edx, [forced]
+            // push ecx / mov ecx, [viewport]; and at +0x78 the forced shader's read, mov edx, [forced], to check the build
             auto pattern = hook::pattern("55 8B EC 83 E4 F8 83 EC 20 A1 ? ? ? ? 56 57 8B F9 89 44 24 24 8B 47 0C 85 C0 74 ? 80 3D ? ? ? ? 00 74 ? 51 8B 0D");
             if (pattern.empty())
             {
@@ -428,7 +428,6 @@ public:
                 return;
             }
             pSkinning = *reinterpret_cast<void***>(at + 10);
-            pForcedShader = *reinterpret_cast<void***>(at + 0x7a);
             shModelDraw = safetyhook::create_inline(at, reinterpret_cast<void*>(&ModelDraw));
             EntityClass::AddDrawHooks([](EntityClass::Kind kind) { currentKind = kind; inEntity = true; },
                                       [](EntityClass::Kind) { inEntity = false; });
