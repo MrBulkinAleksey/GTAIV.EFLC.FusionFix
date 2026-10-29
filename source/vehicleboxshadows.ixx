@@ -116,6 +116,9 @@ export struct VehicleBoxShadows
     static inline std::atomic<uint32_t> framesMatched{0}, framesUnmatched{0}, lightsWithBoxes{0}, pedsWithShadows{0};
     static inline const List* drawn = nullptr;
     static inline List lastFound{}; // a copy, render thread: the ring's entry may be reused while it is drawn
+    // lastFound's props' spheres (centre, reach) side by side: every light runs over all of them, and their Props,
+    // 100 bytes each, took most of ShapesForLight's time in a profile, the most of ours on the render thread
+    static inline float propSpheres[kProps][4] = {};
     static inline uintptr_t drawnFor = 0;
     static inline std::atomic<uint32_t> latestHandOver{0}; // the last hand over's sequence, for the log
     static inline bool constantsOn = true;
@@ -1106,6 +1109,11 @@ export struct VehicleBoxShadows
             std::copy_n(&found->peds[0][0], found->pedCount * 3, &lastFound.peds[0][0]);
             lastFound.propCount = found->propCount;
             std::copy_n(found->props, found->propCount, lastFound.props);
+            for (int i = 0; i < found->propCount; ++i)
+            {
+                std::copy_n(found->props[i].centre, 3, propSpheres[i]);
+                propSpheres[i][3] = found->props[i].reach;
+            }
             lastFound.bodyCount = found->bodyCount;
             std::copy_n(found->body, found->bodyCount, lastFound.body);
             std::copy_n(found->bodyCentre, 3, lastFound.bodyCentre);
@@ -1316,6 +1324,14 @@ export struct VehicleBoxShadows
         int taken = 0;
         for (int i = 0; i < (R.bPropShapeShadows ? drawn->propCount : 0); ++i)
         {
+            // Outside its light, by the spheres alone: the most of them
+            {
+                const float* s = propSpheres[i];
+                const float dx = s[0] - at[0], dy = s[1] - at[1], dz = s[2] - at[2];
+                const float reach = light.mRadius + s[3];
+                if (reach < 0.0f || dx * dx + dy * dy + dz * dz > reach * reach)
+                    continue;
+            }
             const auto& p = drawn->props[i];
             // In this light's own map already. Its map of this frame shows every object but the posts: the caster loop
             // draws the rest in modes 1 and 2 without the 0x800 bit, and only the posts' shaders (all in bucket 4) gave
