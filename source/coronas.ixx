@@ -267,7 +267,7 @@ namespace CoronaRender
 
     // A ball (the quad's, moved toward the camera by toward) of a texel or two of the grid, inside its screen, behind
     // the farthest depth of each; larger, at the screen's edge or too near: not hidden
-    bool BehindWorld(const HiZPoints& h, const float* pos, float radius, float toward)
+    export bool BehindWorld(const HiZPoints& h, const float* pos, float radius, float toward)
     {
         const float* m = h.viewProjection;
         const float r = radius + h.grow;
