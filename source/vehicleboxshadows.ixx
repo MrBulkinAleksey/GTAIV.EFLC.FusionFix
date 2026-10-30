@@ -1376,9 +1376,12 @@ export struct VehicleBoxShadows
             const float* c = drawn->bodyCentre;
             const float dx = c[0] - at[0], dy = c[1] - at[1], dz = c[2] - at[2];
             const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
-            // above the body, or a filler in a room at any height (FillerBodyShadows): they stand low round the player
-            // and light the walls beside them
-            bool reached = d - drawn->bodyReach < light.mRadius && (dz < -0.3f || roomFiller);
+            // above the body, or any light inside a room (0x20 without 0x40) at any height: rooms' lamps and fillers
+            // stand low round the player and light the walls beside them. Lamps at 0.29 m over the body's middle
+            // took the bones only while the player ran, as the body bobbed down past the 0.3 m: the shadow on the
+            // wall came with each step and went as the player stopped
+            const bool roomLight = (light.mFlags & (rage::LF_INTERIOR | rage::LF_EXTERIOR)) == rage::LF_INTERIOR;
+            bool reached = d - drawn->bodyReach < light.mRadius && (dz < -0.3f || roomLight);
             if (reached && spot && dirLength > 0.5f && d > drawn->bodyReach)
             {
                 const float off = std::acos(std::clamp((dx * dir[0] + dy * dir[1] + dz * dir[2]) / (dirLength * d), -1.0f, 1.0f));
