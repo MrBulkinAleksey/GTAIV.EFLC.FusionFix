@@ -1,0 +1,402 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+index b0ac352..59e8634 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+@@ -58,6 +58,16 @@
+     defi i0, 12, 0, 0, 0
+     defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
+     def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
++    def c138, 0, 1, 0.5, 0.05 // FusionFix vehicle box shadows: zero, one, a half, the narrowest penumbra
++    def c185, 3, -2, 31.875, 0.05 // FusionFix vehicle box shadows: the smoothstep's terms; the material ID's 255 and 0.4 over 8
++    def c186, 8, -2.4, 1.5, -0.100000001 // FusionFix vehicle box shadows: the category's 8, less vehicles' 2 and the 0.4, how far from it peds and the player lie; the waist below the middle
++    def c139, 0, 0.1, 0.0208333333, 0.0052083333 // FusionFix prop shape shadows: zero, the prop's own surface; a shape's two texels in s7, the first's middle (FusionFix: zz_ped_capsule_look.patch: 96 texels, 48 shapes)
++    def c140, 0.0104166667, 0.0001, 0.15, 0.25 // FusionFix prop shape shadows: a texel in s7, a small number, how far above its foot a prop's own surface starts, the most a box's edges round
++    def c107, 0.35, 0, 0.23, -0.55 // FusionFix: zz_ped_capsule_look.patch: a body's radius in the capsule's: the ankles', the hips' and the neck's change
++    def c47, 4, 0.27, 0.35, 0 // FusionFix: zz_ped_capsule_look.patch: the legs' ramp over u 0-0.25 and their change; the ankles' radius
++    def c108, 6.6666667, -3, 16.666667, -13 // FusionFix: zz_ped_capsule_look.patch: the hips' ramp over u 0.45-0.6, the neck's over 0.78-0.84
++    def c109, 20, -17, 0.15, 0.45 // FusionFix: zz_ped_capsule_look.patch: the head's ramp over u 0.85-0.9 and its change; the head's radius
++    defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
+     dcl_texcoord v0
+     dcl vPos.xy
+     dcl_texcoord9 v9
+@@ -66,6 +76,8 @@
+     dcl_2d s2
+     dcl_2d s4
+     dcl_2d s13 // FusionFix GGX lights: the G-buffer's specular (_DEFERRED_GBUFFER_2_), bound by FusionFix during lighting
++    dcl_2d s11 // FusionFix filler body shadows: the material IDs (_STENCIL_BUFFER_), bound by FusionFix during lighting
++    dcl_2d s7 // FusionFix filler body shadows: the light's shapes
+     add r0.xy, c0.x, vPos
+     mul r0.xy, r0, c77.zwzw
+     texld r1, r0, s2
+@@ -324,6 +336,204 @@
+         add r31.w, c157.y, -r18.w
+       endif
+     endif
++    // --- FusionFix filler body shadows (FillerBodyShadows in vehicleboxshadows.ixx): the shapes of the lamps' lights in a room
++    // --- (lightVolumePoint) in this one, the filler lights inside: the player's bones and the props' shapes in s7, from
++    // --- VehicleBoxShadows::SetForLight as for those lamps; no cars' boxes nor people's capsules, which want a light above them.
++    // --- Joined with the contact shadow by the darker of the two, not their product: the contact shadow keeps its sharp
++    // --- outline, the bones fill where it misses (rays that pass behind a body standing close to a wall), and where both
++    // --- fall the body is not shadowed twice.
++    mov r12, c149
++    max r13.x, r26_abs.x, r26_abs.y
++    max r13.x, r13.x, r26_abs.z
++    cmp r13.x, -r13.x, c138.x, r12.w // off where this light adds nothing, or no shapes (c149.w 0)
++    if_lt c138.x, r13.x
++      add r13.xy, vPos, c138.z
++      mul r13.xy, r13, c77.zw
++      mov r13.zw, c138.x
++      texldl r14, r13, s2
++      pow r19.x, c209_abs.z, r14.x // linear = near * (far / near)^raw
++      mul r14.x, r19.x, c209.w
++      rcp r14.y, v0.w
++      mul r14.y, r14.y, r14.x
++      mad r15.xyz, v0, -r14.y, c15 // this pixel's world position
++      add r16.xyz, c66, -r15 // and the way to the light
++      // peds (1), vehicles (2) and the player (3) by the material ID's category: the bones leave their own pixels lit
++      texldl r17, r13, s11
++      mad r17.x, r17.x, c185.z, c185.w
++      frc r17.x, r17.x
++      mad r17.x, r17.x, c186.x, c186.y
++      add r17.x, -r17_abs.x, c186.z // not below 0 on them
++      mov r17.w, c138.y // the light the shapes leave
++      // --- FusionFix prop shape shadows (PropShapeShadows in vehicleboxshadows.ixx): c115.x shapes of lamp posts and other props
++      // --- near this light in s7, two texels each: a capsule (one end, radius; the other end, -1) or a box turned about the
++      // --- vertical (centre, half length; forward xy, half width, half height); not faded with the boxes by c149.w
++      // --- FusionFix: zz_shape_groups.patch: the shapes in eight groups, each a sphere round them (centre, radius; c125-c128,
++      // --- c116, c117, c119, c120) and its end (c115.y-w, c129.x-w, the last c115.x): a group's shapes are read only where the
++      // --- way to the light passes within its sphere widened by the widest penumbra (r13.z), so most of the light's pixels read none
++      // --- FusionFix: zz_zz_shape_light_size.patch: the shapes soften by the light's own size (c142.y), not by c149.x, which a lamp
++      // --- of a pair on one post widens by half their spacing so that the cars' two shadows are one: a post's thin shadow went
++      // --- into that penumbra and was not seen at all
++      mov r12.x, c142.y
++      add r13.z, c154.z, c154.w
++      max r13.z, r13.z, r12.x
++      max r13.z, r13.z, c138.w
++      mov r13.x, c138.x
++      mov r14.y, c138.z
++      mov r14.zw, c138.x
++      mov r20, c125
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c115.y
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c115.y
++      mov r20, c126
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c115.z
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c115.z
++      mov r20, c127
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c115.w
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c115.w
++      mov r20, c128
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.x
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.x
++      mov r20, c116
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.y
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.y
++      mov r20, c117
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.z
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.z
++      mov r20, c119
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c129.w
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c129.w
++      mov r20, c120
++      call l9
++      if_ge r20.w, c138.x
++        mad r14.x, r13.x, c139.z, c139.w
++        rep i3
++          break_ge r13.x, c115.x
++          texldl r18, r14, s7
++          add r14.x, r14.x, c140.x
++          texldl r19, r14, s7
++          add r14.x, r14.x, c140.x
++          if_lt r19.w, c138.x
++            call l6
++          else
++            call l7
++          endif
++          add r13.x, r13.x, c138.y
++        endrep
++      endif
++      mov r13.x, c115.x
++      min r31.w, r31.w, r17.w
++    endif
+     mul r26.xyz, r26, r31.w
+     mov oC0, r26
+     
+@@ -406,3 +616,166 @@
+     mul r17.x, r17.x, r17.y
+     mul r13.w, r13.w, r17.x
+     ret
++    // --- FusionFix: zz_shape_groups.patch: r20.w not below 0 where the way from this pixel (r15) to the light (r16) passes
++    // --- within the sphere r20 (centre, radius) widened by r13.z, the widest penumbra
++    label l9
++    add r21.xyz, r20, -r15
++    dp3 r22.x, r21, r16
++    dp3 r22.y, r16, r16
++    max r22.y, r22.y, c140.y
++    rcp r22.y, r22.y
++    mul_sat r22.x, r22.x, r22.y
++    mad r21.xyz, r16, -r22.x, r21
++    dp3 r21.w, r21, r21
++    add r22.z, r20.w, r13.z
++    mul r22.z, r22.z, r22.z
++    add r20.w, r22.z, -r21.w
++    ret
++    // --- FusionFix prop shape shadows: the light the capsule from r18.xyz to r19.xyz, radius r18.w, leaves this pixel (r15, the
++    // --- way to the light r16), into r17.w
++    label l6
++    add r20.xyz, r19, -r18 // the axis
++    add r21.xyz, r15, -r18
++    dp3 r22.x, r16, r16
++    dp3 r22.y, r16, r20
++    dp3 r22.z, r20, r20
++    max r22.z, r22.z, c140.y
++    dp3 r22.w, r16, r21
++    dp3 r23.x, r20, r21
++    rcp r23.w, r22.z
++    // the pixel's own place against the axis: its own surface keeps its light
++    mul_sat r24.w, r23.x, r23.w
++    mad r25.xyz, r20, r24.w, -r21
++    dp3 r25.w, r25, r25
++    // the nearest points of the way to the light (part r24.x of it) and of the axis (part r23.y)
++    mul r23.y, r22.y, r23.x
++    mad r23.y, r22.w, -r22.z, r23.y
++    mul r23.z, r22.x, r22.z
++    mad r23.z, r22.y, -r22.y, r23.z
++    max r23.z, r23.z, c140.y
++    rcp r23.z, r23.z
++    mul_sat r24.x, r23.y, r23.z
++    mad r23.y, r22.y, r24.x, r23.x
++    mul_sat r23.y, r23.y, r23.w
++    mad r23.z, r22.y, r23.y, -r22.w
++    max r22.x, r22.x, c140.y
++    rcp r22.x, r22.x
++    mul_sat r24.x, r23.z, r22.x
++    mad r21.xyz, r16, r24.x, r21
++    mad r21.xyz, r20, -r23.y, r21
++    dp3 r20.w, r21, r21
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, -r18.w // how far the way passes outside the capsule
++    // --- FusionFix: zz_ped_capsule_look.patch: l4's penumbra, but a capsule of the player's bones (its other end's w -2)
++    // --- takes the people's light size c154.z and floor c154.w (as l5) in place of the boxes' r12.x and 5 cm: a sharp
++    // --- outline made the body's shadow look built of pipes
++    add r24.z, r19.w, c186.z
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    mad r24.w, r24.x, c154.z, c154.w
++    // --- FusionFix: zz_z_shape_distance_softness.patch: and c142.x more for each metre to the light (r22.x holds 1 over its
++    // --- square), as the shadow map blurs by an angle: from a far light the bones' shadow was far sharper than the map's
++    rsq r25.x, r22.x
++    mad r24.w, r25.x, c142.x, r24.w
++    cmp r24.y, r24.z, r24.y, r24.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
++    rsq r25.w, r25.w
++    rcp r25.w, r25.w
++    add r25.w, r25.w, -r18.w
++    add r25.w, r25.w, -c139.y
++    // only above its lower end: the ground under it, inside the capsule too, takes the shadow
++    min r25.x, r18.z, r19.z
++    add r25.x, r25.x, c140.z
++    add r25.x, r15.z, -r25.x
++    cmp r25.w, r25.x, r25.w, c138.y
++    cmp r24.y, r25.w, r24.y, c138.y
++    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
++    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
++    add r25.y, r19.w, c186.z
++    cmp r25.z, r17.x, r25.y, c138.y
++    cmp r24.y, r25.z, r24.y, c138.y
++    mul r17.w, r17.w, r24.y
++    ret
++    // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
++    // --- leaves this pixel (r15, the way to the light r16), into r17.w
++    label l7
++    add r20.xyz, r15, -r18
++    // in the box's own axes
++    mul r21.x, r20.x, r19.x
++    mad r21.x, r20.y, r19.y, r21.x
++    mul r21.y, r20.x, r19.y
++    mad r21.y, r20.y, -r19.x, r21.y
++    mov r21.z, r20.z
++    mul r22.x, r16.x, r19.x
++    mad r22.x, r16.y, r19.y, r22.x
++    mul r22.y, r16.x, r19.y
++    mad r22.y, r16.y, -r19.x, r22.y
++    mov r22.z, r16.z
++    mov r23.x, r18.w
++    mov r23.yz, r19.xzww
++    // its edges rounded by r22.w: up to c140.w, no more than half its shortest half side, the box that much smaller
++    min r22.w, r23.x, r23.y
++    min r22.w, r22.w, r23.z
++    mul r22.w, r22.w, c138.z
++    min r22.w, r22.w, c140.w
++    add r23.xyz, r23, -r22.w
++    // the point of the way to the light nearest the box's middle, with the box scaled to a cube
++    mul r24.xyz, r23, r23
++    max r24.xyz, r24, c140.y // no side of nothing: a flat one's 1/0 made the pixel NaN
++    rcp r25.x, r24.x
++    rcp r25.y, r24.y
++    rcp r25.z, r24.z
++    mul r24.xyz, r21, r22
++    dp3 r24.x, r24, r25
++    mul r20.xyz, r22, r22
++    dp3 r24.y, r20, r25
++    max r24.y, r24.y, c140.y
++    rcp r24.y, r24.y
++    mul_sat r24.x, -r24.x, r24.y
++    mad r20.xyz, r22, r24.x, r21
++    call l8
++    add r20.w, r20.w, -r22.w
++    call l4
++    // the box's own surface keeps its light
++    mov r20.xyz, r21
++    call l8
++    add r20.w, r20.w, -r22.w
++    add r20.w, r20.w, -c139.y
++    // only above its bottom: the ground under a box standing on legs or wheels takes the shadow
++    add r25.x, r18.z, -r19.w
++    add r25.x, r25.x, c140.z
++    add r25.x, r15.z, -r25.x
++    cmp r20.w, r25.x, r20.w, c138.y
++    cmp r24.y, r20.w, r24.y, c138.y
++    mul r17.w, r17.w, r24.y
++    ret
++    // --- FusionFix prop shape shadows: how far r20.xyz lies outside the box of half edges r23.xyz, in r20.w (negative inside)
++    label l8
++    add r25.xyz, r20_abs, -r23
++    max r25.w, r25.x, r25.y
++    max r25.w, r25.w, r25.z
++    min r25.w, r25.w, c138.x
++    max r25.xyz, r25, c138.x
++    dp3 r20.w, r25, r25
++    rsq r20.w, r20.w
++    rcp r20.w, r20.w
++    add r20.w, r20.w, r25.w
++    ret
++    // --- FusionFix vehicle box shadows: the light a box leaves, r24.y, from how far the way passes outside it, r20.w, and the
++    // part of the way where it stands, r24.x: the penumbra is the light's size times that part
++    label l4
++    mul r24.y, r12.x, r24.x
++    max r24.y, r24.y, c138.w
++    rcp r24.y, r24.y
++    mul r24.y, r20.w, r24.y
++    mad_sat r24.y, r24.y, c138.z, c138.z
++    mad r24.w, r24.y, c185.y, c185.x
++    mul r24.y, r24.y, r24.y
++    mul r24.y, r24.y, r24.w
++    ret

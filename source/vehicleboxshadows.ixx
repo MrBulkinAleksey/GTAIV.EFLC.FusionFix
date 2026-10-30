@@ -1287,6 +1287,11 @@ export struct VehicleBoxShadows
         const auto& R = PostFxResources;
         if (!drawn || (!drawn->propCount && !drawn->bodyCount))
             return 0;
+        // A filler light inside a room (zz_z_zz_filler_body_shadows.patch): shapes only with FillerBodyShadows
+        constexpr uint32_t kRoomFillerMask = rage::LF_FILLER | rage::LF_INTERIOR | rage::LF_EXTERIOR;
+        const bool roomFiller = (light.mFlags & kRoomFillerMask) == (rage::LF_FILLER | rage::LF_INTERIOR);
+        if (roomFiller && !R.bFillerBodyShadows)
+            return 0;
         // Its light far from the camera: none, as the boxes
         if (R.fVehicleBoxShadowsMaxDistance > 0.0f)
             if (auto* vp = rage::GetCurrentViewport())
@@ -1332,7 +1337,9 @@ export struct VehicleBoxShadows
             const float* c = drawn->bodyCentre;
             const float dx = c[0] - at[0], dy = c[1] - at[1], dz = c[2] - at[2];
             const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
-            bool reached = d - drawn->bodyReach < light.mRadius && dz < -0.3f;
+            // above the body, or a filler in a room at any height (FillerBodyShadows): they stand low round the player
+            // and light the walls beside them
+            bool reached = d - drawn->bodyReach < light.mRadius && (dz < -0.3f || roomFiller);
             if (reached && spot && dirLength > 0.5f && d > drawn->bodyReach)
             {
                 const float off = std::acos(std::clamp((dx * dir[0] + dy * dir[1] + dz * dir[2]) / (dirLength * d), -1.0f, 1.0f));
