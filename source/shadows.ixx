@@ -304,12 +304,12 @@ public:
                     ranges.push_back(*splits.get_first<float*>(21) + 1);
 
                 // CascadeDistances (hidden): where each of the four cascades ends, in metres from the camera. All four
-                // have the same texels, so each next one is coarser by the ratio of the two: the step at the second's end
-                // shows on nearby walls, moved out with this at the cost of the second cascade's sharpness and fill
+                // have the same texels, so each next one is coarser by the ratio of the two: at 30 m the step at the second's
+                // end showed on nearby walls, gone at 50 for some 0.2 ms on an integrated GPU, the second a little coarser
                 static auto readDistances = [](CIniReader& ini)
                 {
                     float d[4]{};
-                    auto text = ini.ReadString("SHADOWS", "CascadeDistances", "10, 30, 85, 256");
+                    auto text = ini.ReadString("SHADOWS", "CascadeDistances", "10, 50, 85, 256");
                     if (sscanf(text.c_str(), "%f , %f , %f , %f", &d[0], &d[1], &d[2], &d[3]) != 4 || !(d[0] > 0.0f && d[1] > d[0] && d[2] > d[1] && d[3] > d[2]))
                         return;
                     std::copy_n(d, 4, fCascadeDistances);
