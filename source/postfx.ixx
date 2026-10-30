@@ -2586,15 +2586,15 @@ private:
                 // no longer write (zz_volume_depth.patch), so the depth test runs before them; off, every pixel passes
                 const BOOL volumeDepth = R.bLightVolumeDepth ? TRUE : FALSE;
                 device->SetVertexShaderConstantB(5, &volumeDepth, 1);
-                // LocalContactShadowsFillerPlayer 0: b6 leaves the player out of the contact shadows of the filler
-                // lights inside a room (PS11 alone reads it, zz_z_zz_filler_body_shadows.patch); no game shader reads b6
-                const BOOL skipPlayer = R.bLocalContactShadowsFillerPlayer ? FALSE : TRUE;
-                device->SetPixelShaderConstantB(6, &skipPlayer, 1);
+                // LocalContactShadowsFillerPeds 0: b6 leaves people out of the contact shadows of the filler lights
+                // inside a room (PS11 alone reads it, zz_z_zz_filler_body_shadows.patch); no game shader reads b6
+                const BOOL skipPeds = R.bLocalContactShadowsFillerPeds ? FALSE : TRUE;
+                device->SetPixelShaderConstantB(6, &skipPeds, 1);
                 if (auto real = RealDevice(device); real != device)
                 {
                     real->SetPixelShaderConstantB(5, &earlyOut, 1);
                     real->SetVertexShaderConstantB(5, &volumeDepth, 1);
-                    real->SetPixelShaderConstantB(6, &skipPlayer, 1);
+                    real->SetPixelShaderConstantB(6, &skipPeds, 1);
                 }
             }
             SetLightGGXShape(light);
