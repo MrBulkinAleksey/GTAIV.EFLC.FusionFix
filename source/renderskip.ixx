@@ -355,11 +355,11 @@ namespace RenderSkip
     // whole), and the shaders that read them the same window onto it (ShrinkCascades); the texel of the shaders'
     // filter stays the atlas's, so their shadows are softer by n as well as coarser.
     uint32_t nFarDivisor = 2;
-    uint32_t quarterDivisor[4] = { 1, 1, 1, 1 };    // how the quarter was last drawn
-    uint32_t drawnSeq[4] = { ~0u, ~0u, ~0u, ~0u };  // the pass it was last drawn in
-    uint32_t shrunkSeq = ~0u;
+    uint32_t wholeClears[4]{};      // the divisor each quarter was last cleared whole for
     uint32_t shrunk = 0, shrinkMisses = 0;
-    bool bShrinkHooked = false;     // the setter's hook that reads them so is in place
+    bool bShrinkHooked = false;     // the fit's hook that reads them so is in place
+    const uint32_t* pFitIndex = nullptr;    // the copy the fit writes (CE 0x1174790), of those at frameCopies, 0x270 each
+    uintptr_t frameCopies = 0;
 
     uint32_t DivisorFor(int index)
     {
@@ -668,63 +668,57 @@ namespace RenderSkip
         TraceMatrix(values, lastMatrix, passTexels, passDepth);
     }
 
-    // FarCascadesResolution, in the setter before FollowCascades, once a pass: a cascade drawn into the corner of its
-    // quarter is read there. Its scale and offset of x and y put its window (the frame copy's bounds, +0x1f0 min x, +0x200
-    // min y, +0x210 max x, +0x220 max y, a float a cascade) onto the quarter, u = t * scale + offset, one bound at the
-    // quarter's left or top edge (u k / 4, v 0); 1/n of the side keeps that edge: u' = edge + (u - edge) / n. A cascade
-    // left out in this pass keeps the values of the pass it was drawn in (FollowCascades), shrunk then; without
-    // FollowCascades it is read with this pass's values, shrunk as its quarter was last drawn.
-    void ShrinkCascades(float* frameCopy)
+    // FarCascadesResolution, right after the fit (CE 0x928bb2, the main thread): the frame copy's scales and offsets of
+    // the far cascades go to the corner of their quarter. It has to be here: the setter (CE 0x92d7f0) runs on the main
+    // thread too, for the copy just fitted, where what it sets goes into the draw list the lighting is drawn from, and
+    // only later on the render thread for the lamps; shrunk in the render thread's setter, after the cascades were
+    // drawn, the sun's light read the whole quarter and the shadows lay elsewhere, moving with the camera. A scale and
+    // offset put the cascade's window (the bounds +0x1f0 min x, +0x200 min y, +0x210 max x, +0x220 max y, a float a
+    // cascade) onto the quarter, u = t * scale + offset, one bound at its left or top edge (u k / 4, v 0); 1/n of the
+    // side keeps that edge: u' = edge + (u - edge) / n. FollowCascades folds them like the game's.
+    void ShrinkCascades()
     {
-        if (shrunkSeq == passSeq)
+        if (!bCascadesIntoAtlas || !atlasTarget || !pFitIndex || !frameCopies || DivisorFor(2) <= 1)
             return;
-        shrunkSeq = passSeq;
+        float* frame = (float*)(frameCopies + *pFitIndex * 0x270);
         float values[4][4];
         for (int v = 0; v < 4; v++)
         {
             float sum = 0.0f;
             for (int k = 0; k < 4; k++)
             {
-                sum += frameCopy[v * 4 + k];
+                sum += frame[v * 4 + k];
                 values[k][v] = sum;
             }
         }
-        bool changed = false;
-        for (int k = 0; k < 4; k++)
+        for (int k = 2; k < 4; k++)
         {
-            uint32_t n = drawnSeq[k] == passSeq || !bFollow ? quarterDivisor[k] : 1;
-            if (n <= 1)
-                continue;
-            float edges[2];
-            bool found = true;
-            for (int axis = 0; axis < 2 && found; axis++)
+            float n = float(DivisorFor(k));
+            for (int axis = 0; axis < 2; axis++)
             {
                 float scale = values[k][axis], offset = values[k][2 + axis];
-                float a = frameCopy[(axis ? 0x200 : 0x1f0) / 4 + k] * scale + offset;
-                float b = frameCopy[(axis ? 0x220 : 0x210) / 4 + k] * scale + offset;
-                float want = axis ? 0.0f : float(k) * 0.25f;
-                edges[axis] = std::abs(a - want) <= std::abs(b - want) ? a : b;
-                found = std::abs(edges[axis] - want) < 0.01f;
-            }
-            // No bound at the edge: read as the game has it, this once wrong, and the next ones drawn whole
-            if (!found)
-            {
-                shrinkMisses++;
-                nFarDivisor = 1;
-                continue;
+                float a = frame[(axis ? 0x200 : 0x1f0) / 4 + k] * scale + offset;
+                float b = frame[(axis ? 0x220 : 0x210) / 4 + k] * scale + offset;
+                float edge = axis ? 0.0f : float(k) * 0.25f;
+                // No bound at the edge: read as the game has it, this once wrong, and the next ones drawn whole
+                if (std::min(std::abs(a - edge), std::abs(b - edge)) >= 0.01f)
+                {
+                    shrinkMisses++;
+                    nFarDivisor = 1;
+                    return;
+                }
             }
             for (int axis = 0; axis < 2; axis++)
             {
-                values[k][axis] /= float(n);
-                values[k][2 + axis] = edges[axis] + (values[k][2 + axis] - edges[axis]) / float(n);
+                float edge = axis ? 0.0f : float(k) * 0.25f;
+                values[k][axis] /= n;
+                values[k][2 + axis] = edge + (values[k][2 + axis] - edge) / n;
             }
-            changed = true;
             shrunk++;
         }
-        if (changed)
-            for (int v = 0; v < 4; v++)
-                for (int k = 0; k < 4; k++)
-                    frameCopy[v * 4 + k] = values[k][v] - (k ? values[k - 1][v] : 0.0f);
+        for (int v = 0; v < 4; v++)
+            for (int k = 0; k < 4; k++)
+                frame[v * 4 + k] = values[k][v] - (k ? values[k - 1][v] : 0.0f);
     }
 
     Drop DropFor(Kind kind)
@@ -806,6 +800,29 @@ namespace RenderSkip
     HRESULT(__stdcall* RealStretchRect)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, IDirect3DSurface9*, const RECT*, D3DTEXTUREFILTERTYPE) = nullptr;
     HRESULT(__stdcall* RealColorFill)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, D3DCOLOR) = nullptr;
 
+    // The colour of a cascade drawn into the atlas. A clear goes no further than the viewport, so a far cascade's corner
+    // is all that is cleared each pass; the quarter around it, which the shaders' filter touches at the window's edge,
+    // is cleared whole once, or it would keep what was drawn there before
+    void ClearQuarter(IDirect3DDevice9* device, int index, uint32_t divisor, D3DCOLOR colour, float z, DWORD stencil)
+    {
+        auto quarter = Quarter(index);
+        if (wholeClears[index] == divisor)
+        {
+            RealClear(device, 1, &quarter, D3DCLEAR_TARGET, colour, z, stencil);
+            return;
+        }
+        wholeClears[index] = divisor;
+        D3DVIEWPORT9 saved{}, whole{ DWORD(index) * cascadeSide, 0, cascadeSide, cascadeSide, 0.0f, 1.0f };
+        DWORD scissor = FALSE;
+        device->GetViewport(&saved);
+        device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissor);
+        RealSetViewport(device, &whole);
+        device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+        RealClear(device, 1, &quarter, D3DCLEAR_TARGET, colour, z, stencil);
+        device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissor);
+        RealSetViewport(device, &saved);
+    }
+
     using LockFn = void(__thiscall*)(void*, uint32_t, rage::grcRenderTargetPC*, rage::grcRenderTargetPC*, uint32_t, bool, uint32_t);
     using UnlockFn = void(__thiscall*)(void*, uint32_t, void*, int32_t);
     LockFn pfnLock = nullptr;
@@ -865,12 +882,6 @@ namespace RenderSkip
                 intoAtlasFailed++;
                 bCascadesIntoAtlas = false;
             }
-        }
-        // How the quarter is drawn this pass, for the scales and offsets the setter sends after the pass
-        if (index == 0 && depth > 0 && stack[depth - 1].kind == CascadeTarget && lastCascade >= 0 && stack[depth - 1].drop == Drop::Nothing)
-        {
-            quarterDivisor[lastCascade] = stack[depth - 1].intoAtlas >= 0 ? stack[depth - 1].divisor : 1;
-            drawnSeq[lastCascade] = passSeq;
         }
         // The night's quarter of the atlas, bound now: 1.0 in it, which the lighting takes as lit for any depth. The atlas
         // holds 0.5 - 0.0005 z of the casters (cascadeConvert) and a point is lit where that is no less than its own; the
@@ -958,8 +969,7 @@ namespace RenderSkip
             if (drop == Drop::Nothing && depth > 0 && stack[depth - 1].intoAtlas >= 0 && RealClear)
                 if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
                 {
-                    auto quarter = Quarter(stack[depth - 1].intoAtlas);
-                    RealClear(device, 1, &quarter, D3DCLEAR_TARGET, 0xFFFFFFFF, 1.0f, 0);
+                    ClearQuarter(device, stack[depth - 1].intoAtlas, stack[depth - 1].divisor, 0xFFFFFFFF, 1.0f, 0);
                     if (Tracing())
                         TraceEvent(std::format("fill of quarter {} cleared to 1.0", stack[depth - 1].intoAtlas));
                     return true;
@@ -1033,8 +1043,7 @@ namespace RenderSkip
             }
             if (flags & D3DCLEAR_TARGET)
             {
-                auto quarter = Quarter(stack[depth - 1].intoAtlas);
-                result = RealClear(device, 1, &quarter, D3DCLEAR_TARGET, colour, z, stencil);
+                ClearQuarter(device, stack[depth - 1].intoAtlas, stack[depth - 1].divisor, colour, z, stencil);
             }
             return result;
         }
@@ -1313,19 +1322,24 @@ public:
                     }
                 }
             });
-            // FarCascadesResolution reads its cascades' corners through the setter's copy; without the setter they are
-            // drawn whole
-            if (follow || (bCascadesIntoAtlas && !setter.empty()))
+            if (follow)
             {
                 static auto SetterHook = safetyhook::create_mid(setter.get_first(0), [](SafetyHookContext& regs)
                 {
-                    if (bCascadesIntoAtlas)
-                        ShrinkCascades((float*)regs.esi);
-                    if (bFollow)
-                        FollowCascades((float*)regs.esi);
+                    FollowCascades((float*)regs.esi);
                 });
-                bFollow = follow;
-                bShrinkHooked = bCascadesIntoAtlas;
+                bFollow = true;
+            }
+            // Right after the fit (CE 0x928bb2, xor esi, esi) and its copies (CE 0x928a90: index [0x1174790], copies at
+            // 0x11a1c50); without them the far cascades are drawn whole
+            auto fitCopy = hook::pattern("8B 0D ? ? ? ? 69 C9 70 02 00 00 81 C1 ? ? ? ? 51 8D 41 60 C7 04 24 00 00 00 00 50 51 E8");
+            auto afterFit = hook::pattern("83 C4 08 E8 ? ? ? ? 33 F6 89 74 24 10 EB");
+            if (bCascadesIntoAtlas && !fitCopy.empty() && !afterFit.empty())
+            {
+                pFitIndex = *fitCopy.get_first<const uint32_t*>(2);
+                frameCopies = *fitCopy.get_first<uintptr_t>(14);
+                static auto FitHook = safetyhook::create_mid(afterFit.get_first(8), [](SafetyHookContext&) { ShrinkCascades(); });
+                bShrinkHooked = true;
             }
             if (bCascadesIntoAtlas)
             {
@@ -1345,6 +1359,8 @@ public:
             atlasTarget = nullptr;
             for (auto& p : pendingIntoAtlas)
                 p = false;
+            for (auto& divisor : wholeClears)
+                divisor = 0;
         };
 
         FusionFix::onGameInitEvent() += []()
