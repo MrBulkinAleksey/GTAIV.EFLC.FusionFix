@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index b0ac352..034497b 100644
+index b0ac352..1420a38 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 @@ -58,6 +58,16 @@
@@ -28,7 +28,33 @@ index b0ac352..034497b 100644
      add r0.xy, c0.x, vPos
      mul r0.xy, r0, c77.zwzw
      texld r1, r0, s2
-@@ -324,6 +336,204 @@
+@@ -301,8 +313,23 @@
+           mov r18.z, r16.w
+           if_gt r14.y, c158.w
+             if_lt r14.y, r18.y
+-              add r18.w, c157.y, -r18.x // weaker the further along the ray the occluder stands
+-              break
++              // --- FusionFix filler body shadows: with b6 the player is no occluder for these lights (by the material
++              // --- ID where the step landed, category 3) and the ray goes on past it: the bones shadow the player whole,
++              // --- and the contact shadow of a head by a wall broke into splinters and crossing wedges
++              mov r20.w, c138.y
++              if b6
++                texldl r21, r12, s11
++                mad r21.x, r21.x, c185.z, c185.w
++                frc r21.x, r21.x
++                mad r21.x, r21.x, c186.x, c186.y // the category less 2: the player's 1
++                add r21.x, r21.x, -c138.y
++                abs r21.x, r21.x
++                add r20.w, r21.x, -c138.z // below 0 on the player
++              endif
++              if_ge r20.w, c138.x
++                add r18.w, c157.y, -r18.x // weaker the further along the ray the occluder stands
++                break
++              endif
+             endif
+           endif
+         endrep
+@@ -324,6 +351,204 @@
          add r31.w, c157.y, -r18.w
        endif
      endif
@@ -233,7 +259,7 @@ index b0ac352..034497b 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -406,3 +616,171 @@
+@@ -406,3 +631,171 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
