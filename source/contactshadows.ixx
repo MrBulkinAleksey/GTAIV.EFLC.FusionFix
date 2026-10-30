@@ -146,10 +146,14 @@ export void RenderContactShadows()
         const bool local = camera && R.bLocalContactShadows && R.ContactShadowsEnabled() && R.AllNightShadowsEnabled() &&
                            R.fLocalContactShadowIntensity > 0.0f;
         const D3DMATRIX proj = camera ? *(const D3DMATRIX*)camera->mProjectionMatrix : D3DMATRIX{};
+        // c203.yz: where the lights' step noise is read this frame. Under temporal AA it moves every frame and the
+        // resolve averages it into a smooth edge; held still, the edge stayed ragged. Without it, 0: moving noise
+        // would only flicker.
+        const auto noise = FrameHistory::IsJittered() ? FrameHistory::NoiseOffset() : std::array<float, 2>{};
         const float consts[12] =
         {
             R.fLocalContactShadowLength, R.fLocalContactShadowThickness, R.fLocalContactShadowMaxDistance, R.fLocalContactShadowIntensity,
-            proj._34, 0.0f, 0.0f, local ? 12345.0f : 0.0f,
+            proj._34, noise[0], noise[1], local ? 12345.0f : 0.0f,
             proj._11, proj._22, proj._31, proj._32,
         };
         memcpy(R.LocalContactShadowConsts, consts, sizeof(consts));
