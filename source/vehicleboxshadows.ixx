@@ -1093,6 +1093,23 @@ export struct VehicleBoxShadows
     // Returns how much of a shadow its boxes give: the strongest box times the lamp's strength, 0 for none.
     // mapHasCars comes back false where the light's map left its boxed cars out (BoxedCars).
     // The boxes handed over with the light list the render thread draws now, into drawn
+    // The player as the bones see it in the frame being lit: the centre of the sphere round them and its radius squared
+    // in w, or w -1 with no bones; the filler lights' contact shadows pass over people inside it
+    // (LocalContactShadowsFillerPlayer, c195 in zz_z_zz_filler_body_shadows.patch)
+    static void PlayerSphere(float (&sphere)[4])
+    {
+        // (drawn is looked up only with the boxes on: without them it may be an old frame's)
+        if (drawn && drawn->bodyCount && PostFxResources.VehicleBoxShadowsEnabled())
+        {
+            sphere[0] = drawn->bodyCentre[0];
+            sphere[1] = drawn->bodyCentre[1];
+            sphere[2] = drawn->bodyCentre[2];
+            sphere[3] = drawn->bodyReach * drawn->bodyReach;
+        }
+        else
+            sphere[0] = sphere[1] = sphere[2] = 0.0f, sphere[3] = -1.0f;
+    }
+
     static void FindDrawn()
     {
         auto& R = PostFxResources;

@@ -896,11 +896,11 @@ public:
     // themselves (shaders/patches/local_light_contact_shadows.patch); they follow the Contact
     // Shadows menu toggle.
     bool bLocalContactShadows = true;
-    // LocalContactShadowsFillerPeds: the filler lights inside a room (PS11, zz_z_zz_filler_body_shadows.patch) take
-    // people for occluders of their contact shadows too; off (b6), their rays go on past them, and the player's shadow
+    // LocalContactShadowsFillerPlayer: the filler lights inside a room (PS11, zz_z_zz_filler_body_shadows.patch) take
+    // the player for an occluder of their contact shadows too; off (b6), their rays go on past the player, whose shadow
     // from them is the bones' (FillerBodyShadows): a head by a wall broke their contact shadow into splinters and wedges.
-    // People, not the player alone: every ped's material ID is 137, the player's too.
-    bool bLocalContactShadowsFillerPeds = false;
+    // Told by a person's material ID (every ped's is 137, the player's too) inside the sphere round the player's bones.
+    bool bLocalContactShadowsFillerPlayer = false;
     // From binding the lighting inputs to the end of deferred lighting, the light loop may turn
     // c203 off for a light and back on (see InstallLocalContactLightHook).
     bool bLocalContactPass = false;
@@ -2190,7 +2190,7 @@ public:
             IniFloat("LIGHTING", "IndirectLightMaxDistance", &PostFxResource::fGIMaxDistance, 60.0f, 1.0f, 1000.0f),
             IniFloat("LIGHTING", "IndirectLightTemporal", &PostFxResource::fGITemporalBlend, 0.9f, 0.0f, 0.97f),
             IniFlag("LIGHTING", "LocalContactShadows", &PostFxResource::bLocalContactShadows, 1),
-            IniFlag("LIGHTING", "LocalContactShadowsFillerPeds", &PostFxResource::bLocalContactShadowsFillerPeds, 0),
+            IniFlag("LIGHTING", "LocalContactShadowsFillerPlayer", &PostFxResource::bLocalContactShadowsFillerPlayer, 0),
             IniFloat("LIGHTING", "LocalContactShadowsLength", &PostFxResource::fLocalContactShadowLength, 0.5f, 0.05f, 10.0f),
             IniFloat("LIGHTING", "LocalContactShadowsThickness", &PostFxResource::fLocalContactShadowThickness, 0.2f, 0.01f, 5.0f),
             IniFloat("LIGHTING", "LocalContactShadowsMaxDistance", &PostFxResource::fLocalContactShadowMaxDistance, 40.0f, 1.0f, 1000.0f),
