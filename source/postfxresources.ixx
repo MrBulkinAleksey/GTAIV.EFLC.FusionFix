@@ -978,6 +978,8 @@ public:
     // light is theirs, some at chest height round the player, and their contact shadow alone left a lit gap between a
     // body and the wall it stood at, as its rays passed behind the body.
     bool bFillerBodyShadows = true;
+    // FillerBodyShadowsMax: how many of a room's filler lights take the bones, those giving the player the most light
+    int32_t nFillerBodyShadowsMax = 4;
     // ShapeGroups: the light shaders read a light's shapes in four groups, each only near the way to the light from the
     // pixels it may shadow (zz_shape_groups.patch); 0 reads them all everywhere
     bool bShapeGroups = true;
@@ -2061,6 +2063,7 @@ public:
             IniFloat("NIGHTSHADOWS", "PedBoneShoulderWidth", &PostFxResource::fPedBoneShoulderWidth, 0.8f, 0.3f, 1.2f),
             IniFlag("NIGHTSHADOWS", "PedBoneShadowsFollowDraw", &PostFxResource::bPedBoneShadowsFollowDraw, 1),
             IniFlag("NIGHTSHADOWS", "FillerBodyShadows", &PostFxResource::bFillerBodyShadows, 1),
+            IniInt("NIGHTSHADOWS", "FillerBodyShadowsMax", &PostFxResource::nFillerBodyShadowsMax, 4, 1, 64),
             IniFlag("NIGHTSHADOWS", "ShapeGroups", &PostFxResource::bShapeGroups, 1),
             IniFlag("PERFORMANCE", "FusedLightingPasses", &PostFxResource::bFusedLightingPasses, 1),
             IniFlag("PERFORMANCE", "DepthBoundsLights", &PostFxResource::bDepthBoundsLights, 1),

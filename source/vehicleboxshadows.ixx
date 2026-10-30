@@ -209,6 +209,17 @@ export struct VehicleBoxShadows
     };
     static inline std::unordered_map<uintptr_t, CarLamps> carLamps;
     static inline uint32_t carLampsFrame = 0; // TemporalAA::SceneFrame of the last ranking
+    // FillerBodyShadows: the room's filler lights that reached the player's bones this frame, with the light each gave
+    // them (its brightness by the falloff squared), and the FillerBodyShadowsMax brightest of last frame's, the only ones
+    // given the bones this frame: in a kitchen every filler round the player took them, and the lamps went from 0.68 to
+    // 1.21 GPU ms on an RX 7900 XT
+    struct FillerSeen { uint64_t key; float light; };
+    static constexpr int kFillersSeen = 64;
+    static inline std::array<FillerSeen, kFillersSeen> fillersSeen{};
+    static inline int fillersSeenCount = 0;
+    static inline std::array<uint64_t, kFillersSeen> fillersAllowed{};
+    static inline int fillersAllowedCount = 0;
+    static inline uint32_t fillersFrame = 0; // TemporalAA::SceneFrame of the last ranking
 
     static bool LampAllowed(const CarLamps& car, uint64_t lamp)
     {
@@ -1331,6 +1342,17 @@ export struct VehicleBoxShadows
         // player) that reaches them, nor one of ours on a facade unless PedCapsuleAddedLights; the props take the room
         // left
         int used = 0;
+        // FillerBodyShadows: last frame's fillers ranked, at the first of this frame's
+        if (roomFiller && TemporalAA::SceneFrame != fillersFrame)
+        {
+            fillersFrame = TemporalAA::SceneFrame;
+            std::sort(fillersSeen.begin(), fillersSeen.begin() + fillersSeenCount,
+                      [](const FillerSeen& a, const FillerSeen& b) { return a.light > b.light; });
+            fillersAllowedCount = (std::min)(fillersSeenCount, std::clamp(R.nFillerBodyShadowsMax, 1, kFillersSeen));
+            for (int i = 0; i < fillersAllowedCount; ++i)
+                fillersAllowed[i] = fillersSeen[i].key;
+            fillersSeenCount = 0;
+        }
         if (drawn->bodyCount && !hasMap && (R.bPedCapsuleAddedLights || !VehicleBoxShadowsBridge::AddedLight ||
             !VehicleBoxShadowsBridge::AddedLight(key, light.mFlags)))
         {
@@ -1346,7 +1368,16 @@ export struct VehicleBoxShadows
                 reached = off <= cone + std::asin((std::min)(drawn->bodyReach / d, 1.0f)) + 0.1f;
             }
             const float falloff = std::clamp(1.0f - (std::max)(d - drawn->bodyReach, 0.0f) / (std::max)(light.mRadius, 0.1f), 0.0f, 1.0f);
-            if (reached && falloff * falloff >= R.fVehicleBoxShadowsMinLight)
+            bool allowed = reached && falloff * falloff >= R.fVehicleBoxShadowsMinLight;
+            if (allowed && roomFiller)
+            {
+                const float brightness = light.mIntensity * (light.mColor.x + light.mColor.y + light.mColor.z) / 3.0f;
+                if (fillersSeenCount < kFillersSeen)
+                    fillersSeen[fillersSeenCount++] = { lightKey, brightness * falloff * falloff };
+                const auto end = fillersAllowed.begin() + fillersAllowedCount;
+                allowed = std::find(fillersAllowed.begin(), end, lightKey) != end;
+            }
+            if (allowed)
                 for (int j = 0; j < drawn->bodyCount; ++j)
                     if (ShapeDistance(drawn->body[j], at) > 0.2f)
                         shapes[used++] = drawn->body[j];

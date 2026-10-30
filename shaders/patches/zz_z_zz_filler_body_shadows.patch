@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index b0ac352..59e8634 100644
+index b0ac352..034497b 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 @@ -58,6 +58,16 @@
@@ -233,7 +233,7 @@ index b0ac352..59e8634 100644
      mul r26.xyz, r26, r31.w
      mov oC0, r26
      
-@@ -406,3 +616,166 @@
+@@ -406,3 +616,171 @@
      mul r17.x, r17.x, r17.y
      mul r13.w, r13.w, r17.x
      ret
@@ -315,6 +315,11 @@ index b0ac352..59e8634 100644
 +    add r25.x, r25.x, c140.z
 +    add r25.x, r15.z, -r25.x
 +    cmp r25.w, r25.x, r25.w, c138.y
++    // --- FusionFix filler body shadows: no such own surface round the player's bones (other end's w -2): the body's own
++    // --- pixels keep their light by the material ID below, and within 0.1 m of the head the fridge a face nearly touched
++    // --- stayed lit, a white strip between the face and its shadow
++    add r25.y, r19.w, c186.z
++    cmp r25.w, r25.y, r25.w, c138.y
 +    cmp r24.y, r25.w, r24.y, c138.y
 +    // --- FusionFix: zz_ped_capsule_look.patch: a capsule of the player's bones (PedBoneShadows: its other end's w -2, not -1)
 +    // --- leaves peds' and the player's own pixels (r17.x not below 0 on them) their light: it would shadow the body it is in
