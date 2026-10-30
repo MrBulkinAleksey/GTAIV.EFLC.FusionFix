@@ -354,7 +354,7 @@ namespace RenderSkip
     // need them all. Their casters get a viewport of that corner (the game's window of the cascade goes into it
     // whole), and the shaders that read them the same window onto it (ShrinkCascades); the texel of the shaders'
     // filter stays the atlas's, so their shadows are softer by n as well as coarser.
-    uint32_t nFarDivisor = 2;
+    uint32_t nFarDivisor = 1;
     uint32_t wholeClears[4]{};      // the divisor each quarter was last cleared whole for
     uint32_t shrunk = 0, shrinkMisses = 0;
     bool bShrinkHooked = false;     // the fit's hook that reads them so is in place
@@ -1278,11 +1278,11 @@ public:
                 bFarCascadesHalfRate = ini.ReadInteger("PERFORMANCE", "FarCascadesHalfRate", 1) != 0;
                 bMidCascadeHalfRate = ini.ReadInteger("PERFORMANCE", "MidCascadeHalfRate", 0) != 0;
                 fSunLowBelow = ini.ReadFloat("PERFORMANCE", "SunShadowsMinElevation", 8.0f);
-                nFarDivisor = uint32_t(std::max(1, ini.ReadInteger("SHADOWS", "FarCascadesResolution", 2)));
+                nFarDivisor = uint32_t(std::max(1, ini.ReadInteger("SHADOWS", "FarCascadesResolution", 1)));
             });
 
             bCascadesIntoAtlas = iniReader.ReadInteger("SHADOWS", "CascadesIntoAtlas", 1) != 0;
-            nFarDivisor = uint32_t(std::max(1, iniReader.ReadInteger("SHADOWS", "FarCascadesResolution", 2)));
+            nFarDivisor = uint32_t(std::max(1, iniReader.ReadInteger("SHADOWS", "FarCascadesResolution", 1)));
 
             // The matrix as CE 0x92dd20 hands it to its global (CE 0x92dd5d: eax the matrix, push eax), called from the
             // setter of the shaders' cascades (CE 0x92d856 returned to, esi the frame's copy there) and from each cascade's
