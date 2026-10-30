@@ -7,6 +7,7 @@ export module shadows;
 import common;
 import comvars;
 import settings;
+import inireload;
 
 import <bitset>;
 
@@ -289,21 +290,34 @@ public:
                                        "D9 82 ? ? ? ? D9 1C BD ? ? ? ? 0F 8D ? ? ? ? 8D 04 87 D9 04 85 ? ? ? ? D9 1C BD ? ? ? ? E9 ? ? ? ? 85 C9");
                 auto pCascadeRange2 = *pattern.get_first<CascadeRange*>(2);
 
+                static std::vector<float*> ranges;
                 for (size_t i = 0; i < 4; i++) // MO_LOW / MO_MED / MO_HIGH / MO_VHIGH
                 {
                     injector::scoped_unprotect(&pCascadeRange1[i], sizeof(CascadeRange));
                     injector::scoped_unprotect(&pCascadeRange2[i], sizeof(CascadeRange));
-
-                    pCascadeRange1[i].CascadeRange1 = 10.0f;
-                    pCascadeRange1[i].CascadeRange2 = 30.0f;
-                    pCascadeRange1[i].CascadeRange3 = 85.0f;
-                    pCascadeRange1[i].CascadeRange4 = 256.0f;
-
-                    pCascadeRange2[i].CascadeRange1 = 10.0f;
-                    pCascadeRange2[i].CascadeRange2 = 30.0f;
-                    pCascadeRange2[i].CascadeRange3 = 85.0f;
-                    pCascadeRange2[i].CascadeRange4 = 256.0f;
+                    ranges.push_back(&pCascadeRange1[i].CascadeRange1);
+                    ranges.push_back(&pCascadeRange2[i].CascadeRange1);
                 }
+                // The splits the fit reads each frame (CE 0x92c00e: movss xmm0, [esi*4+0x1036940] ... movss xmm0, [esi*4+0x103693c]),
+                // a copy of the table above: for the distances taken on the fly
+                if (auto splits = hook::pattern("F3 0F 10 04 B5 ? ? ? ? 51 F3 0F 11 44 24 10 F3 0F 10 04 B5"); !splits.empty())
+                    ranges.push_back(*splits.get_first<float*>(21) + 1);
+
+                // CascadeDistances (hidden): where each of the four cascades ends, in metres from the camera. All four
+                // have the same texels, so each next one is coarser by the ratio of the two: the step at the second's end
+                // shows on nearby walls, moved out with this at the cost of the second cascade's sharpness and fill
+                static auto readDistances = [](CIniReader& ini)
+                {
+                    float d[4]{};
+                    auto text = ini.ReadString("SHADOWS", "CascadeDistances", "10, 30, 85, 256");
+                    if (sscanf(text.c_str(), "%f , %f , %f , %f", &d[0], &d[1], &d[2], &d[3]) != 4 || !(d[0] > 0.0f && d[1] > d[0] && d[2] > d[1] && d[3] > d[2]))
+                        return;
+                    std::copy_n(d, 4, fCascadeDistances);
+                    for (float* range : ranges)
+                        std::copy_n(d, 4, range);
+                };
+                readDistances(iniReader);
+                IniReload::Add(readDistances);
 
                 // Override shadow matrix
                 struct ShadowMatrix

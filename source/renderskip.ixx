@@ -463,7 +463,7 @@ namespace RenderSkip
     // of the shaders) has to stay under FoldTexels at the cascade's far edge and FoldDepth, or it is drawn.
     constexpr float FoldTexels = 0.5f;
     constexpr float FoldDepth = 0.05f;          // metres
-    constexpr float CascadeReach[4] = { 10.0f, 30.0f, 85.0f, 256.0f };  // metres from the camera, as shadows.ixx sets them
+    const float (&CascadeReach)[4] = fCascadeDistances;     // metres from the camera, as shadows.ixx sets them
     bool bFollow = false;                       // both hooks in place
     bool bMatrixTrace = false;
     struct CascadeLook
