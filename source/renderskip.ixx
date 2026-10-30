@@ -349,12 +349,12 @@ namespace RenderSkip
     bool bFillPending = false;
     uint32_t intoAtlas = 0, intoAtlasFailed = 0;
 
-    // FarCascadesResolution: drawn into the atlas, the third and fourth cascades take 1/n of the side (1024 of 2048 at
-    // 2), in the corner of their quarter at its left and top edge: a quarter of the texels to fill, where the near ones
-    // need them all. Their casters get a viewport of that corner (the game's window of the cascade goes into it
-    // whole), and the shaders that read them the same window onto it (ShrinkCascades); the texel of the shaders'
-    // filter stays the atlas's, so their shadows are softer by n as well as coarser.
-    uint32_t nFarDivisor = 1;
+    // FarCascadesResolution: drawn into the atlas, the fourth cascade (85 to 256 m) takes 1/n of the side (1024 of 2048
+    // at 2), in the corner of its quarter at its left and top edge: a quarter of the texels to fill. The third, from 30 m
+    // on, showed so on nearby walls. Its casters get a viewport of that corner (the game's window of the cascade goes
+    // into it whole), and the shaders that read it the same window onto it (ShrinkCascades); the texel of the shaders'
+    // filter stays the atlas's, so its shadows are softer by n as well as coarser.
+    uint32_t nFarDivisor = 2;
     uint32_t wholeClears[4]{};      // the divisor each quarter was last cleared whole for
     uint32_t shrunk = 0, shrinkMisses = 0;
     bool bShrinkHooked = false;     // the fit's hook that reads them so is in place
@@ -363,7 +363,7 @@ namespace RenderSkip
 
     uint32_t DivisorFor(int index)
     {
-        return bShrinkHooked && index >= 2 && (nFarDivisor == 2 || nFarDivisor == 4) ? nFarDivisor : 1;
+        return bShrinkHooked && index == 3 && (nFarDivisor == 2 || nFarDivisor == 4) ? nFarDivisor : 1;
     }
 
     bool IntoAtlasReady()
@@ -669,7 +669,7 @@ namespace RenderSkip
     }
 
     // FarCascadesResolution, right after the fit (CE 0x928bb2, the main thread): the frame copy's scales and offsets of
-    // the far cascades go to the corner of their quarter. It has to be here: the setter (CE 0x92d7f0) runs on the main
+    // the far cascade go to the corner of its quarter. It has to be here: the setter (CE 0x92d7f0) runs on the main
     // thread too, for the copy just fitted, where what it sets goes into the draw list the lighting is drawn from, and
     // only later on the render thread for the lamps; shrunk in the render thread's setter, after the cascades were
     // drawn, the sun's light read the whole quarter and the shadows lay elsewhere, moving with the camera. A scale and
@@ -678,7 +678,7 @@ namespace RenderSkip
     // side keeps that edge: u' = edge + (u - edge) / n. FollowCascades folds them like the game's.
     void ShrinkCascades()
     {
-        if (!bCascadesIntoAtlas || !atlasTarget || !pFitIndex || !frameCopies || DivisorFor(2) <= 1)
+        if (!bCascadesIntoAtlas || !atlasTarget || !pFitIndex || !frameCopies || DivisorFor(3) <= 1)
             return;
         float* frame = (float*)(frameCopies + *pFitIndex * 0x270);
         float values[4][4];
@@ -691,7 +691,7 @@ namespace RenderSkip
                 values[k][v] = sum;
             }
         }
-        for (int k = 2; k < 4; k++)
+        for (int k = 3; k < 4; k++)
         {
             float n = float(DivisorFor(k));
             for (int axis = 0; axis < 2; axis++)
@@ -1278,11 +1278,11 @@ public:
                 bFarCascadesHalfRate = ini.ReadInteger("PERFORMANCE", "FarCascadesHalfRate", 1) != 0;
                 bMidCascadeHalfRate = ini.ReadInteger("PERFORMANCE", "MidCascadeHalfRate", 0) != 0;
                 fSunLowBelow = ini.ReadFloat("PERFORMANCE", "SunShadowsMinElevation", 8.0f);
-                nFarDivisor = uint32_t(std::max(1, ini.ReadInteger("SHADOWS", "FarCascadesResolution", 1)));
+                nFarDivisor = uint32_t(std::max(1, ini.ReadInteger("SHADOWS", "FarCascadesResolution", 2)));
             });
 
             bCascadesIntoAtlas = iniReader.ReadInteger("SHADOWS", "CascadesIntoAtlas", 1) != 0;
-            nFarDivisor = uint32_t(std::max(1, iniReader.ReadInteger("SHADOWS", "FarCascadesResolution", 1)));
+            nFarDivisor = uint32_t(std::max(1, iniReader.ReadInteger("SHADOWS", "FarCascadesResolution", 2)));
 
             // The matrix as CE 0x92dd20 hands it to its global (CE 0x92dd5d: eax the matrix, push eax), called from the
             // setter of the shaders' cascades (CE 0x92d856 returned to, esi the frame's copy there) and from each cascade's
@@ -1374,8 +1374,8 @@ public:
                 bFarCascadesHalfRate ? (bFollow ? "in turns, following the camera" : "in turns while the camera keeps still") : "every frame",
                 bReflectionsHalfRate ? "every other frame" : "every frame",
                 bWaterReflectionWhenSeen ? "only while water is seen" : "whenever the game draws it");
-            FusionLog::Write("RenderSkip", "Settings", "cascades %s, the far ones at 1/%u of the side\n",
-                bCascadesIntoAtlas ? "drawn straight into the atlas" : "copied into the atlas", DivisorFor(2));
+            FusionLog::Write("RenderSkip", "Settings", "cascades %s, the farthest at 1/%u of the side\n",
+                bCascadesIntoAtlas ? "drawn straight into the atlas" : "copied into the atlas", DivisorFor(3));
         };
 
         // The queries are not kept over a reset (released on the render thread)
@@ -1424,7 +1424,7 @@ public:
             if (intoAtlas || intoAtlasFailed)
                 text += std::format("cascades drawn into the atlas: {}{}; ", intoAtlas, intoAtlasFailed ? ", then could not bind it and stopped" : "");
             if (shrunk || shrinkMisses)
-                text += std::format("far cascades read in their quarter's corner: {}{}; ", shrunk,
+                text += std::format("far cascade read in its quarter's corner: {}{}; ", shrunk,
                     shrinkMisses ? std::format(", {} with no bound at the edge (then drawn whole)", shrinkMisses) : std::string());
             intoAtlas = shrunk = shrinkMisses = 0;
             for (int kind = CascadeTarget; kind < Kinds; kind++)
