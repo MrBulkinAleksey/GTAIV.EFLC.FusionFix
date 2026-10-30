@@ -906,12 +906,7 @@ public:
     // With Vehicle Box Shadows off, 0: there the car had no shadow, and its contact shadow was only a dark frame around it.
     float fLocalContactShadowUnshadowed = 1.0f;
     float fLocalContactLightIntensity = -1.0f;  // what c202.w holds for the light being drawn
-    float fLocalContactLightLength = -1.0f;     // what c202.x holds for the light being drawn
     float fLocalContactShadowLength = 0.5f;
-    // Filler lights (LF_FILLER) stand in for light bounced off walls and floors, and most lights in a room are such, some
-    // set low beside where the player stands. With the full length their rays threw sharp shadows of a head onto a fridge
-    // behind it, two of them crossing in an X; this short a ray only keeps what stands on the floor in touch with it.
-    float fLocalContactShadowFillerLength = 0.15f;
     float fLocalContactShadowThickness = 0.2f;
     float fLocalContactShadowMaxDistance = 40.0f;
     float fLocalContactShadowIntensity = 1.0f;
@@ -2182,7 +2177,6 @@ public:
             IniFloat("LIGHTING", "IndirectLightTemporal", &PostFxResource::fGITemporalBlend, 0.9f, 0.0f, 0.97f),
             IniFlag("LIGHTING", "LocalContactShadows", &PostFxResource::bLocalContactShadows, 1),
             IniFloat("LIGHTING", "LocalContactShadowsLength", &PostFxResource::fLocalContactShadowLength, 0.5f, 0.05f, 10.0f),
-            IniFloat("LIGHTING", "LocalContactShadowsFillerLength", &PostFxResource::fLocalContactShadowFillerLength, 0.15f, 0.05f, 10.0f),
             IniFloat("LIGHTING", "LocalContactShadowsThickness", &PostFxResource::fLocalContactShadowThickness, 0.2f, 0.01f, 5.0f),
             IniFloat("LIGHTING", "LocalContactShadowsMaxDistance", &PostFxResource::fLocalContactShadowMaxDistance, 40.0f, 1.0f, 1000.0f),
             IniFloat("LIGHTING", "VolumetricLightIntensity", &PostFxResource::fVolumetricLightIntensity, 4.0f, 0.0f, 20.0f),
