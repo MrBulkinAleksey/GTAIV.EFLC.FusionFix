@@ -2628,15 +2628,11 @@ private:
                         ? R.fLocalContactShadowIntensity * (1.0f - box * (1.0f - R.fVehicleBoxShadowContact))
                         : R.fLocalContactShadowIntensity * (unshadowed + (1.0f - unshadowed) * fromBoxes);
             const bool off = intensity <= 0.0f;
-            const float length = (light.mFlags & rage::LF_FILLER)
-                ? (std::min)(R.fLocalContactShadowFillerLength, R.LocalContactShadowConsts[0])
-                : R.LocalContactShadowConsts[0];
-            if (!off && (intensity != R.fLocalContactLightIntensity || length != R.fLocalContactLightLength))
+            if (!off && intensity != R.fLocalContactLightIntensity)
             {
-                float consts[4] = { length, R.LocalContactShadowConsts[1], R.LocalContactShadowConsts[2], intensity };
+                float consts[4] = { R.LocalContactShadowConsts[0], R.LocalContactShadowConsts[1], R.LocalContactShadowConsts[2], intensity };
                 pDevice->SetPixelShaderConstantF(202, consts, 1);
                 R.fLocalContactLightIntensity = intensity;
-                R.fLocalContactLightLength = length;
             }
             if (off == R.bLocalContactLightOff)
                 return;
@@ -2856,7 +2852,6 @@ public:
         VehicleBoxShadows::Off(pDevice);
         R.bLocalContactLightOff = false;
         R.fLocalContactLightIntensity = R.LocalContactShadowConsts[3];
-        R.fLocalContactLightLength = R.LocalContactShadowConsts[0];
 
         // The sun on skin: c201 the scale of the N.L curve less 1, c205 its offset and the red penumbra.
         {
