@@ -975,6 +975,8 @@ public:
     float fPedBoneRadiusScale = 0.8f;
     // PedBoneShoulderWidth: how far out to the upper arms' bones the shoulders reach, 1 all the way
     float fPedBoneShoulderWidth = 0.8f;
+    // PedBoneLightNear: a light this near the player's nearest bone gives the bones' shadow in full, none at a third of it
+    float fPedBoneLightNear = 0.75f;
     // PedBoneShadowsFollowDraw: the bone capsules moved to where the player was drawn this frame, from where the
     // bones were posed at the light list's hand over
     bool bPedBoneShadowsFollowDraw = true;
@@ -2066,6 +2068,7 @@ public:
             IniFlag("NIGHTSHADOWS", "PedBoneShadows", &PostFxResource::bPedBoneShadows, 1),
             IniFloat("NIGHTSHADOWS", "PedBoneRadiusScale", &PostFxResource::fPedBoneRadiusScale, 0.8f, 0.3f, 2.0f),
             IniFloat("NIGHTSHADOWS", "PedBoneShoulderWidth", &PostFxResource::fPedBoneShoulderWidth, 0.8f, 0.3f, 1.2f),
+            IniFloat("NIGHTSHADOWS", "PedBoneLightNear", &PostFxResource::fPedBoneLightNear, 0.75f, 0.0f, 3.0f),
             IniFlag("NIGHTSHADOWS", "PedBoneShadowsFollowDraw", &PostFxResource::bPedBoneShadowsFollowDraw, 1),
             IniFlag("NIGHTSHADOWS", "FillerBodyShadows", &PostFxResource::bFillerBodyShadows, 1),
             IniInt("NIGHTSHADOWS", "FillerBodyShadowsMax", &PostFxResource::nFillerBodyShadowsMax, 4, 1, 64),

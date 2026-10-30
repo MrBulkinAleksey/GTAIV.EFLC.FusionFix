@@ -1307,11 +1307,13 @@ export struct VehicleBoxShadows
     // their shapes up to PropShapesPerLight; those it took last frame held at a quarter of that, so the choice does
     // not flicker between two. Left out: props outside its light or its cone, those whose shadow cannot fall where
     // the camera sees, the arm of the lamp's own post, a shape the light stands in.
-    static int ShapesForLight(const rage::CLightSource& light, bool hasMap, Shape (&shapes)[kShapesPerLight], int& bodyShapes)
+    static int ShapesForLight(const rage::CLightSource& light, bool hasMap, Shape (&shapes)[kShapesPerLight], int& bodyShapes,
+                              float& bodyStrength)
     {
         static const CpuScopes::Id kCpuScope("Shadows.ShapesForLight");
         CpuScopes::Scope cpuScope(kCpuScope);
         bodyShapes = 0;
+        bodyStrength = 1.0f;
         const auto& R = PostFxResources;
         if (!drawn || (!drawn->propCount && !drawn->bodyCount))
             return 0;
@@ -1398,9 +1400,25 @@ export struct VehicleBoxShadows
                 allowed = std::find(fillersAllowed.begin(), end, lightKey) != end;
             }
             if (allowed)
+            {
+                float nearest = 1.0e6f;
                 for (int j = 0; j < drawn->bodyCount; ++j)
-                    if (ShapeDistance(drawn->body[j], at) > 0.2f)
+                {
+                    const float distance = ShapeDistance(drawn->body[j], at);
+                    nearest = (std::min)(nearest, distance);
+                    if (distance > 0.2f)
                         shapes[used++] = drawn->body[j];
+                }
+                // PedBoneLightNear: the bones' shadow fades as its light comes near them, from full at that far from the
+                // nearest bone to none at a third of it (c142.z, zz_z_zz_z_bone_fade.patch). A light the body walked
+                // through threw the bones' shadow over half the room, and a bone going in and out of 0.2 m of it, left
+                // out there, made it blink
+                const float fadeEnd = (std::max)(R.fPedBoneLightNear, 0.01f), fadeStart = fadeEnd / 3.0f;
+                const float x = std::clamp((nearest - fadeStart) / (fadeEnd - fadeStart), 0.0f, 1.0f);
+                bodyStrength = x * x * (3.0f - 2.0f * x);
+                if (bodyStrength <= 0.0f)
+                    used = 0;
+            }
             bodiesWithShadows.fetch_add(used ? 1u : 0u, std::memory_order_relaxed);
         }
         const int most = (std::min)(std::clamp(R.nPropShapesPerLight, 1, kShapesPerLight), kShapesPerLight - used);
@@ -1690,6 +1708,7 @@ export struct VehicleBoxShadows
         float peds[kPedsPerLight][4] = {};
         int pedsUsed = 0;
         float pedLightSize = 0.0f;
+        float bodyStrength = 1.0f; // c142.z, the player's bones' shadow by their light's nearness (ShapesForLight)
         // VehicleBoxShadowsMaxDistance: a light ending that far from the camera has no boxes, people nor props, so none
         // of them is worked out for it (its boxes faded to nothing over the last 20 m, the props left out at once); each
         // of some 640 lights a frame at night still took its cars and their fades
@@ -2065,7 +2084,7 @@ export struct VehicleBoxShadows
         {
             FindDrawn();
             int bodyShapes = 0;
-            propsUsed = ShapesForLight(light, hasMap, shapes, bodyShapes);
+            propsUsed = ShapesForLight(light, hasMap, shapes, bodyShapes, bodyStrength);
             if (propsUsed)
             {
                 const float at[3] = { light.mPosition.x, light.mPosition.y, light.mPosition.z };
@@ -2116,7 +2135,7 @@ export struct VehicleBoxShadows
         pDevice->SetPixelShaderConstantF(154, capsule, 1);
         // c142.y the props' shapes' light size: the lamp's own, without the pair's half spacing the boxes take in c149.x
         // (zz_zz_shape_light_size.patch); a post's thin shadow from a lamp of a pair was lost in a 1.45 m penumbra
-        const float capsuleFromDistance[4] = { R.fPedCapsuleDistanceSoftness, R.fVehicleBoxShadowLightSize, 0.0f, 0.0f };
+        const float capsuleFromDistance[4] = { R.fPedCapsuleDistanceSoftness, R.fVehicleBoxShadowLightSize, bodyStrength, 0.0f };
         pDevice->SetPixelShaderConstantF(142, capsuleFromDistance, 1);
         // The shapes' groups (zz_shape_groups.patch): c115 their count and where groups 0-2 end, c129 where groups 3-6
         // end; the groups' spheres in c125-c128, c116, c117, c119 and c120

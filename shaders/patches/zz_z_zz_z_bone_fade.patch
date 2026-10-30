@@ -1,0 +1,144 @@
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+index 17e1062..a9fc0c3 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
+@@ -726,6 +726,13 @@
+     add r25.y, r19.w, c186.z
+     cmp r25.z, r17.x, r25.y, c138.y
+     cmp r24.y, r25.z, r24.y, c138.y
++    // --- FusionFix: zz_z_zz_z_bone_fade.patch: the bones' shadow at c142.z of its strength (PedBoneLightNear; props'
++    // --- capsules in full): a light the body came near threw it over half the room, and blinked as bones went in and
++    // --- out of the 0.2 m round it that leaves them out
++    mov r25.w, c142.z
++    cmp r25.w, r25.y, c138.y, r25.w
++    add r24.y, r24.y, -c138.y
++    mad r24.y, r24.y, r25.w, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+index 8c26e0a..30403a6 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
+@@ -1021,6 +1021,13 @@
+     add r25.y, r19.w, c186.z
+     cmp r25.z, r17.x, r25.y, c138.y
+     cmp r24.y, r25.z, r24.y, c138.y
++    // --- FusionFix: zz_z_zz_z_bone_fade.patch: the bones' shadow at c142.z of its strength (PedBoneLightNear; props'
++    // --- capsules in full): a light the body came near threw it over half the room, and blinked as bones went in and
++    // --- out of the 0.2 m round it that leaves them out
++    mov r25.w, c142.z
++    cmp r25.w, r25.y, c138.y, r25.w
++    add r24.y, r24.y, -c138.y
++    mad r24.y, r24.y, r25.w, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+index f0be1b3..6b21771 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
+@@ -798,6 +798,13 @@
+     add r25.y, r19.w, c186.z
+     cmp r25.z, r17.x, r25.y, c138.y
+     cmp r24.y, r25.z, r24.y, c138.y
++    // --- FusionFix: zz_z_zz_z_bone_fade.patch: the bones' shadow at c142.z of its strength (PedBoneLightNear; props'
++    // --- capsules in full): a light the body came near threw it over half the room, and blinked as bones went in and
++    // --- out of the 0.2 m round it that leaves them out
++    mov r25.w, c142.z
++    cmp r25.w, r25.y, c138.y, r25.w
++    add r24.y, r24.y, -c138.y
++    mad r24.y, r24.y, r25.w, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+index efcbc7f..41df1cc 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
+@@ -1026,6 +1026,13 @@
+     add r25.y, r19.w, c186.z
+     cmp r25.z, r17.x, r25.y, c138.y
+     cmp r24.y, r25.z, r24.y, c138.y
++    // --- FusionFix: zz_z_zz_z_bone_fade.patch: the bones' shadow at c142.z of its strength (PedBoneLightNear; props'
++    // --- capsules in full): a light the body came near threw it over half the room, and blinked as bones went in and
++    // --- out of the 0.2 m round it that leaves them out
++    mov r25.w, c142.z
++    cmp r25.w, r25.y, c138.y, r25.w
++    add r24.y, r24.y, -c138.y
++    mad r24.y, r24.y, r25.w, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+index f41af4f..5b7484c 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
+@@ -764,6 +764,13 @@
+     add r25.y, r19.w, c186.z
+     cmp r25.z, r17.x, r25.y, c138.y
+     cmp r24.y, r25.z, r24.y, c138.y
++    // --- FusionFix: zz_z_zz_z_bone_fade.patch: the bones' shadow at c142.z of its strength (PedBoneLightNear; props'
++    // --- capsules in full): a light the body came near threw it over half the room, and blinked as bones went in and
++    // --- out of the 0.2 m round it that leaves them out
++    mov r25.w, c142.z
++    cmp r25.w, r25.y, c138.y, r25.w
++    add r24.y, r24.y, -c138.y
++    mad r24.y, r24.y, r25.w, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+index 226caad..3c6ce4f 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
+@@ -773,6 +773,13 @@
+     add r25.y, r19.w, c186.z
+     cmp r25.z, r17.x, r25.y, c138.y
+     cmp r24.y, r25.z, r24.y, c138.y
++    // --- FusionFix: zz_z_zz_z_bone_fade.patch: the bones' shadow at c142.z of its strength (PedBoneLightNear; props'
++    // --- capsules in full): a light the body came near threw it over half the room, and blinked as bones went in and
++    // --- out of the 0.2 m round it that leaves them out
++    mov r25.w, c142.z
++    cmp r25.w, r25.y, c138.y, r25.w
++    add r24.y, r24.y, -c138.y
++    mad r24.y, r24.y, r25.w, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+index 4047cca..71e6466 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
+@@ -775,6 +775,13 @@
+     add r25.y, r19.w, c186.z
+     cmp r25.z, r17.x, r25.y, c138.y
+     cmp r24.y, r25.z, r24.y, c138.y
++    // --- FusionFix: zz_z_zz_z_bone_fade.patch: the bones' shadow at c142.z of its strength (PedBoneLightNear; props'
++    // --- capsules in full): a light the body came near threw it over half the room, and blinked as bones went in and
++    // --- out of the 0.2 m round it that leaves them out
++    mov r25.w, c142.z
++    cmp r25.w, r25.y, c138.y, r25.w
++    add r24.y, r24.y, -c138.y
++    mad r24.y, r24.y, r25.w, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
+diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+index c7ec08b..b166522 100644
+--- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
++++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
+@@ -778,6 +778,13 @@
+     add r25.y, r19.w, c186.z
+     cmp r25.z, r17.x, r25.y, c138.y
+     cmp r24.y, r25.z, r24.y, c138.y
++    // --- FusionFix: zz_z_zz_z_bone_fade.patch: the bones' shadow at c142.z of its strength (PedBoneLightNear; props'
++    // --- capsules in full): a light the body came near threw it over half the room, and blinked as bones went in and
++    // --- out of the 0.2 m round it that leaves them out
++    mov r25.w, c142.z
++    cmp r25.w, r25.y, c138.y, r25.w
++    add r24.y, r24.y, -c138.y
++    mad r24.y, r24.y, r25.w, c138.y
+     mul r17.w, r17.w, r24.y
+     ret
+     // --- FusionFix prop shape shadows: the light the box r18 (centre, half length), r19 (forward xy, half width, half height)
