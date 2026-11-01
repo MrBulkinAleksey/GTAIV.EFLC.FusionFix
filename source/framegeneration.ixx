@@ -784,6 +784,13 @@ namespace
         Upscaler::DropGenerated();
     }
 
+    // The engine's phone flag; an unresolved flag conservatively suppresses generation too: the phone is drawn over
+    // the scene while it is up, and a frame interpolated across its appearance drags it over the whole screen
+    bool IsPhoneVisible()
+    {
+        return !CPhoneMgr::bDisplayMobile || *CPhoneMgr::bDisplayMobile;
+    }
+
     // Draw calls of the render thread: the waiting frames go once their time has come, the generated one first
     void CheckPending(IDirect3DDevice9* device)
     {
@@ -1019,13 +1026,6 @@ namespace
     bool IsMenuActive()
     {
         return CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive;
-    }
-
-    // The engine's phone flag; an unresolved flag conservatively suppresses generation too: the phone is drawn over the
-    // scene while it is up, and a frame interpolated across its appearance drags it over the whole screen
-    bool IsPhoneVisible()
-    {
-        return !CPhoneMgr::bDisplayMobile || *CPhoneMgr::bDisplayMobile;
     }
 
     // Whatever is drawn over the whole frame after the HUD is part of the finished frame, and so has to be of the copy
