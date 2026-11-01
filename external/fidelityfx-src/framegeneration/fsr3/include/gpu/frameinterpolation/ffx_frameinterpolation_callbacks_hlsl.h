@@ -624,6 +624,11 @@ FfxFloat32x2 LoadInputMotionVector(FfxInt32x2 iPxDilatedMotionVectorPos)
     }
 #endif
 
+    // The image kept for the next pair's interpolation, written by the inpainting pass where its dispatch says so
+#ifdef FFX_FRAMEINTERPOLATION_BIND_UAV_PREVIOUS_INTERPOLATION_SOURCE
+    RWTexture2D<FfxFloat32x4> rw_previous_interpolation_source FFX_DECLARE_UAV(FFX_FRAMEINTERPOLATION_BIND_UAV_PREVIOUS_INTERPOLATION_SOURCE);
+#endif
+
 #ifdef FFX_FRAMEINTERPOLATION_BIND_UAV_DISOCCLUSION_MASK
     RWTexture2D<FfxFloat32x2> rw_disocclusion_mask FFX_DECLARE_UAV(FFX_FRAMEINTERPOLATION_BIND_UAV_DISOCCLUSION_MASK);
 

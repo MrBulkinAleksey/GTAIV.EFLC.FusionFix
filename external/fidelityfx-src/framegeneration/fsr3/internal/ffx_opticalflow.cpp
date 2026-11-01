@@ -689,48 +689,11 @@ static FfxErrorCode dispatch(FfxOpticalflowContext_Private* context, const FfxOp
         wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow SCD Previous histogram");
         clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_SCD_PREVIOUS_HISTOGRAM];
         context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow Input 1");
-        clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_INPUT_1];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow Input 1 Level 1");
-        clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_INPUT_1_LEVEL_1];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow Input 1 Level 2");
-        clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_INPUT_1_LEVEL_2];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow Input 1 Level 3");
-        clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_INPUT_1_LEVEL_3];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow Input 1 Level 4");
-        clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_INPUT_1_LEVEL_4];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow Input 1 Level 5");
-        clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_INPUT_1_LEVEL_5];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow Input 1 Level 6");
-        clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_INPUT_1_LEVEL_6];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow Input 2");
-        clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_INPUT_2];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow Input 2 Level 1");
-        clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_INPUT_2_LEVEL_1];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow Input 2 Level 2");
-        clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_INPUT_2_LEVEL_2];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow Input 2 Level 3");
-        clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_INPUT_2_LEVEL_3];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow Input 2 Level 4");
-        clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_INPUT_2_LEVEL_4];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow Input 2 Level 5");
-        clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_INPUT_2_LEVEL_5];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        wcscpy_s(clearJob.jobLabel, L"Clear Optical Flow Input 2 Level 6");
-        clearJob.clearJobDescriptor.target = context->resources[FFX_OF_RESOURCE_IDENTIFIER_OPTICAL_FLOW_INPUT_2_LEVEL_6];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
+        // The fourteen luminance images are no longer cleared here: the prepare-luma pass writes level 0 of the
+        // current set whole in every dispatch and the pyramid its levels 1 to 6, and the search and the scale
+        // return before they load anything while the frame index is 5 or less (0 at a reset), by which time both
+        // sets have been written whole five times. No load ever saw what these clears wrote. The four scene-change
+        // clears above stay: those images are read.
     }
 
     uint32_t resolutionMultiplier = 1;

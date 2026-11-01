@@ -97,6 +97,8 @@ static const ResourceBinding uavResourceBindingTable[] =
     {FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_OPTICAL_FLOW_MOTION_VECTOR_FIELD_X,         L"rw_optical_flow_motion_vector_field_x"},
     {FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_OPTICAL_FLOW_MOTION_VECTOR_FIELD_Y,         L"rw_optical_flow_motion_vector_field_y"},
     {FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_INPAINTING_MASK,                            L"rw_inpainting_mask"},
+    // Written by the inpainting pass itself where the dispatch below says so
+    {FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_PREVIOUS_INTERPOLATION_SOURCE,              L"rw_previous_interpolation_source"},
 
     {FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_COUNTERS,                                   L"rw_counters"},
     {FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_INPAINTING_PYRAMID_MIPMAP_0,                L"rw_inpainting_pyramid0"},
@@ -1029,6 +1031,17 @@ FFX_API FfxErrorCode ffxFrameInterpolationDispatch(FfxFrameInterpolationContext*
     contextPrivate->constants.opticalFlowScale[1]   = params->opticalFlowScale.y;
     contextPrivate->constants.opticalFlowBlockSize  = params->opticalFlowBlockSize;// displaySize.width / params->opticalFlowBufferSize.width;
     contextPrivate->constants.dispatchFlags         = params->flags;
+    // With a HUD-less image of 16-bit floats and no debug drawing the inpainting pass stores the HUD-less picture
+    // for the next pair, pixel by pixel, and the copy at this dispatch's end is not scheduled. The pass is told by
+    // bit 30 of the dispatch flags (AMD's flags are bits 0 to 3; its shaders test bits).
+    const bool inpaintingKeepsSource = contextPrivate->constants.HUDLessAttachedFactor == 1
+        && (params->flags & (FFX_FRAMEINTERPOLATION_DISPATCH_DRAW_DEBUG_TEAR_LINES | FFX_FRAMEINTERPOLATION_DISPATCH_DRAW_DEBUG_RESET_INDICATORS | FFX_FRAMEINTERPOLATION_DISPATCH_DRAW_DEBUG_VIEW)) == 0
+        && contextPrivate->contextDescription.previousInterpolationSourceFormat == FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT
+        && params->currentBackBuffer_HUDLess.description.format == FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT;
+    if (inpaintingKeepsSource)
+    {
+        contextPrivate->constants.dispatchFlags |= 0x40000000u;
+    }
 
     contextPrivate->constants.cameraNear            = params->cameraNear;
     contextPrivate->constants.cameraFar             = params->cameraFar;
@@ -1286,7 +1299,18 @@ FFX_API FfxErrorCode ffxFrameInterpolationDispatch(FfxFrameInterpolationContext*
             scheduleDispatch(contextPrivate, &contextPrivate->pipelineInpaintingPyramid, dispatchThreadGroupCountXY[0], dispatchThreadGroupCountXY[1]);
         }
 
-        scheduleDispatch(contextPrivate, &contextPrivate->pipelineInpainting, displayDispatchSizeX, displayDispatchSizeY);
+        // With no HUD-less image and no debug drawing a thread of the inpainting pass handles 4 by 4 pixels and
+        // calls AMD's function only for a pixel whose weight asks for inpainting; the pass file decides by the
+        // same two values
+        if (contextPrivate->constants.HUDLessAttachedFactor == 1
+            || (params->flags & (FFX_FRAMEINTERPOLATION_DISPATCH_DRAW_DEBUG_TEAR_LINES | FFX_FRAMEINTERPOLATION_DISPATCH_DRAW_DEBUG_RESET_INDICATORS)) != 0)
+        {
+            scheduleDispatch(contextPrivate, &contextPrivate->pipelineInpainting, displayDispatchSizeX, displayDispatchSizeY);
+        }
+        else
+        {
+            scheduleDispatch(contextPrivate, &contextPrivate->pipelineInpainting, (displayDispatchSizeX + 3) / 4, (displayDispatchSizeY + 3) / 4);
+        }
 
         if (params->flags & FFX_FRAMEINTERPOLATION_DISPATCH_DRAW_DEBUG_VIEW)
         {
@@ -1295,6 +1319,8 @@ FFX_API FfxErrorCode ffxFrameInterpolationDispatch(FfxFrameInterpolationContext*
         }
 
         // store current buffer
+        // Where the inpainting pass stored it, pixel by pixel, there is nothing left to copy
+        if (!inpaintingKeepsSource)
         {
             FfxGpuJobDescription copyJobs[] = { {FFX_GPU_JOB_COPY} };
             FfxResourceInternal  copySources[_countof(copyJobs)] = { contextPrivate->srvResources[FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_CURRENT_INTERPOLATION_SOURCE] };

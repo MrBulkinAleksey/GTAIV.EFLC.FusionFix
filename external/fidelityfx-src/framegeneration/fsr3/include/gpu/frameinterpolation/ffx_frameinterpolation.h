@@ -102,8 +102,19 @@ void computeInterpolatedColor(FfxUInt32x2 iPxPos, out FfxFloat32x3 fInterpolated
     InterpolationSourceColor fPrevColorGame = SampleTextureBilinear(false, fUvInScreenSpace, +gameMv.fMotionVector * fUvLetterBoxScale, DisplaySize()); // Get in previous frame buffer, the color of interpolated pixel
     InterpolationSourceColor fCurrColorGame = SampleTextureBilinear(true, fUvInScreenSpace, -gameMv.fMotionVector * fUvLetterBoxScale, DisplaySize()); // Get color in current framebuffer, of color of interpolated pixel
 
-    InterpolationSourceColor fPrevColorOF = SampleTextureBilinear(false, fUvInScreenSpace, +ofMv.fMotionVector * fUvLetterBoxScale, DisplaySize());
-    InterpolationSourceColor fCurrColorOF = SampleTextureBilinear(true, fUvInScreenSpace, -ofMv.fMotionVector * fUvLetterBoxScale, DisplaySize());
+    // Where optical flow's vector IS the game's, component for component, the two reads along it are the two reads
+    // along the game's: the same function of the same arguments (the position, the vector times the same scale, the
+    // size), taken from there and not made again. Where the vectors differ in either component (or one is not a
+    // number) both reads are made as before. Optical flow writes no vector where it found a pixel or less of motion
+    // and its field is zero there, and the game's vector is zero wherever nothing moves: this is every pixel of a
+    // picture that stands still.
+    InterpolationSourceColor fPrevColorOF = fPrevColorGame;
+    InterpolationSourceColor fCurrColorOF = fCurrColorGame;
+    if (ofMv.fMotionVector.x != gameMv.fMotionVector.x || ofMv.fMotionVector.y != gameMv.fMotionVector.y)
+    {
+        fPrevColorOF = SampleTextureBilinear(false, fUvInScreenSpace, +ofMv.fMotionVector * fUvLetterBoxScale, DisplaySize());
+        fCurrColorOF = SampleTextureBilinear(true, fUvInScreenSpace, -ofMv.fMotionVector * fUvLetterBoxScale, DisplaySize());
+    }
 
     FfxFloat32 fDisoccludedFactor = 0.0f;
 

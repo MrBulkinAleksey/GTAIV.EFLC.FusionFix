@@ -27,6 +27,8 @@
 
 #define FFX_FRAMEINTERPOLATION_BIND_UAV_OUTPUT                                  0
 #define FFX_FRAMEINTERPOLATION_BIND_UAV_INPAINTING_MASK                         1
+// The image kept for the next pair's interpolation, written by this pass where the dispatch says so
+#define FFX_FRAMEINTERPOLATION_BIND_UAV_PREVIOUS_INTERPOLATION_SOURCE           2
 
 #define FFX_FRAMEINTERPOLATION_BIND_CB_FRAMEINTERPOLATION                       0
 
@@ -51,5 +53,46 @@ FFX_FRAMEINTERPOLATION_NUM_THREADS
 FFX_FRAMEINTERPOLATION_EMBED_ROOTSIG_CONTENT
 void CS(FfxInt32x2 iPxPos : SV_DispatchThreadID)
 {
-    computeInpainting(iPxPos);
+    // Where the dispatch says so (bit 30 of the dispatch flags, set by the C++ side of this pass and by nothing
+    // else: a HUD-less image of 16-bit floats and no debug drawing), the HUD-less pixel is stored for the next
+    // pair here, pixel by pixel, which the whole-picture copy at the dispatch's end did, and AMD's function is
+    // called only for a pixel it can change: one whose weight asks for inpainting or where the two pictures
+    // differ. For every other pixel its function loads three values and stores nothing.
+    if ((GetDispatchFlags() & 0x40000000u) != 0)
+    {
+        const FfxFloat32x4 fSource = r_current_interpolation_source[iPxPos];
+        rw_previous_interpolation_source[iPxPos] = fSource;
+        if (rw_inpainting_mask[iPxPos] > FFX_FRAMEINTERPOLATION_EPSILON
+            || any(FFX_GREATER_THAN(abs(fSource.rgb - LoadPresentBackbuffer(iPxPos).rgb), FfxFloat32x3(0.0, 0.0, 0.0))))
+        {
+            computeInpainting(iPxPos);
+        }
+        return;
+    }
+    // With a HUD-less image attached or a debug drawing asked for, AMD's function may change any pixel: one
+    // thread a pixel, as AMD dispatches it (the C++ side decides by the same two values)
+    if (GetHUDLessAttachedFactor() == 1
+        || (GetDispatchFlags() & (FFX_FRAMEINTERPOLATION_DISPATCH_DRAW_DEBUG_TEAR_LINES | FFX_FRAMEINTERPOLATION_DISPATCH_DRAW_DEBUG_RESET_INDICATORS)) != 0)
+    {
+        computeInpainting(iPxPos);
+        return;
+    }
+    // Otherwise this thread's 4 by 4 pixels, a sixteenth of the groups, and AMD's function for a pixel whose
+    // weight asks for inpainting: for every other pixel it loads two values and stores nothing, so not calling
+    // it changes nothing. A pixel beyond what AMD's dispatch covered is never touched, as before.
+    const FfxInt32x2 iCovered = ((DisplaySize() + 7) / 8) * 8;      // what AMD's dispatch covered: one group for 8 by 8 pixels
+    for (FfxInt32 iBlockY = 0; iBlockY < 4; iBlockY++)
+    {
+        for (FfxInt32 iBlockX = 0; iBlockX < 4; iBlockX++)
+        {
+            const FfxInt32x2 iPx = iPxPos * 4 + FfxInt32x2(iBlockX, iBlockY);
+            if (iPx.x < iCovered.x && iPx.y < iCovered.y)
+            {
+                if (rw_inpainting_mask[iPx] > FFX_FRAMEINTERPOLATION_EPSILON)
+                {
+                    computeInpainting(iPx);
+                }
+            }
+        }
+    }
 }
