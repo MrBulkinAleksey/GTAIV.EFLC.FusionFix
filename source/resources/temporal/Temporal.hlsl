@@ -20,6 +20,40 @@ float4 gBoneParams                : register(c20); // x: bone row v, y: 1 / bone
 float4 gBoneMtx[144]              : register(c64);
 
 sampler2D PrevBoneTex : register(s0); // vertex texture: 3 texels per bone, one row per draw
+sampler2D DeformationTex : register(s1);
+float4 gVehicleReplay : register(c21); // x: damage enabled, y: rigid wheel transform enabled, z: bound radius
+row_major float4x4 gWheelTransform : register(c22);
+
+// Packed displacement and sampling coordinates follow gta_vehicle_paint1VS1.
+// This is the CURRENT damage field in both poses, not a historical damage map.
+float3 UnpackDisplacement(float packed)
+{
+    float high = trunc(packed / 65536.0);
+    float remainder = packed - high * 65536.0;
+    float middle = trunc(remainder / 256.0);
+    return float3(remainder - middle * 256.0, middle, high);
+}
+
+float3 DeformVehiclePosition(float3 position)
+{
+    [branch]
+    if (gVehicleReplay.x <= 0.0)
+        return position;
+    float radius = length(position);
+    float3 direction = position / (radius + 0.00001);
+    float2 polar = normalize(direction.xy + 0.00001);
+    float2 uv = 0.5 + polar * ((1.0 - direction.z) * 0.25);
+    float2 fraction = frac(uv * 126.732674);
+    float2 origin = uv - fraction * 0.00789062493;
+    float3 a = UnpackDisplacement(tex2Dlod(DeformationTex, float4(uv, 0, 0)).x);
+    float3 b = UnpackDisplacement(tex2Dlod(DeformationTex, float4(origin + float2(0.00789062493, 0), 0, 0)).x);
+    float3 c = UnpackDisplacement(tex2Dlod(DeformationTex, float4(origin + float2(0, 0.00789062493), 0, 0)).x);
+    float3 d = UnpackDisplacement(tex2Dlod(DeformationTex, float4(origin + 0.00789062493, 0, 0)).x);
+    float3 displacement = a * (1-fraction.x) * (1-fraction.y) + b * fraction.x * (1-fraction.y);
+    displacement += c * (1-fraction.x) * fraction.y;
+    displacement += d * fraction.x * fraction.y;
+    return position + (displacement - 128.0) * (0.5 / 128.0) * min(radius / gVehicleReplay.z, 1.0);
+}
 
 struct VelocityOut
 {
@@ -38,10 +72,22 @@ float4 GameClipPosition(float3 p)
     return clip + gWorldViewProj[3];
 }
 
+float3 ApplyWheelTransform(float3 p)
+{
+    [branch]
+    if (gVehicleReplay.y <= 0.0)
+        return p;
+    float3 wheel = p.y * gWheelTransform[1].xyz;
+    wheel = p.x * gWheelTransform[0].xyz + wheel;
+    wheel = p.z * gWheelTransform[2].xyz + wheel;
+    return wheel + gWheelTransform[3].xyz;
+}
+
 VelocityOut MakeVelocityOut(float3 current, float3 previous)
 {
     VelocityOut o;
-    o.Position = GameClipPosition(current);
+    // Wheel rotation is already composed into both world matrices on the CPU.
+    o.Position = GameClipPosition(ApplyWheelTransform(current));
     o.ClipW = o.Position.w;
 
     float4 currentWorld = mul(float4(current, 1.0), gWorld);
@@ -53,7 +99,8 @@ VelocityOut MakeVelocityOut(float3 current, float3 previous)
 
 VelocityOut VS_VelocityRigid(float4 position : POSITION)
 {
-    return MakeVelocityOut(position.xyz, position.xyz);
+    float3 deformed = DeformVehiclePosition(position.xyz);
+    return MakeVelocityOut(deformed, deformed);
 }
 
 float4 PrevBone(float index, float row)
@@ -80,7 +127,8 @@ VelocityOut VS_VelocitySkinned(float4 position : POSITION, float4 weights : BLEN
     r2 = gBoneMtx[idx.w + 1] * weights.w + r2;
     r3 = gBoneMtx[idx.w + 2] * weights.w + r3;
 
-    float4 p = float4(position.xyz, 1.0);
+    // Damage is applied in mesh space BEFORE either pose is skinned.
+    float4 p = float4(DeformVehiclePosition(position.xyz), 1.0);
     float3 current = float3(dot(p, r1), dot(p, r2), dot(p, r3));
     float3 previous = current;
 
@@ -410,7 +458,7 @@ sampler2D SteadyMotionTex : register(s2);
 
 float4 gSteadyTexel  : register(c0); // 1 / width, 1 / height, width, height
 float4 gSteadyBlend  : register(c1); // x: minimum current weight, y: maximum, z: weight per pixel of motion, w: history valid
-float4 gSteadyEdge   : register(c2); // x: depth range of the neighbourhood that counts as an edge
+float4 gSteadyEdge   : register(c2); // x: depth range of the neighbourhood that counts as an edge, y: nearest-depth hold
 
 float4 PS_SteadyDepth(float2 uv : TEXCOORD0) : COLOR0
 {
@@ -447,6 +495,13 @@ float4 PS_SteadyDepth(float2 uv : TEXCOORD0) : COLOR0
         return float4(now, 0.0, 0.0, 1.0);
 
     float history = clamp(tex2Dlod(SteadyHistTex, float4(historyUV, 0.0, 0.0)).r, nearest, farthest);
+    [branch]
+    if (gSteadyEdge.y > 0.0)
+    {
+        // Nearest-depth compare: a reprojected thin surface nearer than the current pixel survives,
+        // while a newly nearer current depth replaces it. Logarithmic depth is smaller when nearer.
+        return float4(min(history, now), 0.0, 0.0, 1.0);
+    }
     float speed = length(motion * gSteadyTexel.zw);
     float weight = lerp(gSteadyBlend.x, gSteadyBlend.y, saturate(speed * gSteadyBlend.z));
     return float4(lerp(history, now, weight), 0.0, 0.0, 1.0);

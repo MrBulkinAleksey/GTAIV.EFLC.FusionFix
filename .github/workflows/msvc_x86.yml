@@ -119,6 +119,12 @@ jobs:
         incrementPerCommit: false
         github_token: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Verify own interpolation sources and fetch pinned shader compiler
+      run: |
+        python tools/own-frameinterpolation/verify_sources.py
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        ./tools/own-frameinterpolation/fetch-dxc.ps1
+
     - name: Configure build
       run: ./premake5 vs2026 --with-version=${{ steps.versioning.outputs.version }}
 
@@ -128,6 +134,8 @@ jobs:
         msbuild -m build/GTAIV.EFLC.FusionFix.slnx /property:Configuration=Release /property:Platform=Win32
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         msbuild -m build/GTAIV.EFLC.FusionFix.Helper.slnx /property:Configuration=Release /property:Platform=x64
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        msbuild -m build/GTAIV.EFLC.FusionFix.FrameInterpolation.slnx /property:Configuration=Release /property:Platform=x64
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         # (the commit this build is of, for the next run's "Mark what changed")
         git rev-parse HEAD | Out-File -Encoding ascii -NoNewline build/.cache-sha
@@ -195,6 +203,12 @@ jobs:
       with:
         archive: false
         path: data/plugins/GTAIV.EFLC.FusionFix.asi
+
+    - name: Upload interpolation shader manifest
+      uses: actions/upload-artifact@v7
+      with:
+        name: interpolation-shaders
+        path: build/own-frameinterpolation/shaders.json
 
     - name: Upload Web Installer
       uses: actions/upload-artifact@v7

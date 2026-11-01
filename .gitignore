@@ -355,6 +355,8 @@ GTAIV.EFLC.FusionFixOfflineInstaller.exe
 GTAIV.EFLC.FusionFixWebInstaller.exe
 .env
 data/plugins/GTAIV.EFLC.FusionFix.exe
+data/plugins/GTAIV.EFLC.FusionFix.FrameInterpolation.dll
+data/OwnFrameInterpolation/
 data/plugins/GTAIV.EFLC.FusionFix.Upscaler.log
 data/nvngx_dlss.dll
 data/amd_fidelityfx_loader_dx12.dll

@@ -546,3 +546,26 @@ When airborne use ~PAD_LSTICK_ALL~ to move. In freefall press ~INPUT_MOUSE_LMB~ 
 
 [DUMMY_l11]
 Dummy label.
+[FF_SRPIPE]
+Pipelined upscaling
+
+[FF_FGADAPT]
+Adaptive frame pacing
+
+[FF_WHEELMV]
+Wheel motion stabilization
+
+[FF_DPHOLD]
+Hold near depth
+
+[FF_FGBACK]
+Frame generation backend
+
+[FF_FGSTOCK]
+AMD runtime
+
+[FF_FGREF]
+Own reference
+
+[FF_FGFUSE]
+Own fused passes

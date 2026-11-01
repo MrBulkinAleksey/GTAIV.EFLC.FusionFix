@@ -1,7 +1,9 @@
 module;
 
 #include <common.hxx>
+#include <memory>
 #include "FusionLog.hpp"
+#include "VehicleMotion.hpp"
 
 export module temporal;
 
@@ -142,6 +144,8 @@ namespace TemporalMath
 
 export namespace TemporalAA
 {
+    inline bool bVehicleDamageMotionVectors = true; // [ANTIALIASING] VehicleDamageMotionVectors
+
     enum class Mode
     {
         Off, TAA, DLAA, FSR
@@ -363,6 +367,12 @@ public:
                 rt = nullptr;
             }
         };
+        EndCaptureCleanup();
+        EntitiesCurrent.clear();
+        EntitiesPrevious.clear();
+        BonesCurrent.clear();
+        BonesPrevious.clear();
+        VehicleShaders.clear();
         destroy(MotionRT);
         destroy(HistoryRT[0]);
         destroy(HistoryRT[1]);
@@ -658,6 +668,14 @@ public:
         UINT NumVertices = 0;
         float World[16]{};
         int32_t Bones = -1;            // offset in the bone pool of the same frame
+        bool Wheel = false;
+        int WheelAxle = -1;
+        float WheelTransform[16]{};
+        bool Damage = false;
+        // Shared ownership keeps the identity pointer alive and comparable for one frame.
+        std::shared_ptr<IDirect3DBaseTexture9> DamageIdentity;
+        float DamageRadius = 0;
+        DWORD DamageStates[13]{};
     };
 
     struct EntityRecord
@@ -689,6 +707,12 @@ public:
         int32_t Bones = -1;             // current bones, offset in the current bone pool
         int32_t PrevBones = -1;         // previous bones, offset in the previous bone pool
         int32_t BoneRow = -1;
+        bool Wheel = false;
+        float WheelTransform[16]{};
+        // Shared ownership retains the GetTexture reference until the replay has run.
+        std::shared_ptr<IDirect3DBaseTexture9> DamageTexture;
+        float DamageRadius = 0;
+        DWORD DamageStates[13]{};
     };
 
     static inline std::unordered_map<IDirect3DVertexDeclaration9*, DeclInfo> DeclCache;
@@ -791,16 +815,20 @@ public:
         auto matches = [&](const DrawRecord& d)
         {
             return d.IndexBuffer == current.IndexBuffer && d.VertexBuffer == current.VertexBuffer && d.StartIndex == current.StartIndex &&
-                d.PrimitiveCount == current.PrimitiveCount;
+                d.PrimitiveCount == current.PrimitiveCount && d.Wheel == current.Wheel;
         };
 
         float position[3];
         const float* bones = current.Bones >= 0 && static_cast<size_t>(current.Bones + BoneTexels * 4) <= BonesCurrent.size() ? &BonesCurrent[current.Bones] : nullptr;
         DrawPosition(current.World, bones, position);
+        if (current.Wheel)
+            std::copy_n(current.WheelTransform + 12, 3, position);
         auto distance = [&](const DrawRecord& d)
         {
             float p[3];
             DrawPosition(d.World, PreviousBones(d), p);
+            if (d.Wheel)
+                std::copy_n(d.WheelTransform + 12, 3, p);
             return (p[0] - position[0]) * (p[0] - position[0]) + (p[1] - position[1]) * (p[1] - position[1]) + (p[2] - position[2]) * (p[2] - position[2]);
         };
 
@@ -818,6 +846,81 @@ public:
             }
         }
         return best;
+    }
+
+    struct VehicleShaderInfo
+    {
+        IDirect3DVertexShader9* Shader = nullptr;
+        bool Valid = false;
+        bool Damage = false;
+        bool Wheel = false;
+        UINT RadiusRegister = 208;
+        ~VehicleShaderInfo() { SAFE_RELEASE(Shader); }
+    };
+    static inline std::unordered_map<IDirect3DVertexShader9*, VehicleShaderInfo> VehicleShaders;
+
+    static const VehicleShaderInfo* GetVehicleShaderInfo(IDirect3DDevice9* device)
+    {
+        IDirect3DVertexShader9* shader = nullptr;
+        if (FAILED(device->GetVertexShader(&shader)) || !shader)
+            return nullptr;
+        auto known = VehicleShaders.find(shader);
+        if (known != VehicleShaders.end())
+        {
+            shader->Release();
+            return &known->second;
+        }
+        if (VehicleShaders.size() >= 512)
+        {
+            shader->Release();
+            return nullptr;
+        }
+        auto& info = VehicleShaders.try_emplace(shader).first->second;
+        info.Shader = shader; // Own the reference: pointer reuse cannot alias cached metadata.
+        UINT bytes = 0;
+        if (FAILED(shader->GetFunction(nullptr, &bytes)) || bytes < 8 || bytes > 256 * 1024 || bytes % 4)
+            return &info;
+        std::vector<DWORD> code(bytes / 4);
+        if (FAILED(shader->GetFunction(code.data(), &bytes)) || code[0] != D3DVS_VERSION(3, 0))
+            return &info;
+        unsigned samples = 0;
+        bool radius = false, toggle = false;
+        auto type = [](DWORD token) { return ((token >> 28) & 7) | ((token >> 8) & 24); };
+        for (size_t i = 1; i < code.size();)
+        {
+            DWORD opcode = code[i] & D3DSI_OPCODE_MASK;
+            if (opcode == D3DSIO_END)
+            {
+                info.Valid = true;
+                break;
+            }
+            size_t count = opcode == D3DSIO_COMMENT ? (code[i] >> 16) & 0x7fff : (code[i] >> 24) & 15;
+            if (count >= code.size() - i)
+                break;
+            if (opcode == D3DSIO_DEF && count == 5 && (code[i + 1] & D3DSP_REGNUM_MASK) == 230)
+            {
+                // FusionShaders' rigid tyre variants use matWheelTransform at c64..67.
+                const unsigned id = code[i + 5];
+                info.Wheel = id == 2760 || id == 2762 || id == 2764;
+            }
+            if (opcode == D3DSIO_TEXLDL && count == 3 && type(code[i + 3]) == D3DSPR_SAMPLER &&
+                (code[i + 3] & D3DSP_REGNUM_MASK) == 0)
+                ++samples;
+            if (opcode != D3DSIO_COMMENT && opcode != D3DSIO_DEF && opcode != D3DSIO_DEFI && opcode != D3DSIO_DEFB && opcode != D3DSIO_DCL)
+                for (size_t j = 1; j <= count; ++j)
+                {
+                    DWORD operand = code[i + j];
+                    if (type(operand) == D3DSPR_CONST && ((operand & D3DSP_REGNUM_MASK) == 208 || (operand & D3DSP_REGNUM_MASK) == 212))
+                    {
+                        radius = true;
+                        info.RadiusRegister = operand & D3DSP_REGNUM_MASK;
+                    }
+                    toggle |= type(operand) == D3DSPR_CONSTBOOL && (operand & D3DSP_REGNUM_MASK) == 8;
+                }
+            i += count + 1;
+        }
+        info.Damage = info.Valid && samples == 4 && radius && toggle;
+        return &info;
     }
 
     static void CaptureDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT baseVertex, UINT minIndex, UINT numVertices, UINT startIndex, UINT primitiveCount)
@@ -852,6 +955,22 @@ public:
         draw.PrimitiveCount = primitiveCount;
         draw.NumVertices = numVertices;
         device->GetVertexShaderConstantF(0, draw.World, 4);
+        const auto* shaderInfo = GetVehicleShaderInfo(device);
+        draw.Wheel = shaderInfo && shaderInfo->Valid && shaderInfo->Wheel && !declInfo.Skinned;
+        if (draw.Wheel)
+        {
+            device->GetVertexShaderConstantF(64, draw.WheelTransform, 4);
+            // The rigid tyre shader uses only gWorld[3]; c0..2 may contain stale
+            // values (c0 is even overridden by a local shader DEF).
+            fusionfix::motion::WheelWorld(draw.World, draw.WheelTransform, draw.World);
+        }
+        BOOL damageOn = FALSE;
+        bool damageStateValid = shaderInfo && shaderInfo->Valid;
+        if (damageStateValid && shaderInfo->Damage)
+        {
+            damageStateValid = SUCCEEDED(device->GetVertexShaderConstantB(8, &damageOn, 1));
+            draw.Damage = damageOn != FALSE;
+        }
         if (declInfo.Skinned)
         {
             draw.Bones = static_cast<int32_t>(BonesCurrent.size());
@@ -859,11 +978,26 @@ public:
             device->GetVertexShaderConstantF(64, &BonesCurrent[draw.Bones], BoneTexels);
         }
 
+        IDirect3DBaseTexture9* damageTexture = nullptr;
+        DWORD damageStates[13]{};
+        if (draw.Damage)
+        {
+            float bounds[4]{};
+            damageStateValid &= SUCCEEDED(device->GetVertexShaderConstantF(shaderInfo->RadiusRegister, bounds, 1));
+            draw.DamageRadius = bounds[0];
+            damageStateValid &= std::isfinite(bounds[0]) && bounds[0] > 0.001f && bounds[0] < 10000.0f;
+            damageStateValid &= SUCCEEDED(device->GetTexture(D3DVERTEXTEXTURESAMPLER0, &damageTexture)) && damageTexture &&
+                damageTexture->GetType() == D3DRTYPE_TEXTURE;
+            for (DWORD i = 0; i < 13; ++i)
+                damageStateValid &= SUCCEEDED(device->GetSamplerState(D3DVERTEXTEXTURESAMPLER0,
+                    static_cast<D3DSAMPLERSTATETYPE>(i + 1), &damageStates[i]));
+            draw.DamageIdentity.reset(damageTexture, [](IDirect3DBaseTexture9* texture) { if (texture) texture->Release(); });
+            std::copy_n(damageStates, 13, draw.DamageStates);
+        }
+
         // Record this frame's draw for the next frame
         auto& record = EntitiesCurrent[entity];
         auto ordinal = record.Draws.size();
-        record.Draws.push_back(draw);
-
         // Only draws that moved since the previous frame need their own motion vectors, the rest is
         // covered by the camera motion reprojected from depth
         auto previous = FindPrevious(entity, ordinal, draw);
@@ -881,7 +1015,18 @@ public:
             }
         }
 
-        if (!moved)
+        if (previous && draw.Wheel)
+            draw.WheelAxle = previous->WheelAxle;
+        record.Draws.push_back(draw);
+
+        // Never replay an undeformed body over a damaged surface when required state is missing.
+        // A new damage binding/toggle/radius also lacks a matching previous surface: keep camera MV.
+        // An in-place texture edit cannot be detected from COM identity; see the replay limitation below.
+        bool damageContinuous = previous && fusionfix::motion::DamageHistoryMatches(draw.Damage, previous->Damage,
+            draw.DamageIdentity.get(), previous->DamageIdentity.get(), draw.DamageRadius, previous->DamageRadius) &&
+            (!draw.Damage || std::equal(std::begin(draw.DamageStates), std::end(draw.DamageStates), std::begin(previous->DamageStates)));
+        if (!moved || !damageStateValid || !damageContinuous || (declInfo.Skinned && prevBones < 0) ||
+            (draw.Damage && (!TemporalAA::bVehicleDamageMotionVectors || !bVertexTextureSupported)))
         {
             decl->Release();
             indices->Release();
@@ -902,8 +1047,25 @@ public:
         capture.Skinned = declInfo.Skinned;
         capture.Bones = draw.Bones;
         capture.PrevBones = prevBones;
+        capture.Wheel = draw.Wheel;
+        std::copy_n(draw.WheelTransform, 16, capture.WheelTransform);
+        if (draw.Damage)
+        {
+            // Retaining a texture prevents destruction, NOT mutation of its contents. Both poses
+            // sample the current deformation. Fresh dents in the same map have no exact history.
+            capture.DamageTexture = draw.DamageIdentity;
+            capture.DamageRadius = draw.DamageRadius;
+            std::copy_n(damageStates, 13, capture.DamageStates);
+        }
         std::memcpy(capture.World, draw.World, sizeof(capture.World));
         std::memcpy(capture.PrevWorld, previous->World, sizeof(capture.PrevWorld));
+        static auto wheelMotion = FusionFixSettings.GetRef("PREF_WHEEL_MOTION");
+        if (capture.Wheel && wheelMotion && wheelMotion->get() != 0)
+        {
+            int axle = draw.WheelAxle;
+            fusionfix::motion::SuppressWheelTwist(capture.World, capture.PrevWorld, axle);
+            record.Draws.back().WheelAxle = axle;
+        }
 
         capture.Streams[0] = stream0;
         capture.Offsets[0] = offset0;
@@ -968,7 +1130,7 @@ public:
         IDirect3DIndexBuffer9* indices = nullptr;
         IDirect3DBaseTexture9* texture0 = nullptr;
         IDirect3DBaseTexture9* vertexTexture0 = nullptr;
-        float vsConstants[21 * 4]{};
+        float vsConstants[26 * 4]{};
         float vsBones[BoneTexels * 4]{};
         float psConstants[7 * 4]{};
 
@@ -985,7 +1147,10 @@ public:
 
         static constexpr D3DSAMPLERSTATETYPE SamplerStates[] =
         {
-            D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE,
+            D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW, D3DSAMP_BORDERCOLOR,
+            D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_MIPMAPLODBIAS,
+            D3DSAMP_MAXMIPLEVEL, D3DSAMP_MAXANISOTROPY, D3DSAMP_SRGBTEXTURE,
+            D3DSAMP_ELEMENTINDEX, D3DSAMP_DMAPOFFSET,
         };
         DWORD samplerStates0[std::size(SamplerStates)]{};
         DWORD vertexSamplerStates0[std::size(SamplerStates)]{};
@@ -1005,7 +1170,7 @@ public:
             device->GetIndices(&indices);
             device->GetTexture(0, &texture0);
             device->GetTexture(D3DVERTEXTEXTURESAMPLER0, &vertexTexture0);
-            device->GetVertexShaderConstantF(0, vsConstants, 21);
+            device->GetVertexShaderConstantF(0, vsConstants, 26);
             device->GetVertexShaderConstantF(64, vsBones, BoneTexels);
             device->GetPixelShaderConstantF(0, psConstants, 7);
             for (size_t i = 0; i < std::size(RenderStates); ++i)
@@ -1034,7 +1199,7 @@ public:
             device->SetIndices(indices);
             device->SetTexture(0, texture0);
             device->SetTexture(D3DVERTEXTEXTURESAMPLER0, vertexTexture0);
-            device->SetVertexShaderConstantF(0, vsConstants, 21);
+            device->SetVertexShaderConstantF(0, vsConstants, 26);
             device->SetVertexShaderConstantF(64, vsBones, BoneTexels);
             device->SetPixelShaderConstantF(0, psConstants, 7);
             for (size_t i = 0; i < std::size(RenderStates); ++i)
@@ -1279,15 +1444,23 @@ public:
 
         if (!rows)
             return;
-        BoneUpload->UnlockRect();
+        if (FAILED(BoneUpload->UnlockRect()))
+        {
+            for (auto& capture : Captures) capture.BoneRow = -1;
+            return;
+        }
 
         IDirect3DSurface9* boneSurface = nullptr;
         BoneRT->mD3DTexture->GetSurfaceLevel(0, &boneSurface);
         if (!boneSurface)
+        {
+            for (auto& capture : Captures) capture.BoneRow = -1;
             return;
+        }
         const RECT rect = { 0, 0, BoneTexels, rows };
         const POINT origin = { 0, 0 };
-        device->UpdateSurface(BoneUpload, &rect, boneSurface, &origin);
+        if (FAILED(device->UpdateSurface(BoneUpload, &rect, boneSurface, &origin)))
+            for (auto& capture : Captures) capture.BoneRow = -1;
         boneSurface->Release();
     }
 
@@ -1347,8 +1520,25 @@ public:
             device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
         }
 
+        SamplerBackup damageSampler(device, D3DVERTEXTEXTURESAMPLER1);
         for (auto& capture : Captures)
         {
+            // Missing/failed atlas uploads must not silently substitute current bones.
+            if (capture.Skinned && capture.BoneRow < 0)
+                continue;
+            float vehicleParams[4] = { capture.DamageTexture ? 1.0f : 0.0f, capture.Wheel ? 1.0f : 0.0f, capture.DamageRadius, 0.0f };
+            device->SetVertexShaderConstantF(21, vehicleParams, 1);
+            if (capture.Wheel)
+                device->SetVertexShaderConstantF(22, capture.WheelTransform, 4);
+            if (capture.DamageTexture)
+            {
+                bool bound = SUCCEEDED(device->SetTexture(D3DVERTEXTEXTURESAMPLER1, capture.DamageTexture.get()));
+                for (DWORD i = 0; i < 13; ++i)
+                    bound &= SUCCEEDED(device->SetSamplerState(D3DVERTEXTEXTURESAMPLER1,
+                        static_cast<D3DSAMPLERSTATETYPE>(i + 1), capture.DamageStates[i]));
+                if (!bound)
+                    continue; // Camera MV is safer than a body replay with the wrong deformation.
+            }
             device->SetVertexDeclaration(capture.Decl);
             for (uint32_t i = 0; i < capture.StreamCount; ++i)
                 device->SetStreamSource(i, capture.Streams[i], capture.Offsets[i], capture.Strides[i]);
@@ -1535,9 +1725,10 @@ public:
         SAFE_RELEASE(RainLayerTexture);
         bSceneTargetsFailed = false;
         RainFrame = 0;
+        ResetCompanions();
     }
 
-    static IDirect3DSurface9* GetSceneTarget(IDirect3DDevice9* device, IDirect3DTexture9*& texture, IDirect3DSurface9*& surface, UINT width, UINT height, D3DFORMAT format)
+    static IDirect3DSurface9* GetSceneTarget(IDirect3DDevice9* device, IDirect3DTexture9*& texture, IDirect3DSurface9*& surface, UINT width, UINT height, D3DFORMAT format, bool stickyFailure = true)
     {
         if (texture)
         {
@@ -1549,13 +1740,15 @@ public:
             SAFE_RELEASE(texture);
         }
         // Not made while the device is being reset: it would be alive at the Reset
-        if (bSceneTargetsFailed || rage::grcDevice::IsDeviceLost())
+        if ((stickyFailure && bSceneTargetsFailed) || rage::grcDevice::IsDeviceLost())
             return nullptr;
         if (FAILED(device->CreateTexture(width, height, 1, D3DUSAGE_RENDERTARGET, format, D3DPOOL_DEFAULT, &texture, nullptr)) || !texture ||
             FAILED(texture->GetSurfaceLevel(0, &surface)) || !surface)
         {
             SAFE_RELEASE(texture);
-            bSceneTargetsFailed = true;
+            SAFE_RELEASE(surface);
+            if (stickyFailure)
+                bSceneTargetsFailed = true;
             return nullptr;
         }
         return surface;
@@ -1669,7 +1862,15 @@ public:
     {
         using namespace TemporalAA;
 
-        if (RainFrame != SceneFrame || !RainLayerTexture || !target)
+        const PostCompanion* displayed = resolved && DisplayCompanion >= 0 && DisplayCompanionFrame == SceneFrame ?
+            &PostCompanions[DisplayCompanion] : nullptr;
+        if (displayed && !displayed->HasRain)
+        {
+            RainFrame = 0;
+            return;
+        }
+        auto rainTexture = displayed ? displayed->Rain : RainLayerTexture;
+        if ((!displayed && RainFrame != SceneFrame) || !rainTexture || !target)
             return;
         RainFrame = 0;
         auto device = RealDevice();
@@ -1685,6 +1886,11 @@ public:
             0.0f, 0.0f,
         };
 
+        if (displayed)
+        {
+            offset[0] = displayed->Offset[0];
+            offset[1] = displayed->Offset[1];
+        }
         bInternalDraw = true;
         {
             StateBackup backup(device);
@@ -1698,7 +1904,7 @@ public:
             device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
             device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
             device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
-            BindSampler(device, 0, RainLayerTexture, resolved ? D3DTEXF_LINEAR : D3DTEXF_POINT);
+            BindSampler(device, 0, rainTexture, resolved ? D3DTEXF_LINEAR : D3DTEXF_POINT);
             device->SetPixelShader(RainCompositePS);
             device->SetPixelShaderConstantF(0, offset, 1);
             DrawFullscreen(device, static_cast<float>(desc.Width), static_cast<float>(desc.Height));
@@ -1815,16 +2021,18 @@ public:
         if (!surface)
             return;
 
-        bool historyValid = SteadyFrame != 0 && SteadyFrame + 1 == SceneFrame && PreviousCamera.Valid && !IsCameraCut();
+        bool historyValid = SteadyFrame != 0 && SteadyFrame + 1 == SceneFrame && PreviousCamera.Valid && !IsCameraCut() &&
+            PreviousCamera.Near == CurrentCamera.Near && PreviousCamera.Far == CurrentCamera.Far;
         auto width = static_cast<float>(HistoryWidth);
         auto height = static_cast<float>(HistoryHeight);
         // A neighbourhood more than 2% of the distance deep is an edge
         auto edge = std::log2(1.02f) / std::log2(CurrentCamera.Far / CurrentCamera.Near);
+        static auto steadyHold = FusionFixSettings.GetRef("PREF_STEADY_HOLD");
         float constants[3 * 4] =
         {
             1.0f / width, 1.0f / height, width, height,
             0.1f, 0.5f, 0.25f, historyValid ? 1.0f : 0.0f,
-            edge, 0.0f, 0.0f, 0.0f,
+            edge, steadyHold && steadyHold->get() != 0 ? 1.0f : 0.0f, 0.0f, 0.0f,
         };
 
         bInternalDraw = true;
@@ -1855,6 +2063,148 @@ public:
     {
         auto rt = SteadyDepthRT[SteadyIndex];
         return SteadyFrame != 0 && SteadyFrame == TemporalAA::SceneFrame && rt ? rt->mD3DTexture : nullptr;
+    }
+
+    // The upscaler's three slots own matching LOG depth, cloud mask and rain, independently of the
+    // scene's live targets. Slot 3 is a preflight copy so opting in cannot destroy an
+    // older submission before Evaluate has selected its displayed output.
+    struct PostCompanion
+    {
+        IDirect3DTexture9* Depth;
+        IDirect3DSurface9* DepthSurface;
+        IDirect3DTexture9* CloudMask;
+        IDirect3DSurface9* CloudMaskSurface;
+        IDirect3DTexture9* Rain;
+        IDirect3DSurface9* RainSurface;
+        uint64_t Id;
+        uint32_t Frame;
+        float Offset[2];
+        TemporalAA::FrameCamera Camera;
+        bool HasRain;
+        bool Valid;
+    };
+    static inline PostCompanion PostCompanions[4]{};
+    static inline int DisplayCompanion = -1;
+    static inline uint32_t DisplayCompanionFrame = 0;
+
+    static void ResetCompanions()
+    {
+        for (auto& slot : PostCompanions)
+        {
+            SAFE_RELEASE(slot.DepthSurface);
+            SAFE_RELEASE(slot.Depth);
+            SAFE_RELEASE(slot.CloudMaskSurface);
+            SAFE_RELEASE(slot.CloudMask);
+            SAFE_RELEASE(slot.RainSurface);
+            SAFE_RELEASE(slot.Rain);
+            slot = {};
+        }
+        DisplayCompanion = -1;
+        DisplayCompanionFrame = 0;
+    }
+
+    static bool CaptureCompanion(uint32_t index, uint64_t id)
+    {
+        using namespace TemporalAA;
+        if (index >= std::size(PostCompanions))
+            return false;
+        auto& slot = PostCompanions[index];
+        auto& staging = PostCompanions[3];
+        if (index < 3 && staging.Valid && staging.Frame == SceneFrame)
+        {
+            std::swap(slot, staging);
+            staging.Valid = false;
+            slot.Id = id;
+            return true;
+        }
+        slot.Valid = false;
+        auto device = RealDevice();
+        auto depth = GetSteadyDepth();
+        if (!depth)
+        {
+            // DepthRT contains perspective depth for SR; post effects need raw LOG depth.
+            auto raw = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_3_");
+            depth = raw ? raw->mD3DTexture : nullptr;
+        }
+        D3DSURFACE_DESC desc{};
+        if (!device || !depth || FAILED(depth->GetLevelDesc(0, &desc)))
+            return false;
+        auto destination = GetSceneTarget(device, slot.Depth, slot.DepthSurface, desc.Width, desc.Height, desc.Format, false);
+        IDirect3DSurface9* source = nullptr;
+        if (!destination || FAILED(depth->GetSurfaceLevel(0, &source)) || !source)
+            return false;
+        bool copied = SUCCEEDED(device->StretchRect(source, nullptr, destination, nullptr, D3DTEXF_NONE));
+        source->Release();
+        if (!copied)
+            return false;
+        // Sun shafts read DiffuseTex.x for cloud occlusion. It must describe the
+        // same scene as the saved LOG depth, including when steady depth is off.
+        auto cloudRT = rage::grcTextureFactoryPC::GetRTByName("_DEFERRED_GBUFFER_0_");
+        auto cloudMask = cloudRT ? cloudRT->mD3DTexture : nullptr;
+        if (!cloudMask || FAILED(cloudMask->GetLevelDesc(0, &desc)))
+            return false;
+        auto cloudDestination = GetSceneTarget(device, slot.CloudMask, slot.CloudMaskSurface,
+            desc.Width, desc.Height, desc.Format, false);
+        source = nullptr;
+        if (!cloudDestination || FAILED(cloudMask->GetSurfaceLevel(0, &source)) || !source)
+        {
+            SAFE_RELEASE(source);
+            return false;
+        }
+        copied = SUCCEEDED(device->StretchRect(source, nullptr, cloudDestination, nullptr, D3DTEXF_NONE));
+        source->Release();
+        if (!copied)
+            return false; // An unmatched cloud mask must fall back to current-frame SR.
+        slot.HasRain = RainFrame == SceneFrame && RainLayerTexture && RainLayerSurface;
+        if (slot.HasRain)
+        {
+            if (FAILED(RainLayerSurface->GetDesc(&desc)))
+                return false;
+            auto rain = GetSceneTarget(device, slot.Rain, slot.RainSurface, desc.Width, desc.Height, desc.Format, false);
+            if (!rain || FAILED(device->StretchRect(RainLayerSurface, nullptr, rain, nullptr, D3DTEXF_NONE)))
+                return false;
+        }
+        slot.Offset[0] = CurrentCamera.JitterPixels[0] / static_cast<float>(HistoryWidth);
+        slot.Offset[1] = CurrentCamera.JitterPixels[1] / static_cast<float>(HistoryHeight);
+        slot.Camera = CurrentCamera;
+        slot.Frame = SceneFrame;
+        slot.Id = id;
+        slot.Valid = true; // Dry frames are valid companions too.
+        return true;
+    }
+
+    static bool SelectCompanion(uint32_t index, uint64_t id)
+    {
+        using namespace TemporalAA;
+        if (index >= 3)
+            return false;
+        const auto& slot = PostCompanions[index];
+        if (!slot.Valid || slot.Id != id || slot.Camera.Near != CurrentCamera.Near || slot.Camera.Far != CurrentCamera.Far)
+            return false;
+        DisplayCompanion = static_cast<int>(index);
+        DisplayCompanionFrame = TemporalAA::SceneFrame;
+        return true;
+    }
+
+    static IDirect3DTexture9* GetPostDepth()
+    {
+        if (DisplayCompanion >= 0 && DisplayCompanionFrame == TemporalAA::SceneFrame)
+            return PostCompanions[DisplayCompanion].Depth;
+        return GetSteadyDepth();
+    }
+
+    static const TemporalAA::FrameCamera& GetPostCamera()
+    {
+        if (DisplayCompanion >= 0 && DisplayCompanionFrame == TemporalAA::SceneFrame)
+            return PostCompanions[DisplayCompanion].Camera;
+        return TemporalAA::CurrentCamera;
+    }
+
+    static IDirect3DTexture9* GetPostCloudMask()
+    {
+        if (DisplayCompanion >= 0 && DisplayCompanionFrame == TemporalAA::SceneFrame)
+            return PostCompanions[DisplayCompanion].CloudMask;
+        return nullptr;
     }
 
     // CCoronas::Render, a draw list callback after the fog pass: its effect reads _DEFERRED_GBUFFER_3_, which holds the
@@ -1920,6 +2270,10 @@ public:
     {
         using namespace TemporalAA;
 
+        // A dropped generated frame must not put a queue wait ahead of its still-pending real frame.
+        if (!FrameGeneration::BeforeUpscale(RealDevice()))
+            return false;
+
         LARGE_INTEGER now, frequency;
         QueryPerformanceCounter(&now);
         QueryPerformanceFrequency(&frequency);
@@ -1951,8 +2305,23 @@ public:
         frame.DLSSPreset = static_cast<uint32_t>(nDLSSPreset);
         frame.Reset = !(UpscalerFrame != 0 && UpscalerFrame + 1 == SceneFrame && PreviousCamera.Valid && !IsCameraCut());
 
+        Upscaler::Companions::Capture = [](uint32_t slot, uint64_t id) { return CaptureCompanion(slot, id); };
+        Upscaler::Companions::Select = [](uint32_t slot, uint64_t id) { return SelectCompanion(slot, id); };
+        Upscaler::Companions::Reset = []() { ResetCompanions(); };
+        DisplayCompanion = -1;
+        DisplayCompanionFrame = 0;
+        static auto pipelined = FusionFixSettings.GetRef("PREF_SR_PIPELINED");
+        const bool rangeChanged = PreviousCamera.Valid &&
+            (PreviousCamera.Near != CurrentCamera.Near || PreviousCamera.Far != CurrentCamera.Far);
+        frame.Reset = frame.Reset || rangeChanged;
+        if (frame.Reset)
+            ResetCompanions();
+        frame.PriorFrame = pipelined && pipelined->get() != 0 && CaptureCompanion(3, 0);
+
         // The camera in world space: rows of the inverse view, which looks along -z
         frame.FrameGeneration = FrameGeneration::IsEnabled();
+        static auto interpolationBackend = FusionFixSettings.GetRef("PREF_FG_BACKEND");
+        frame.InterpolationBackend = interpolationBackend ? static_cast<uint32_t>(std::clamp(interpolationBackend->get(), 0, 2)) : 0;
         frame.HighDynamicRange = HDROutput::IsActive();
         frame.HudLess = FrameGeneration::UsesHudLess();
         frame.AsyncGeneration = FrameGeneration::UsesAsyncCompute();
@@ -1978,7 +2347,10 @@ public:
         if (Upscaler::Profile)
             Upscaler::Profile(device, Upscaler::ProfilePart::Upscale, false);
         if (!evaluated)
+        {
+            ResetCompanions();
             return false;
+        }
 
         RecentJitter[RecentJitterCount % 32][0] = frame.JitterX;
         RecentJitter[RecentJitterCount % 32][1] = frame.JitterY;
@@ -2066,6 +2438,7 @@ private:
             }
         }
         UpscalerFrame = 0;
+        ResetCompanions();
 
         // TAA resolves at the render size only, the post processing stretches the scene instead; nor into the scene
         // it reads, which only DLSS and FSR can write
@@ -2187,6 +2560,7 @@ public:
         fLumaWeight = std::clamp(iniReader.ReadFloat("ANTIALIASING", "LumaWeight", 1.0f), 0.0f, 16.0f);
         fObjectDepthBias = std::clamp(iniReader.ReadFloat("ANTIALIASING", "ObjectDepthBias", 0.00002f), 0.0f, 0.01f);
         bObjectMotionVectors = iniReader.ReadInteger("ANTIALIASING", "ObjectMotionVectors", 1) != 0;
+        TemporalAA::bVehicleDamageMotionVectors = iniReader.ReadInteger("ANTIALIASING", "VehicleDamageMotionVectors", 1) != 0;
         fCameraCutDistance = std::max(iniReader.ReadFloat("ANTIALIASING", "CameraCutDistance", 25.0f), 1.0f);
         nDLSSPreset = std::clamp(iniReader.ReadInteger("ANTIALIASING", "DLSSPreset", 0), 0, 15);
         fFSRSharpness = std::clamp(iniReader.ReadFloat("ANTIALIASING", "FSRSharpness", 0.0f), 0.0f, 1.0f);
@@ -2306,6 +2680,7 @@ public:
 
             FusionFix::onBeforeReset() += []()
             {
+                Upscaler::ResetHistory();
                 ReleaseSceneTargets();
             };
 
@@ -2592,6 +2967,23 @@ export namespace TemporalAA
     IDirect3DTexture9* GetSteadyDepth()
     {
         return Temporal::GetSteadyDepth();
+    }
+
+    // LOG depth matched to the displayed SR slot; current steady depth outside pipelined SR.
+    IDirect3DTexture9* GetPostDepth()
+    {
+        return Temporal::GetPostDepth();
+    }
+
+    const FrameCamera& GetPostCamera()
+    {
+        return Temporal::GetPostCamera();
+    }
+
+    // Cloud occlusion matched to the displayed SR slot, or null for the live G-buffer fallback.
+    IDirect3DTexture9* GetPostCloudMask()
+    {
+        return Temporal::GetPostCloudMask();
     }
 
     // Called by PostFX once the post processing of the scene is drawn

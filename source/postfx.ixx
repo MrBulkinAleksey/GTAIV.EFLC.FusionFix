@@ -1450,6 +1450,30 @@ private:
                             if (PostFxResources.FullScreenDownsampleSurf && PostFxResources.FullScreenDownsampleSurf2)
                             {
                                 ProfilerScope timed(pDevice, kProfPostSunShafts);
+                                // The scene may be the preceding SR frame. Its depth, cloud mask and camera travel together.
+                                const auto& postCamera = TemporalAA::GetPostCamera();
+                                const bool delayedCamera = postCamera.Valid && postCamera.Frame != TemporalAA::CurrentCamera.Frame;
+                                float savedCamera[32]{}, savedRays[16]{}, postRays[16]{};
+                                pDevice->GetPixelShaderConstantF(217, savedRays, 4);
+                                if (delayedCamera)
+                                {
+                                    pDevice->GetPixelShaderConstantF(8, savedCamera, 8);
+                                    auto inverse = postCamera.View.Inverse();
+                                    float matrices[32]{};
+                                    for (int row = 0; row < 4; ++row)
+                                        for (int col = 0; col < 4; ++col)
+                                        {
+                                            matrices[row * 4 + col] = static_cast<float>(postCamera.ViewProjectionNoJitter.m[row][col]);
+                                            matrices[16 + row * 4 + col] = static_cast<float>(inverse.m[row][col]);
+                                            if (row < 3)
+                                                postRays[row * 4 + col] = static_cast<float>(inverse.m[row][col]);
+                                        }
+                                    postRays[12] = static_cast<float>(postCamera.ProjectionNoJitter.m[0][0]);
+                                    postRays[13] = static_cast<float>(postCamera.ProjectionNoJitter.m[1][1]);
+                                    postRays[14] = 1.0f;
+                                    pDevice->SetPixelShaderConstantF(8, matrices, 8);
+                                }
+                                pDevice->SetPixelShaderConstantF(217, postRays, 4);
                                 pDevice->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
                                 pDevice->SetSamplerState(8, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
                                 pDevice->SetSamplerState(8, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
@@ -1467,7 +1491,8 @@ private:
                                 if (PostFxResources.bEnablePreAlphaDepth)
                                     SetTextureBoth(pDevice, 1, PostDepth());
                                 SetTextureBoth(pDevice, 2, PostFxResources.textureRead);
-                                SetTextureBoth(pDevice, 13, PostFxResources.DiffuseTex);
+                                auto cloudMask = TemporalAA::GetPostCloudMask();
+                                SetTextureBoth(pDevice, 13, cloudMask ? cloudMask : PostFxResources.DiffuseTex);
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
 
                                 // sample sunshafts from a cropped texture
@@ -1487,9 +1512,9 @@ private:
                                     // c207: the sun's place on the screen (xy) and 1 (z) when the camera is known, else the
                                     // shader projects the sun with the game's matrix, jitter and all
                                     float flare[4] = {};
-                                    if (TemporalAA::CurrentCamera.Valid)
+                                    if (postCamera.Valid)
                                     {
-                                        auto& m = TemporalAA::CurrentCamera.ViewProjectionNoJitter.m;
+                                        auto& m = postCamera.ViewProjectionNoJitter.m;
                                         float clip[4];
                                         for (int j = 0; j < 4; ++j)
                                             clip[j] = static_cast<float>(SunDirectionWorld[0] * m[0][j] + SunDirectionWorld[1] * m[1][j] + SunDirectionWorld[2] * m[2][j]);
@@ -1512,6 +1537,9 @@ private:
                                 pDevice->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
                                 PostFxResources.swapbuffers();
 
+                                pDevice->SetPixelShaderConstantF(217, savedRays, 4);
+                                if (delayedCamera)
+                                    pDevice->SetPixelShaderConstantF(8, savedCamera, 8);
                                 pDevice->SetPixelShader(pShader);
                             }
                         }
@@ -1964,7 +1992,7 @@ private:
     // jitter when temporal anti-aliasing has it, which keeps their edges still
     static IDirect3DTexture9* PostDepth()
     {
-        if (auto steady = TemporalAA::GetSteadyDepth())
+        if (auto steady = TemporalAA::GetPostDepth())
             return steady;
         return PostFxResources.PreAlphaDepthCopyRT->mD3DTexture;
     }

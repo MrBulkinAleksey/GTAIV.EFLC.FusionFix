@@ -546,3 +546,27 @@ En el aire, usa ~PAD_LSTICK_ALL~ para moverte. En caída libre, pulsa ~INPUT_MOU
 
 [DUMMY_l11]
 Dummy label.
+
+[FF_SRPIPE]
+Reescalado diferido
+
+[FF_FGADAPT]
+Cadencia de cuadros adaptativa
+
+[FF_WHEELMV]
+Estabilización de ruedas
+
+[FF_DPHOLD]
+Retener profundidad cercana
+
+[FF_FGBACK]
+Motor de generación de cuadros
+
+[FF_FGSTOCK]
+Biblioteca AMD
+
+[FF_FGREF]
+Propio: referencia
+
+[FF_FGFUSE]
+Propio: pasos combinados

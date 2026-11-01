@@ -31,6 +31,10 @@ uniform float4 FusionPS209                : register(c209);
 uniform float4 FusionPS210                : register(c210);
 uniform float4 FusionPS216                : register(c216);
 uniform float4 FlareSun                   : register(c207);    // SSAdd only: xy the sun on the screen without temporal AA's jitter, z 1 when set (-1 behind the camera).
+uniform float4 PostViewX                  : register(c217);
+uniform float4 PostViewY                  : register(c218);
+uniform float4 PostViewZ                  : register(c219);
+uniform float4 PostProjection             : register(c220);    // xy projection scale, z: reconstruct rays for the displayed SR frame.
 sampler2D pHDRDownsampleTex               : register(s11);     // Custom downsample.
 sampler2D DiffuseTex                      : register(s13);     // Diffuse; cloud mask.
 
@@ -63,9 +67,15 @@ float2 FixHalfPixelOffset(float2 uv)
     return uv;
 }
 
-float SunMask(float3 viewray, float depth)
+float SunMask(float3 viewray, float depth, float2 uv)
 {
     float3 viewdir = normalize(DecodeLogDepth(depth) * -viewray);
+    if (PostProjection.z > 0.0f)
+    {
+        float2 ndc = float2(2.0f * uv.x - 1.0f, 1.0f - 2.0f * uv.y);
+        float3 ray = float3(ndc / PostProjection.xy, -1.0f);
+        viewdir = normalize(ray.x * PostViewX.xyz + ray.y * PostViewY.xyz + ray.z * PostViewZ.xyz);
+    }
     float mask = dot(viewdir, SunDirection.xyz);
     // Sun baseline = ~saturate(mask * 249.995773315f - 248.995773315f).
     return mask >= 0.996f ? 1.0f : 0.0f;
@@ -106,7 +116,7 @@ float4 SSPrepass(PS_IN i) : COLOR
     // Restrict to sky.
     color *= SkyMask(depth);
     // Restrict to sun.
-    color *= SunMask(i.viewray.xyz, depth);
+    color *= SunMask(i.viewray.xyz, depth, uv);
     // Fade out at the edges of the screen.
     color *= EdgeFade(uv);
     // Multiply by TimecycExt intensity.

@@ -2164,6 +2164,11 @@ public:
             { 0, "PREF_GRASS_WIND_DEBUG",       "DEBUG",      "GrassWindDebug",                     "",                           0, nullptr, 0, 1 },
             // Real reflections in the player car's mirrors in first person (carmirrors.ixx)
             { 0, "PREF_CAR_MIRRORS",            "MISC",       "CarMirrors",                         "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_SR_PIPELINED",           "ANTIALIASING", "UpscalerPipelined",                "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_FG_ADAPTIVE",            "ANTIALIASING", "FrameGenerationAdaptivePacing",    "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_WHEEL_MOTION",           "ANTIALIASING", "WheelMotionStabilization",         "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_STEADY_HOLD",            "ANTIALIASING", "SteadyDepthHold",                  "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_FG_BACKEND",             "ANTIALIASING", "FrameGenerationBackend",           "MENU_DISPLAY_FG_BACKEND",     0, nullptr, 0, 2 },
         };
 
         for (auto& setting : arr)
@@ -2202,6 +2207,7 @@ public:
         DefineDisplay("MENU_DISPLAY_BUTTONS", { "Xbox 360", "Xbox One", "PlayStation 3", "PlayStation 4", "PlayStation 5", "Nintendo Switch", "Steam Deck", "FE_STEAMPAD" });
         DefineDisplay("MENU_DISPLAY_ANTIALIASING", { "MO_OFF", "FXAA", "SMAA", "TAA", "DLAA", "FSR" });
         DefineDisplay("MENU_DISPLAY_UPSCALER_QUALITY", { "UpscNative", "UpscQuality", "UpscBalanced", "UpscPerf", "UpscUltraPerf" });
+        DefineDisplay("MENU_DISPLAY_FG_BACKEND", { "FF_FGSTOCK", "FF_FGREF", "FF_FGFUSE" });
         DefineDisplay("MENU_DISPLAY_CONSOLE_GAMMA", { "MO_OFF", "Xbox 360", "PlayStation 3" });
         DefineDisplay("MENU_DISPLAY_AUDIO_SYNC", { "MO_OFF", "MO_ALT", "MO_ON" });
         DefineDisplay("MENU_DISPLAY_EXTRA_NIGHT_SHADOWS", { "MO_OFF", "Lampposts", "LampostsHeadl", "LampHeadlVNS" });
@@ -2382,6 +2388,11 @@ public:
             AddRow(category, "UpscalerQuality", "PREF_UPSCALER_QUALITY", 5, "MENU_DISPLAY_UPSCALER_QUALITY");
             // AMD frame generation, with DLAA or FSR and AMD's frame generation library
             AddRow(category, "FrameGeneration", "PREF_FRAME_GENERATION", 2, toggle);
+            AddRow(category, "FF_FGBACK", "PREF_FG_BACKEND", 3, "MENU_DISPLAY_FG_BACKEND");
+            AddRow(category, "FF_SRPIPE", "PREF_SR_PIPELINED", 2, toggle);
+            AddRow(category, "FF_FGADAPT", "PREF_FG_ADAPTIVE", 2, toggle);
+            AddRow(category, "FF_WHEELMV", "PREF_WHEEL_MOTION", 2, toggle);
+            AddRow(category, "FF_DPHOLD", "PREF_STEADY_HOLD", 2, toggle);
             AddEmptyLine(category);
             AddRow(category, "Volumetric Fog", "PREF_VOLUMETRICFOG", 2, toggle);
             AddRow(category, "Sun Shafts", "PREF_SUNSHAFTS", 2, toggle);
@@ -2402,6 +2413,17 @@ public:
         };
         SetRowCondition("PREF_UPSCALER_QUALITY", upscalerAntialiasing);
         SetRowCondition("PREF_FRAME_GENERATION", upscalerAntialiasing);
+        SetRowCondition("PREF_FG_BACKEND", upscalerAntialiasing);
+        SetRowCondition("PREF_SR_PIPELINED", upscalerAntialiasing);
+        SetRowCondition("PREF_FG_ADAPTIVE", upscalerAntialiasing);
+        auto temporalAntialiasing = []() -> bool
+        {
+            static auto aa = FusionFixSettings.GetRef("PREF_ANTIALIASING");
+            return aa && (aa->get() == FusionFixSettings.AntialiasingText.eTAA ||
+                aa->get() == FusionFixSettings.AntialiasingText.eDLAA || aa->get() == FusionFixSettings.AntialiasingText.eFSR);
+        };
+        SetRowCondition("PREF_WHEEL_MOTION", temporalAntialiasing);
+        SetRowCondition("PREF_STEADY_HOLD", temporalAntialiasing);
 
         // Graphics: a Lighting category for the screen space effects and the reach of the night shadows
         for (auto screen : { MenuScreen::Graphics, MenuScreen::TitleGraphics })

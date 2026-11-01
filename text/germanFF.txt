@@ -546,3 +546,27 @@ Steuere in der Luft mit ~PAD_LSTICK_ALL~. Drücke im freien Fall ~INPUT_MOUSE_LM
 
 [DUMMY_l11]
 Dummy label.
+
+[FF_SRPIPE]
+Verzögertes Upscaling
+
+[FF_FGADAPT]
+Adaptive Bildausgabe
+
+[FF_WHEELMV]
+Radbewegung stabilisieren
+
+[FF_DPHOLD]
+Nahe Tiefe halten
+
+[FF_FGBACK]
+Bildgenerierung
+
+[FF_FGSTOCK]
+AMD-Bibliothek
+
+[FF_FGREF]
+Eigene Referenz
+
+[FF_FGFUSE]
+Eigene vereinte Durchläufe

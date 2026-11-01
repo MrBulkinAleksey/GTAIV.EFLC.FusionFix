@@ -546,3 +546,26 @@ Debug
 
 [DUMMY_l11]
 Dummy label.
+[FF_SRPIPE]
+遅延アップスケーリング
+
+[FF_FGADAPT]
+適応型フレームペーシング
+
+[FF_WHEELMV]
+ホイール動作の安定化
+
+[FF_DPHOLD]
+近景深度を保持
+
+[FF_FGBACK]
+フレーム生成方式
+
+[FF_FGSTOCK]
+AMDライブラリ
+
+[FF_FGREF]
+独自・基準
+
+[FF_FGFUSE]
+独自・統合パス

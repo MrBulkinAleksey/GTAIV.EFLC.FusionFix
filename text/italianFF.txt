@@ -546,3 +546,27 @@ Quando sei in aria usa ~PAD_LSTICK_ALL~ per muoverti. In caduta libera premi ~IN
 
 [DUMMY_l11]
 Dummy label.
+
+[FF_SRPIPE]
+Upscaling differito
+
+[FF_FGADAPT]
+Cadenza fotogrammi adattiva
+
+[FF_WHEELMV]
+Stabilizzazione ruote
+
+[FF_DPHOLD]
+Mantieni profondità vicina
+
+[FF_FGBACK]
+Motore generazione fotogrammi
+
+[FF_FGSTOCK]
+Libreria AMD
+
+[FF_FGREF]
+Interno: riferimento
+
+[FF_FGFUSE]
+Interno: passaggi uniti

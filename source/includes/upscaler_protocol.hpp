@@ -40,7 +40,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 17;
+    constexpr uint32_t Version = 19;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -53,6 +53,7 @@ namespace UpscalerProtocol
         Generate,       // the frame between the last Present and the one before, after an Evaluate of the same frame
         Shutdown,
         Present,        // ConfigureFlags::HelperPresent: Present to the screen, through the helper's swap chain
+        CpuFallback,    // before first Evaluate: abandon a failed bidirectional Wine fence probe
         Hide,           // ConfigureFlags::HelperPresent: the game presents itself, the helper's window hidden until the next Present
     };
 
@@ -83,8 +84,28 @@ namespace UpscalerProtocol
     // HudLess   DXGI_FORMAT_R16G16B16A16_FLOAT  Present before the HUD was drawn, which tells the HUD apart
     enum class Texture : uint32_t
     {
-        Color, Depth, Motion, Reactive, Output, Present, Generated, HudLess, Count
+        Color, Depth, Motion, Reactive, Output, Present, Generated, HudLess,
+        Slot1Color, Slot1Depth, Slot1Motion, Slot1Reactive, Slot1Output,
+        Slot2Color, Slot2Depth, Slot2Motion, Slot2Reactive, Slot2Output, Count
     };
+
+    constexpr uint32_t SlotCount = 3;
+    constexpr uint64_t ProbeInputValue = 1, ProbeOutputValue = 2;
+    constexpr Texture SlotTexture(Texture texture, uint32_t slot)
+    {
+        if (slot >= SlotCount || static_cast<uint32_t>(texture) >= static_cast<uint32_t>(Texture::Count))
+            return Texture::Count;
+        return slot && static_cast<uint32_t>(texture) <= static_cast<uint32_t>(Texture::Output)
+            ? static_cast<Texture>(8 + (slot - 1) * 5 + static_cast<uint32_t>(texture)) : texture;
+    }
+    constexpr Texture BaseTexture(Texture texture)
+    {
+        auto i = static_cast<uint32_t>(texture);
+        if (i >= static_cast<uint32_t>(Texture::Count))
+            return Texture::Count;
+        return i >= 8 ? static_cast<Texture>((i - 8) % 5) : texture;
+    }
+    constexpr bool IsExtraSlot(Texture texture) { return static_cast<uint32_t>(texture) >= 8; }
 
     // The inputs the game copies every frame
     constexpr uint32_t InputCount = static_cast<uint32_t>(Texture::Output);
@@ -98,7 +119,7 @@ namespace UpscalerProtocol
     // At the output size, the others at the render size
     constexpr bool IsOutputSize(Texture texture)
     {
-        return texture == Texture::Output || IsFrameGenerationTexture(texture);
+        return BaseTexture(texture) == Texture::Output || IsFrameGenerationTexture(texture);
     }
 
     namespace ConfigureFlags
@@ -111,10 +132,32 @@ namespace UpscalerProtocol
         constexpr uint32_t EightBitFrames = 1 << 5;   // the frame generation's textures are B8G8R8A8_UNORM; cleared by the helper if the GPU can't write them
         constexpr uint32_t AsyncGeneration = 1 << 6;  // Generate runs on a compute queue of the helper; cleared if it has none
         constexpr uint32_t HelperPresent = 1 << 7;    // the helper presents the frames, with the frame generation too; cleared if it can't
+        constexpr uint32_t OwnInterpolation = 1 << 10; // custom interpolation, reference path
+        constexpr uint32_t FusedInterpolation = 1 << 11; // custom interpolation, fused path
+        constexpr uint32_t PriorFrame = 1 << 9;       // independent SR slots; FG is disabled until aligned
         constexpr uint32_t AmdPacing = 1 << 8;        // with HelperPresent and the frame generation, AMD's swap chain generates and paces the frames; cleared if it can't
     }
 
 #pragma pack(push, 8)
+    struct FrameMetadata
+    {
+        uint64_t WaitValue;
+        uint64_t SignalValue;
+        float JitterX, JitterY;
+        float MotionScaleX, MotionScaleY;
+        float CameraNear, CameraFar, CameraFovY, FrameTimeMs, Sharpness;
+        uint32_t Reset;
+        float CameraPosition[3], CameraUp[3], CameraRight[3], CameraForward[3];
+        uint64_t FrameId;
+        uint32_t HudLess, Reserved1;
+    };
+    struct RingSlot
+    {
+        FrameMetadata Metadata; // immutable from input-ready until consumed
+        uint64_t Epoch;
+        uint64_t ConsumedValue; // input fence after last read, before reuse
+    };
+
     struct Shared
     {
         uint32_t Version;
@@ -195,13 +238,21 @@ namespace UpscalerProtocol
         // The helper's fences; with GameFence, the game's semaphores duplicated into the helper
         uint64_t InputFenceHandle;    // signalled by the game: WaitValue
         uint64_t OutputFenceHandle;   // signalled by the helper: SignalValue
+        uint32_t EvaluateSlot;
+        uint32_t Reserved3;
+        RingSlot Slots[SlotCount];
     };
 #pragma pack(pop)
 
     static_assert(sizeof(wchar_t) == 2);
     static_assert(offsetof(Shared, WaitValue) % 8 == 0);
     static_assert(offsetof(Shared, TextureHandles) % 8 == 0);
-    static_assert(sizeof(Shared) == 4024, "The layout must be identical in the x86 and x64 builds");
+    static_assert(sizeof(FrameMetadata) == 120);
+    static_assert(sizeof(RingSlot) == 136);
+    static_assert(offsetof(Shared, MaxLuminance) - offsetof(Shared, WaitValue) == sizeof(FrameMetadata));
+    static_assert(offsetof(Shared, FrameId) - offsetof(Shared, WaitValue) == offsetof(FrameMetadata, FrameId));
+    static_assert(offsetof(Shared, HudLess) - offsetof(Shared, WaitValue) == offsetof(FrameMetadata, HudLess));
+    static_assert(sizeof(Shared) == 4600, "The layout must be identical in the x86 and x64 builds");
 
     inline const wchar_t* MappingSuffix = L".Mapping";
     inline const wchar_t* RequestSuffix = L".Request";

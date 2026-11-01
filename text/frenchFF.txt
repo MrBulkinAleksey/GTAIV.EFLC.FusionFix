@@ -546,3 +546,26 @@ Dans les airs, utilise ~PAD_LSTICK_ALL~ pour te déplacer. En chute libre, appui
 
 [DUMMY_l11]
 Dummy label.
+[FF_SRPIPE]
+Upscaling différé
+
+[FF_FGADAPT]
+Cadencement adaptatif
+
+[FF_WHEELMV]
+Stabilisation des roues
+
+[FF_DPHOLD]
+Maintien de la profondeur proche
+
+[FF_FGBACK]
+Moteur de génération d’images
+
+[FF_FGSTOCK]
+Bibliothèque AMD
+
+[FF_FGREF]
+Interne : référence
+
+[FF_FGFUSE]
+Interne : passes fusionnées
