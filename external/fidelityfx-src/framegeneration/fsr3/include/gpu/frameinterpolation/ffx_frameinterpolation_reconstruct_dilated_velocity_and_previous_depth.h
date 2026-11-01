@@ -23,6 +23,26 @@
 #ifndef FFX_FRAMEINTERPOLATION_RECONSTRUCT_DILATED_VELOCITY_AND_PREVIOUS_DEPTH_H
 #define FFX_FRAMEINTERPOLATION_RECONSTRUCT_DILATED_VELOCITY_AND_PREVIOUS_DEPTH_H
 
+// The depth update with a look first: the image is cleared to the farthest depth before the pass, inside the pass the
+// cell only moves towards the nearest depth, by these atomics alone, and nothing reads it back here. A depth not
+// nearer than what a plain load finds cannot change the cell's final value, so the atomic is taken only where the
+// load saw something farther. The image ends as the extreme of the same set of values, whatever the order.
+void UpdateReconstructedDepthPreviousFrameTested(FfxInt32x2 iPxSample, FfxFloat32 fDepth)
+{
+    FfxUInt32 uDepth = ffxAsUInt32(fDepth);
+#if FFX_FRAMEINTERPOLATION_OPTION_INVERTED_DEPTH
+    if (rw_reconstructed_depth_previous_frame[iPxSample] < uDepth)
+    {
+        InterlockedMax(rw_reconstructed_depth_previous_frame[iPxSample], uDepth);
+    }
+#else
+    if (rw_reconstructed_depth_previous_frame[iPxSample] > uDepth)
+    {
+        InterlockedMin(rw_reconstructed_depth_previous_frame[iPxSample], uDepth);
+    }
+#endif
+}
+
 void ReconstructPrevDepth(FfxInt32x2 iPxPos, FfxFloat32 fDepth, FfxFloat32x2 fMotionVector, FfxInt32x2 iPxDepthSize)
 {
     fMotionVector *= FfxFloat32(length(fMotionVector * DisplaySize()) > 0.1f);
@@ -43,7 +63,7 @@ void ReconstructPrevDepth(FfxInt32x2 iPxPos, FfxFloat32 fDepth, FfxFloat32x2 fMo
 
             FfxInt32x2 iStorePos = bilinearInfo.iBasePos + iOffset;
             if (IsOnScreen(iStorePos, iPxDepthSize)) {
-                UpdateReconstructedDepthPreviousFrame(iStorePos, fDepth);
+                UpdateReconstructedDepthPreviousFrameTested(iStorePos, fDepth);
             }
         }
     }

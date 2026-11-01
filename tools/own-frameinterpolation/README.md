@@ -25,12 +25,13 @@ binary-only components that this target does not build or replace.
 
 The imported precompiled shader headers have been superseded entirely. No input
 binary container or external generator is used. `compile_shaders.py` independently
-compiles AMD HLSL and the local fused pass, parses DXC's resource reflection and
+compiles AMD HLSL, parses DXC's resource reflection and
 emits `build/own-frameinterpolation/own_shader_blobs.h` plus `shaders.json`.
 
 ## Reproducible build
 
-Use the official DXC **v1.8.2502**, compiler commit **4789-b4711839**:
+Use the official DXC **v1.8.2502**, compiler commit **b4711839e** (`dxc --version`
+reports `dxcompiler.dll: 1.8 - 1.8.2502.8 (b4711839e)`):
 https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.8.2502 .
 Linux archive `linux_dxc_2025_02_20.x86_64.tar.gz` SHA-256:
 `e0580d90dbf6053a783ddd8d5153285f0606e5deaad17a7a6452f03acdf88c71`.
@@ -59,12 +60,12 @@ uv run --with ziglang python tools/own-frameinterpolation/build.py --zig --dxc /
 python tools/own-frameinterpolation/compile_shaders.py --dxc /path/to/bin/dxc --verify
 ```
 
-There are 412 compiled combinations (32 each for 11 reference FI passes and the
-fused pass, four each for seven OF passes). FI permutation bits are low-res MV,
+There are 380 compiled combinations (32 each for 11 FI passes, four each for
+seven OF passes). FI permutation bits are low-res MV,
 jittered MV, inverted depth, wave64 and half; OF bits are wave64 and half. Normal
 kernels target cs_6_2, wave64 variants cs_6_6. Compiler flags are O3/HLSL 2021,
-16-bit types only for half permutations, no fast-math approximation added to
-fusion. Byte-identical DXIL is deduplicated with matching reflected bindings.
+16-bit types only for half permutations, no fast-math approximation added.
+Byte-identical DXIL is deduplicated with matching reflected bindings.
 The manifest includes compiler identity and output hash. `--verify` always runs
 fresh compilations and compares the resulting header, byte for byte.
 
@@ -75,14 +76,14 @@ the same API include directory). The public header consumes the helper's existin
 `ffx_api_types.h`; it does not include a second copy of the SDK. The vendored
 and helper API type headers were checked byte-identical for this build.
 
-* Backend 0: existing stock behavior, unchanged signed DLL loader and fallback.
-* Backend 1: `OwnFiMode::Reference`.
-* Backend 2: `OwnFiMode::Fused` (implemented, compiled; visual validation pending).
-* No quality/performance/guide-cap modes exist; do not expose extra choices.
-* Protocol selection: OwnInterpolation = 1<<10, FusedInterpolation = 1<<11.
-  Parent owns these protocol flags and their validation. Fused requires Own.
-* Keep AMD helper-present on stock. Own modes support caller-controlled explicit
-  Generate/game-present or a separately validated custom presenter only.
+* One path: the library records AMD's passes with this repository's edits (see
+  `external/fidelityfx-src/provenance.json`, `local_changes`). There are no modes
+  or extra choices; where the library is missing or fails, the helper falls back
+  to the signed runtime.
+* Protocol selection: OwnInterpolation = 1<<10, set by the game with every frame
+  generation configuration and kept or cleared by the helper in its answer.
+* Keep AMD helper-present on stock. The own library supports caller-controlled
+  explicit Generate/game-present or the helper's own presenter only.
 
 Create once with the caller device, max render/display sizes, backbuffer format,
 history source format, and documented depth/HDR/MV flags. Flags exclude async:
@@ -131,22 +132,20 @@ system/DLL-directory search restrictions. It never binds the signed runtime's
 exports. Destroy only after GPU retirement; the loader destructor has the same
 requirement. Module lifetime must exceed all contexts and recorded GPU work.
 
-## Fusion and validation limits
+## Edits and validation limits
 
-Reference preserves AMD's separate reconstruct-depth and game-vector passes.
-Fused omits the separate dispatch and performs `ReconstructPrevDepth` from the
-same loaded depth/MV pair inside the game-vector function. The original depth
-bilinear weights/thresholds, depth atomics, vector priorities and secondary loop
-remain. Both passes read the same guides/distortion; the vector pass never reads
-the reconstructed depth UAV, and its consumers execute later with normal backend
-UAV barriers. The common loads are removed; no guide cap or flow approximation
-is made. Padding-thread behavior is left as AMD implements it.
+The game motion vector field pass also does the depth splat of the
+reconstruct-previous-depth pass, from the same loaded depth/MV pair, and that
+pass's dispatch is not scheduled; the field and depth atomics load their cell
+first and run only where they can still change it. The original depth bilinear
+weights/thresholds, vector priorities and the secondary loop remain. Nothing
+reads the splatted depth before the disocclusion mask pass, three passes later.
+Padding-thread behavior is left as AMD implements it.
 
 The secondary-vector loop already reads atomic return values. Removing a dispatch
 can change interleavings/occupancy; mathematical preservation is NOT a proof of
-bit identity or visual equivalence. Replay must establish reference-vs-reference
-repeatability before interpreting reference-vs-fused differences. Test SDR/HDR,
-odd/resized render sizes, display MV, jitter/inverted depth, cuts, dropped Generate,
+bit identity or visual equivalence. Test SDR/HDR,
+odd/resized render sizes, display MV, jitter/inverted depth, dropped Generate,
 and actual wave32/wave64 GPUs. Capture intermediate depth and vector UAVs as well
 as final frames; compare output and timings. No GPU speedup or game correctness
 is claimed from compilation or the loader smoke test.

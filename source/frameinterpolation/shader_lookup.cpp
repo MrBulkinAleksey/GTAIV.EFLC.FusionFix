@@ -3,7 +3,7 @@
 #include "own_shader_blobs.h"
 extern "C" FfxErrorCode frameInterpolationGetPermutationBlobByIndex(FfxFrameInterpolationPass pass, uint32_t flags, FfxShaderBlob* out)
 {
-    if (!out || unsigned(pass) >= 12 || flags >= 32) return FFX_ERROR_INVALID_ARGUMENT;
+    if (!out || unsigned(pass) >= 11 || flags >= 32) return FFX_ERROR_INVALID_ARGUMENT;
     *out = own_frameinterpolation[unsigned(pass)][flags];
     return FFX_OK;
 }

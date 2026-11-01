@@ -22,11 +22,9 @@
 #define OWN_FI_API extern "C"
 #endif
 struct OwnFiContext;
-enum class OwnFiMode : uint32_t { Reference = 1, Fused = 2 };
 enum OwnFiResult : int32_t { OwnFiOk = 0, OwnFiNoFrame = 1, OwnFiInvalid = -1, OwnFiFailure = -2 };
 struct OwnFiCreateDescription {
     uint32_t abiVersion = 1;
-    OwnFiMode mode = OwnFiMode::Reference;
     ID3D12Device* device = nullptr;
     FfxApiDimensions2D maxRenderSize{}, displaySize{};
     FfxApiSurfaceFormat backBufferFormat{}, historyFormat{};

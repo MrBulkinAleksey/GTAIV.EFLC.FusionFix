@@ -295,7 +295,7 @@ static FfxErrorCode createPipelineStates(FfxFrameInterpolationContext_Private* c
     // Set up pipeline descriptor (basically RootSignature and binding)
     auto CreateComputePipeline = [&](FfxPass pass, const wchar_t* name, FfxPipelineState* pipeline) -> FfxErrorCode {
         FfxShaderBlob shaderBlob = {}; 
-        frameInterpolationGetPermutationBlobByIndex((FfxFrameInterpolationPass)((pass == FFX_FRAMEINTERPOLATION_PASS_GAME_MOTION_VECTOR_FIELD && (contextFlags & (1u << 30))) ? FFX_FRAMEINTERPOLATION_PASS_COUNT : pass), getPipelinePermutationFlags(contextFlags, pass, supportedFP16, canForceWave64, useLut), &shaderBlob);
+        frameInterpolationGetPermutationBlobByIndex(FfxFrameInterpolationPass(pass), getPipelinePermutationFlags(contextFlags, pass, supportedFP16, canForceWave64, useLut), &shaderBlob);
         ffxSafeReleasePipeline(&context->contextDescription.backendInterface, pipeline, context->effectContextId);
         wcscpy_s(pipelineDescription.name, name);
         FFX_VALIDATE(context->contextDescription.backendInterface.fpCreatePipeline(
@@ -1226,9 +1226,9 @@ FFX_API FfxErrorCode ffxFrameInterpolationDispatch(FfxFrameInterpolationContext*
                 contextPrivate->contextDescription.backendInterface.fpScheduleGpuJob(&contextPrivate->contextDescription.backendInterface, &clearJob);
             }
 
-            // Fused mode performs the same depth atomics in the game-vector dispatch.
-            if (!(contextPrivate->contextDescription.flags & (1u << 30)))
-                scheduleDispatch(contextPrivate, &contextPrivate->pipelineFiReconstructPreviousDepth, renderDispatchSizeX, renderDispatchSizeY);
+            // The game motion vector field pass does this pass's depth splat itself, on the values it computes
+            // anyway: the dispatch is not scheduled. The pipeline is still created, as every permutation is, and
+            // never run; the clear of the estimated depth stays above, before both.
             scheduleDispatch(contextPrivate, &contextPrivate->pipelineFiGameMotionVectorField, renderDispatchSizeX, renderDispatchSizeY);
 
             scheduleDispatchGameVectorFieldInpaintingPyramid();

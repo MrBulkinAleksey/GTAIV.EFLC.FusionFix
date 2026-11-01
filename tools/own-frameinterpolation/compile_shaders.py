@@ -26,7 +26,7 @@ def compile_one(job, args, scratch):
     cmd = [args.dxc,'-T','cs_6_6' if wave else 'cs_6_2','-E','CS','-O3','-HV','2021','-Fo',str(binary),'-Fc',str(listing)]
     if half: cmd += ['-enable-16bit-types']
     for d in defines: cmd += ['-D',d]
-    for inc in [SDK/'api/internal/gpu',SDK/'framegeneration/fsr3/include/gpu',ROOT/'source/frameinterpolation']: cmd += ['-I',str(inc)]
+    for inc in [SDK/'api/internal/gpu',SDK/'framegeneration/fsr3/include/gpu']: cmd += ['-I',str(inc)]
     cmd += [str(src)]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode: raise RuntimeError(' '.join(cmd)+'\n'+result.stderr)
@@ -63,7 +63,7 @@ def emit(records):
             out += [f'static const FfxShaderBlob {symbol}_blob = {{'+','.join([symbol,str(len(b)),'"CS"']+[str(len(g)) for g in groups]+fields)+'};']
         tables[kind][pi,opt]=symbol+'_blob'
     for kind,table in tables.items():
-        count=12 if kind=='frameinterpolation' else 7; permutations=32 if kind=='frameinterpolation' else 4
+        count=11 if kind=='frameinterpolation' else 7; permutations=32 if kind=='frameinterpolation' else 4
         out += [f'static const FfxShaderBlob own_{kind}[{count}][{permutations}] = {{']
         for pi in range(count): out += ['{'+','.join(table[pi,opt] for opt in range(permutations))+'},']
         out += ['};']
@@ -72,12 +72,11 @@ def emit(records):
 def main():
     p=argparse.ArgumentParser();p.add_argument('--dxc',required=True);p.add_argument('--output',type=pathlib.Path,default=ROOT/'build/own-frameinterpolation');p.add_argument('--verify',action='store_true');p.add_argument('--jobs',type=int,default=8); a=p.parse_args()
     version=subprocess.check_output([a.dxc,'--version'],text=True)
-    if '1.8' not in version or '4789-b4711839' not in version: raise SystemExit('Expected pinned DXC v1.8.2502 (commit 4789); got '+version)
+    if '1.8.2502' not in version or 'b4711839' not in version: raise SystemExit('Expected pinned DXC v1.8.2502 (commit b4711839); got '+version)
     jobs=[]
     for kind,names in [('frameinterpolation',FI),('opticalflow',OF)]:
         for pi,name in enumerate(names):
             for opt in range(32 if kind=='frameinterpolation' else 4): jobs.append((kind,pi,opt,SDK/'framegeneration/fsr3/internal/shaders'/filename(kind,name)))
-    for opt in range(32): jobs.append(('frameinterpolation',11,opt,ROOT/'source/frameinterpolation/fused.hlsl'))
     with tempfile.TemporaryDirectory() as td:
         with concurrent.futures.ThreadPoolExecutor(a.jobs) as pool: records=list(pool.map(lambda job:compile_one(job,a,pathlib.Path(td)),jobs))
     data=emit(records); target=a.output/'own_shader_blobs.h'

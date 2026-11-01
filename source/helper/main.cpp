@@ -1117,13 +1117,12 @@ namespace
         }
 
         bool CreateOwnInterpolation(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight,
-            bool hdr, bool eightBit, bool fused)
+            bool hdr, bool eightBit)
         {
             ReleaseFrameGeneration(); // Configure has already flushed both queues.
             if (ownFailure)
                 return false;
             OwnFiCreateDescription create{};
-            create.mode = fused ? OwnFiMode::Fused : OwnFiMode::Reference;
             create.device = device;
             create.maxRenderSize = { width, height };
             create.displaySize = { outputWidth, outputHeight };
@@ -1139,7 +1138,7 @@ namespace
             }
             displayWidth = outputWidth;
             displayHeight = outputHeight;
-            Log("Own interpolation: %s at %ux%u -> %ux%u", fused ? "fused" : "reference", width, height, outputWidth, outputHeight);
+            Log("Own interpolation at %ux%u -> %ux%u", width, height, outputWidth, outputHeight);
             return true;
         }
 
@@ -3192,7 +3191,7 @@ namespace
                 auto format = eightBit ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R16G16B16A16_FLOAT;
                 // The own library where the game asked for it and it is there; the signed runtime where it isn't
                 const bool ownRequested = (flags & Protocol::ConfigureFlags::OwnInterpolation) != 0;
-                bool interpolation = ownRequested && fsr.CreateOwnInterpolation(width, height, outputWidth, outputHeight, hdr, eightBit, false);
+                bool interpolation = ownRequested && fsr.CreateOwnInterpolation(width, height, outputWidth, outputHeight, hdr, eightBit);
                 if (interpolation)
                 {
                     if (flags & Protocol::ConfigureFlags::AmdPacing)

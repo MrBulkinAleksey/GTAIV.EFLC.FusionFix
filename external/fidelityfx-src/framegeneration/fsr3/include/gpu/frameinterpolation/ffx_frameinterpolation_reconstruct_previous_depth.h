@@ -23,6 +23,25 @@
 #ifndef FFX_FRAMEINTERPOLATION_RECONSTRUCT_PREVIOUS_DEPTH_H
 #define FFX_FRAMEINTERPOLATION_RECONSTRUCT_PREVIOUS_DEPTH_H
 
+// The depth update with a look first: the reconstruct-and-dilate pass's twin, for the estimated depth of the
+// generated frame. The cell only moves towards the nearest depth inside the pass, so the atomic is taken only where
+// a plain load finds something farther.
+void UpdateReconstructedDepthInterpolatedFrameTested(FfxInt32x2 iPxSample, FfxFloat32 fDepth)
+{
+    FfxUInt32 uDepth = ffxAsUInt32(fDepth);
+#if FFX_FRAMEINTERPOLATION_OPTION_INVERTED_DEPTH
+    if (rw_reconstructed_depth_interpolated_frame[iPxSample] < uDepth)
+    {
+        InterlockedMax(rw_reconstructed_depth_interpolated_frame[iPxSample], uDepth);
+    }
+#else
+    if (rw_reconstructed_depth_interpolated_frame[iPxSample] > uDepth)
+    {
+        InterlockedMin(rw_reconstructed_depth_interpolated_frame[iPxSample], uDepth);
+    }
+#endif
+}
+
 void ReconstructPrevDepth(FfxInt32x2 iPxPos, FfxUInt32 depthTarget, FfxFloat32 fDepth, FfxFloat32x2 fMotionVector, FfxInt32x2 iPxDepthSize)
 {
     const FfxFloat32x2 fUv = (iPxPos + FfxFloat32(0.5)) / iPxDepthSize;
@@ -41,7 +60,7 @@ void ReconstructPrevDepth(FfxInt32x2 iPxPos, FfxUInt32 depthTarget, FfxFloat32 f
             if (IsOnScreen(iSamplePos, RenderSize()))
             {
                 if (depthTarget != 0) {
-                    UpdateReconstructedDepthInterpolatedFrame(iSamplePos, fDepth);
+                    UpdateReconstructedDepthInterpolatedFrameTested(iSamplePos, fDepth);
                 }
             }
         }

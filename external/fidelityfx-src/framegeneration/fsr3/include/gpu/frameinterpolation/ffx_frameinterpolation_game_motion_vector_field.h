@@ -72,7 +72,38 @@ void computeGameFieldMvs(FfxInt32x2 iPxPos)
 
             if (IsOnScreen(iSamplePos, RenderSize()))
             {
-                UpdateGameMotionVectorField(iSamplePos, packedVectorPrimary);
+                // The depth splat of the reconstruct-previous-depth pass, done here on the values this pass computes
+                // anyway (the same loads, the same four positions), so that pass's dispatch is not scheduled. With
+                // the look first: the atomic is taken only where this depth is nearer than what the cell holds; the
+                // cell only moves towards the nearest depth, so the image ends the same, and nothing reads it before
+                // the disocclusion mask pass, three passes later.
+                if (bilinearInfo.fWeights[iSampleIndex] > fReconstructedDepthBilinearWeightThreshold)
+                {
+                    const FfxUInt32 uDepthSample = ffxAsUInt32(fDepthSample);
+#if FFX_FRAMEINTERPOLATION_OPTION_INVERTED_DEPTH
+                    if (rw_reconstructed_depth_interpolated_frame[iSamplePos] < uDepthSample)
+                    {
+                        InterlockedMax(rw_reconstructed_depth_interpolated_frame[iSamplePos], uDepthSample);
+                    }
+#else
+                    if (rw_reconstructed_depth_interpolated_frame[iSamplePos] > uDepthSample)
+                    {
+                        InterlockedMin(rw_reconstructed_depth_interpolated_frame[iSamplePos], uDepthSample);
+                    }
+#endif
+                }
+                // A cell of the field only grows inside this pass: the setup zeroed it and every write of it is an
+                // atomic maximum. A value no larger than what a plain load finds there cannot change the cell's final
+                // content, so the atomic is taken only where the load saw something smaller. The field ends as the
+                // maximum of the same set of values, whatever the order the threads ran in.
+                if (rw_game_motion_vector_field_x[iSamplePos] < packedVectorPrimary.x)
+                {
+                    InterlockedMax(rw_game_motion_vector_field_x[iSamplePos], packedVectorPrimary.x);
+                }
+                if (rw_game_motion_vector_field_y[iSamplePos] < packedVectorPrimary.y)
+                {
+                    InterlockedMax(rw_game_motion_vector_field_y[iSamplePos], packedVectorPrimary.y);
+                }
             }
         }
     }
@@ -110,7 +141,20 @@ void computeGameFieldMvs(FfxInt32x2 iPxPos)
 
                 if (bWriteSecondary)
                 {
-                    const FfxUInt32 uExistingVectorFieldEntry = UpdateGameMotionVectorFieldEx(iSamplePos, packedVectorSecondary);
+                    // The Ex update with the same look first. "What was there" is the atomic's own answer where the
+                    // atomic is taken and the load's where it is not; both are a look at a cell other threads are
+                    // still writing, which is what the walk's count of primary hits always read.
+                    FfxUInt32 uPreviousValueX = rw_game_motion_vector_field_x[iSamplePos];
+                    if (uPreviousValueX < packedVectorSecondary.x)
+                    {
+                        InterlockedMax(rw_game_motion_vector_field_x[iSamplePos], packedVectorSecondary.x, uPreviousValueX);
+                    }
+                    FfxUInt32 uPreviousValueY = rw_game_motion_vector_field_y[iSamplePos];
+                    if (uPreviousValueY < packedVectorSecondary.y)
+                    {
+                        InterlockedMax(rw_game_motion_vector_field_y[iSamplePos], packedVectorSecondary.y, uPreviousValueY);
+                    }
+                    const FfxUInt32 uExistingVectorFieldEntry = ffxMax(uPreviousValueX, uPreviousValueY);
 
                     uNumPrimaryHits += FfxUInt32(PackedVectorFieldEntryIsPrimary(uExistingVectorFieldEntry));
                     bWriteSecondary = bWriteSecondary && (uNumPrimaryHits <= 3);

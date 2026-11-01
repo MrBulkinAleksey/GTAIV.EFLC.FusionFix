@@ -78,7 +78,6 @@ int32_t OwnFiCreate(const OwnFiCreateDescription* d, OwnFiContext** out)
     if (!out) return OwnFiInvalid;
     *out = nullptr;
     if (!d || d->abiVersion != 1 || !d->device ||
-        (d->mode != OwnFiMode::Reference && d->mode != OwnFiMode::Fused) ||
         !d->maxRenderSize.width || !d->maxRenderSize.height || !d->displaySize.width || !d->displaySize.height ||
         (d->flags & ~uint32_t(1 | 2 | 8 | 16 | 32))) return OwnFiInvalid;
     auto* c = new (std::nothrow) OwnFiContext;
@@ -106,7 +105,7 @@ int32_t OwnFiCreate(const OwnFiCreateDescription* d, OwnFiContext** out)
     c->ofLive = true;
     FfxFrameInterpolationContextDescription fi{};
     fi.backendInterface = c->effects;
-    fi.flags = d->flags | (d->mode == OwnFiMode::Fused ? (1u << 30) : 0);
+    fi.flags = d->flags;
     fi.maxRenderSize = d->maxRenderSize; fi.displaySize = d->displaySize;
     fi.backBufferFormat = d->backBufferFormat; fi.previousInterpolationSourceFormat = d->historyFormat;
     if (ffxFrameInterpolationContextCreate(&c->fi, &fi) != FFX_OK || c->backendError != FFX_OK) return fail();
