@@ -72,7 +72,7 @@ def emit(records):
 def main():
     p=argparse.ArgumentParser();p.add_argument('--dxc',required=True);p.add_argument('--output',type=pathlib.Path,default=ROOT/'build/own-frameinterpolation');p.add_argument('--verify',action='store_true');p.add_argument('--jobs',type=int,default=8); a=p.parse_args()
     version=subprocess.check_output([a.dxc,'--version'],text=True)
-    if '1.8' not in version or '4789-b4711839' not in version: raise SystemExit('Expected pinned DXC v1.8.2502 (commit 4789); got '+version)
+    if '1.8.2502' not in version or 'b4711839' not in version: raise SystemExit('Expected pinned DXC v1.8.2502 (commit b4711839); got '+version)
     jobs=[]
     for kind,names in [('frameinterpolation',FI),('opticalflow',OF)]:
         for pi,name in enumerate(names):

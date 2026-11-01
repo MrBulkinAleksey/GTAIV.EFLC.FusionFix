@@ -30,7 +30,8 @@ emits `build/own-frameinterpolation/own_shader_blobs.h` plus `shaders.json`.
 
 ## Reproducible build
 
-Use the official DXC **v1.8.2502**, compiler commit **4789-b4711839**:
+Use the official DXC **v1.8.2502**, compiler commit **b4711839e** (`dxc --version`
+reports `dxcompiler.dll: 1.8 - 1.8.2502.8 (b4711839e)`):
 https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.8.2502 .
 Linux archive `linux_dxc_2025_02_20.x86_64.tar.gz` SHA-256:
 `e0580d90dbf6053a783ddd8d5153285f0606e5deaad17a7a6452f03acdf88c71`.
