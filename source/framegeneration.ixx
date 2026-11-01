@@ -510,6 +510,9 @@ namespace
         bPending = false;
         bPendingGenerated = false;
         bSkipPresent = false;
+        bHudLessCaptured = false;
+        HudLessFrame = 0;
+        Upscaler::DropGenerated();
         ReleaseGpuTiming();
         SAFE_RELEASE(SmallRT);
         SAFE_RELEASE(SmallMemory);
@@ -648,6 +651,11 @@ namespace
                     return;
                 }
             }
+            // TakeGenerated collected the helper's answer: the own interpolation's history seeding can discover its
+            // no-frame only then. The real frame stays pending with its original deadline; what is in GeneratedRT is
+            // its copy, not an interpolation, and must not be shown as one.
+            if (Upscaler::WasGenerateReset())
+                return;
         }
         else
         {
@@ -944,6 +952,8 @@ namespace
             bPending = false;
             bPendingGenerated = false;
             bSkipPresent = false;
+            bHudLessCaptured = false;
+            HudLessFrame = 0;
             Upscaler::DropGenerated();
         }
     }
@@ -951,6 +961,13 @@ namespace
     bool IsMenuActive()
     {
         return CMenuManager::m_MenuActive && *CMenuManager::m_MenuActive;
+    }
+
+    // The engine's phone flag; an unresolved flag conservatively suppresses generation too: the phone is drawn over the
+    // scene while it is up, and a frame interpolated across its appearance drags it over the whole screen
+    bool IsPhoneVisible()
+    {
+        return !CPhoneMgr::bDisplayMobile || *CPhoneMgr::bDisplayMobile;
     }
 
     // Whatever is drawn over the whole frame after the HUD is part of the finished frame, and so has to be of the copy
@@ -1095,8 +1112,24 @@ namespace
     {
         ++FrameNumber;
         UpdateMode();
-        bool hudLess = bHudLessCaptured;
+        // A texture left over from an earlier frame is not a valid HUD mask
+        bool hudLess = bHudLessCaptured && HudLessRT != nullptr && HudLessFrame == FrameNumber;
         bHudLessCaptured = false;
+        // The transitions of the two suppressions, so a report says why no frame was generated
+        static int previousPhone = -1, previousMissingHudLess = -1;
+        const int phone = mode != Mode::Off && IsPhoneVisible();
+        const int missingHudLess = mode != Mode::Off && !hudLess;
+        if (phone != previousPhone)
+        {
+            Log("Phone protection: %s%s", phone ? "generation suppressed" : "clear",
+                phone && !CPhoneMgr::bDisplayMobile ? " (phone flag unavailable)" : "");
+            previousPhone = phone;
+        }
+        if (missingHudLess != previousMissingHudLess)
+        {
+            Log("HUD-less protection: %s", missingHudLess ? "generation suppressed (no fresh capture)" : "clear");
+            previousMissingHudLess = missingHudLess;
+        }
         bool sharpen = bSharpenDeferred;
         bSharpenDeferred = false;
         FusionFix::bFrameGenerationPresenting = false;
@@ -1123,7 +1156,7 @@ namespace
                 bPending = bPendingGenerated = false;
                 Upscaler::DropGenerated();
             }
-            bool generate = mode != Mode::Off && Upscaler::IsFrameGenerationReady() && !IsMenuActive();
+            bool generate = mode != Mode::Off && Upscaler::IsFrameGenerationReady() && !IsMenuActive() && !IsPhoneVisible() && hudLess;
             bPresentedByHelper = PresentThroughHelper(device, generate, hudLess);
             if (bPresentedByHelper)
             {
@@ -1168,13 +1201,24 @@ namespace
 
         // This frame ended before the last one's frames went: they go first, in their order
         if (bPendingGenerated)
-            PresentWaiting(device, true, true);
+        {
+            // The phone came up while the generated frame waited: it is stale, and interpolating across the phone's
+            // appearance drags it; the real frame's schedule is untouched
+            if (IsPhoneVisible())
+            {
+                bPendingGenerated = false;
+                Upscaler::DropGenerated();
+            }
+            else
+                PresentWaiting(device, true, true);
+        }
         if (bPending)
             PresentWaiting(device, true, false);
         bBackBufferDrawn = false;
 
-        // Not in the menus: the generation starts over once they close
-        if (!Upscaler::IsFrameGenerationReady() || IsMenuActive())
+        // Not in the menus, not while the phone is up, not without a fresh HUD-less copy of this frame: the generation
+        // starts over once they come back. Skipping it leaves a gap in the frame numbers, which asks for the reset.
+        if (!Upscaler::IsFrameGenerationReady() || IsMenuActive() || IsPhoneVisible() || !hudLess)
         {
             if (sharpen)
                 SharpenBackBuffer(device, hudLess, false);
@@ -1404,7 +1448,7 @@ export namespace FrameGeneration
     bool DefersSharpening()
     {
         // Not while the helper presents: it shows the generated frames itself, unsharpened
-        bSharpenDeferred = Sharpen && mode != Mode::Off && Upscaler::IsFrameGenerationReady() && !IsMenuActive() && !IsHelperPresenting();
+        bSharpenDeferred = Sharpen && mode != Mode::Off && Upscaler::IsFrameGenerationReady() && !IsMenuActive() && !IsPhoneVisible() && !IsHelperPresenting();
         return bSharpenDeferred;
     }
 

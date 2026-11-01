@@ -266,6 +266,11 @@ namespace
         // Once the output fence reaches waitValue: shared texture (Output or Generated) -> game texture. afterInputs: right after
         // SubmitInputs, with no D3D9 call in between, so the game's work has reached the queue already.
         virtual bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue, bool afterInputs) = 0;
+        // Enqueues a wait that orders the next inputs after the helper's last GPU read of a dropped output, without
+        // blocking the CPU or the queue
+        virtual bool DrainOutput(uint64_t value) = 0;
+        // True once the helper's GPU work signalled value on the output fence; no wait
+        virtual bool OutputReady(uint64_t value) = 0;
 
         // Size of a shared texture
         uint32_t Width(size_t index) const { return Protocol::IsOutputSize(static_cast<Protocol::Texture>(index)) ? outputWidth : width; }
@@ -938,6 +943,32 @@ namespace
             return true;
         }
 
+        bool DrainOutput(uint64_t value) override
+        {
+            if (WaitOnCpu())
+                return true;
+            VkTimelineSemaphoreSubmitInfo timeline{ VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
+            timeline.waitSemaphoreValueCount = 1;
+            timeline.pWaitSemaphoreValues = &value;
+            VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+            submit.pNext = &timeline;
+            submit.waitSemaphoreCount = 1;
+            submit.pWaitSemaphores = &outputSemaphore;
+            submit.pWaitDstStageMask = &stage;
+            interop->LockSubmissionQueue();
+            auto result = vk.vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE);
+            interop->ReleaseSubmissionQueue();
+            return result == VK_SUCCESS;
+        }
+
+        bool OutputReady(uint64_t value) override
+        {
+            uint64_t completed = 0;
+            return value && outputSemaphore && vk.vkGetSemaphoreCounterValue &&
+                vk.vkGetSemaphoreCounterValue(device, outputSemaphore, &completed) == VK_SUCCESS && completed >= value;
+        }
+
         void SignalFromCpu(uint64_t value) override
         {
             if (!vk.vkSignalSemaphore || !vk.vkGetSemaphoreCounterValue)
@@ -1103,6 +1134,19 @@ namespace
             auto desc = source->GetDesc();
             D3D12_BOX box{ 0, 0, 0, static_cast<UINT>(desc.Width), desc.Height, 1 };
             list->CopyTextureRegion(&to, 0, 0, 0, &from, &box);
+        }
+
+        bool DrainOutput(uint64_t value) override
+        {
+            return value && outputFence && SUCCEEDED(queue->Wait(outputFence, value));
+        }
+
+        bool OutputReady(uint64_t value) override
+        {
+            if (!value || !outputFence)
+                return false;
+            auto completed = outputFence->GetCompletedValue();
+            return completed != UINT64_MAX && completed >= value;
         }
 
         void SignalFromCpu(uint64_t value) override
@@ -1472,6 +1516,7 @@ namespace
     uint32_t configuredPreset = 0;
     uint32_t configuredFlags = 0;
     bool configureFailed = false;
+    bool ownInterpolationActive = false; // Accepted by the helper; false after its sticky stock fallback.
     // A request the helper did not answer in time, the helper still running: configured again once this tick count is
     // reached, a few times, rather than left to temporal AA until the mode or the size changes. The new configuration
     // also brings new fences, which a late signal of the helper can't take back down past the one signalled from the CPU.
@@ -1492,6 +1537,7 @@ namespace
     bool preparedHudLess = false;
     bool generatedReset = false;       // the last Generate had nothing to interpolate from
     uint64_t generatedValue = 0;       // the helper signals it once the frame posted by PostGenerate is generated; 0 when none waits
+    uint64_t drainGeneratedValue = 0;    // a dropped generated frame: the next inputs are ordered after the helper's last read of it
 
     // Presentation by the helper (ConfigureFlags::HelperPresent): its child window over the game's window, until the next
     // configuration; presentFailed until then once a Present failed
@@ -1545,7 +1591,7 @@ namespace
         retryConfigureAt = 0;
         generationFailed = false;
         preparedFrameId = 0;
-        generatedValue = 0;
+        generatedValue = drainGeneratedValue = 0;
         presentWindow = nullptr;    // went with the helper
         presentedValue = 0;
         if (!helper.Start(HelperPath(), bridge->luid))
@@ -1581,13 +1627,31 @@ namespace
     // ago, the helper answers once its GPU work is submitted. False: nothing can be asked of the helper now.
     bool CollectPending()
     {
-        if (!helper.pending)
+        // A dropped generated frame: order the next inputs after the helper's last GPU read of it, without waiting here
+        auto drain = []()
+        {
+            auto value = drainGeneratedValue;
+            if (value && (!bridge || !bridge->DrainOutput(value)))
+            {
+                configureFailed = true;
+                return false;
+            }
+            drainGeneratedValue = 0;
             return true;
+        };
+        if (!helper.pending)
+            return drain();
 
         Timing::Scope timed(Upscaler::TimingPart::Collect);
         auto answer = helper.Collect(500);
         if (answer == HelperProcess::Answer::Ok)
-            return true;
+        {
+            // A history-seeding Generate of the own interpolation answers Ok with its no-frame in GenerateReset
+            if (pendingCommand == Protocol::Command::Generate)
+                generatedReset |= helper.shared->GenerateReset != 0;
+            return drain();
+        }
+        drainGeneratedValue = 0;
 
         static uint32_t reported = 0;
         bool exited = WaitForSingleObject(helper.process, 0) == WAIT_OBJECT_0;
@@ -1610,9 +1674,23 @@ namespace
         if (pendingCommand == Protocol::Command::Hide)
             ;
         else if (pendingCommand == Protocol::Command::Generate)
+        {
             generationFailed = true;
+            // A failure of the own interpolation reconfigures onto the signed runtime, which the helper's sticky
+            // fallback has selected meanwhile
+            if ((configuredFlags & Protocol::ConfigureFlags::OwnInterpolation) && ownInterpolationActive)
+            {
+                ownInterpolationActive = false;
+                ScheduleRetry();
+            }
+        }
         else if (pendingCommand == Protocol::Command::Present)
             presentFailed = true;
+        else if ((configuredFlags & Protocol::ConfigureFlags::OwnInterpolation) && ownInterpolationActive)
+        {
+            ownInterpolationActive = false;
+            ScheduleRetry();
+        }
         else
             configureFailed = true;
         return true;
@@ -1771,9 +1849,11 @@ export namespace Upscaler
         auto flags = frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u;
         if (bridge->wine)
             flags |= Protocol::ConfigureFlags::Wine;
-        // Without HDR the frames are the 8-bit back buffer's: 8-bit textures halve what the frame generation's copies move
+        // Without HDR the frames are the 8-bit back buffer's: 8-bit textures halve what the frame generation's copies move.
+        // The own interpolation library is asked for with every frame generation; the helper falls back to the signed
+        // runtime where it is not, and says so in the flags it answers with
         if (frame.FrameGeneration && frameGenerationAvailable)
-            flags |= Protocol::ConfigureFlags::FrameGeneration |
+            flags |= Protocol::ConfigureFlags::FrameGeneration | Protocol::ConfigureFlags::OwnInterpolation |
                 (frame.HighDynamicRange ? Protocol::ConfigureFlags::HighDynamicRange : Protocol::ConfigureFlags::EightBitFrames) |
                 (frame.AsyncGeneration ? Protocol::ConfigureFlags::AsyncGeneration : 0u);
         if (frame.VulkanHelper && backend == Backend::FSR && bridge == &dxvkBridge)
@@ -1845,6 +1925,8 @@ export namespace Upscaler
                 Log("Synchronization: %s", bridge->gameFence ? "the game's semaphore, on the GPU" : "on the CPU");
             if ((flags & Protocol::ConfigureFlags::FrameGeneration) && !(shared.Flags & Protocol::ConfigureFlags::FrameGeneration))
                 Log("Frame generation could not be set up, the upscaler works without it");
+            else if ((flags & Protocol::ConfigureFlags::OwnInterpolation) && !(shared.Flags & Protocol::ConfigureFlags::OwnInterpolation))
+                Log("The own interpolation library is not there: the signed runtime generates the frames");
             if ((flags & Protocol::ConfigureFlags::HelperPresent) && !(shared.Flags & Protocol::ConfigureFlags::HelperPresent))
                 Log("The helper could not set up its presentation, the game presents");
             else if ((flags & Protocol::ConfigureFlags::AmdPacing) && !(shared.Flags & Protocol::ConfigureFlags::AmdPacing))
@@ -1860,6 +1942,7 @@ export namespace Upscaler
             Log("Configured %ux%u -> %ux%u in %llu ms: %s", frame.Width, frame.Height, outputWidth, outputHeight,
                 GetTickCount64() - configureStart, shared.Message);
 
+            ownInterpolationActive = (shared.Flags & Protocol::ConfigureFlags::OwnInterpolation) != 0;
             configureFailed = false;
             generationFailed = false;
             retryConfigureAt = 0;
@@ -1920,8 +2003,10 @@ export namespace Upscaler
         };
 
         // Synchronized on the GPU: the copy of the output waits there for outputValue, and the answer is collected
-        // next time
-        if (!bridge->WaitOnCpu())
+        // next time. With the own interpolation the preparation shares this list and a failure of it can invalidate
+        // the whole submission: its answer is waited for, and the current output is copied only once the submission
+        // is confirmed, so a failure leaves the scene for the parent's fallback
+        if (!bridge->WaitOnCpu() && !ownInterpolationActive)
         {
             Post(Protocol::Command::Evaluate, outputValue);
             prepare();
@@ -1929,7 +2014,8 @@ export namespace Upscaler
         }
 
         // On the CPU: the helper answers once its GPU work, which signals outputValue, has finished; it waits up to
-        // CpuSyncTimeout for it
+        // CpuSyncTimeout for it. The own interpolation answers once its submission is through, its GPU work still
+        // ordered by the output fence the copy waits for
         auto waitStart = Timing::Start();
         bool answered = helper.Request(Protocol::Command::Evaluate, CpuSyncTimeout);
         Timing::Add(TimingPart::CpuWait, waitStart);
@@ -1942,7 +2028,10 @@ export namespace Upscaler
             if (exited)
                 Lost();
             else
+            {
+                ownInterpolationActive = false;
                 ScheduleRetry();
+            }
             return false;
         }
 
@@ -1979,6 +2068,8 @@ export namespace Upscaler
     // game's GPU work goes on meanwhile. False: nothing to take.
     bool PostGenerate(IDirect3DTexture9* present, IDirect3DTexture9* hudLess, float maxLuminance)
     {
+        // The previous generated frame, taken or not: the next inputs are ordered after the helper's last read of it
+        drainGeneratedValue = std::max(drainGeneratedValue, generatedValue);
         generatedValue = 0;
         if (!IsFrameGenerationReady() || !present)
             return false;
@@ -2034,9 +2125,18 @@ export namespace Upscaler
             if (exited)
                 Lost();
             else
+            {
                 generationFailed = true;
+                if ((configuredFlags & Protocol::ConfigureFlags::OwnInterpolation) && ownInterpolationActive)
+                {
+                    ownInterpolationActive = false;
+                    ScheduleRetry();
+                }
+            }
             return false;
         }
+        // The own interpolation reports its history-seeding no-frame in the answer's GenerateReset
+        generatedReset |= shared.GenerateReset != 0;
         generatedValue = outputValue;
         return true;
     }
@@ -2046,20 +2146,43 @@ export namespace Upscaler
     // afterPost: right after PostGenerate, with no D3D9 call in between
     bool TakeGenerated(IDirect3DTexture9* generated, bool afterPost = false)
     {
-        auto value = generatedValue;
-        generatedValue = 0;
-        if (!value || !generated || state != State::Ready)
+        const auto value = generatedValue;
+        if (!value || state != State::Ready)
             return false;
+        if (!generated)
+        {
+            // Nothing to take it into: order the next inputs after the helper's last read of it
+            drainGeneratedValue = std::max(drainGeneratedValue, value);
+            generatedValue = 0;
+            return false;
+        }
         // The helper answered long ago; a failed Generate leaves nothing to take
         if (!CollectPending() || generationFailed)
             return false;
-        return bridge->SubmitOutput(generated, Protocol::Texture::Generated, value, afterPost);
+        generatedValue = 0;
+        const bool copied = bridge->SubmitOutput(generated, Protocol::Texture::Generated, value, afterPost);
+        if (!copied)
+            drainGeneratedValue = std::max(drainGeneratedValue, value);
+        return copied;
     }
 
     // The frame PostGenerate posted won't be taken
     void DropGenerated()
     {
+        drainGeneratedValue = std::max(drainGeneratedValue, generatedValue);
         generatedValue = 0;
+        generatedFrameId = 0;
+        preparedFrameId = 0;
+    }
+
+    // Render thread: call before a device reset or when no scene was evaluated.
+    // Next Evaluate recreates the imports/fences after collecting the outstanding request.
+    void ResetHistory()
+    {
+        drainGeneratedValue = std::max(drainGeneratedValue, generatedValue);
+        generatedValue = 0;
+        preparedFrameId = 0;
+        configuredBackend = 0;
     }
 
     // Both at once: generated receives the frame between the previous one and present

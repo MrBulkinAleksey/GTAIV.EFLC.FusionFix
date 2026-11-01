@@ -48,6 +48,7 @@
 #undef PfnFfxResourceDeallocatorFunc
 
 #include "upscaler_protocol.hpp"
+#include "own_frameinterpolation.hpp"
 
 using Microsoft::WRL::ComPtr;
 namespace Protocol = UpscalerProtocol;
@@ -144,6 +145,11 @@ namespace
         ComPtr<ID3D12Fence> presentFence;   // presentation: signalled by the present thread once Present and HudLess are free
         HANDLE presentFenceHandle = nullptr;
         ComPtr<ID3D12Fence> generatedFence; // presentation: Generate done, for the present thread; this process only
+        // Own interpolation reuses one history context across queues: order GPU work and retire it on the CPU
+        // before the next Prepare reuses backend scratch.
+        ComPtr<ID3D12Fence> ownFence;
+        uint64_t ownValue = 0;
+        bool ownRecording = false;
         uint64_t generatedValue = 0;
         ComPtr<ID3D12Fence> localFence;
         uint64_t localValue = 0;
@@ -339,7 +345,8 @@ namespace
             }
 
             if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&localFence))) ||
-                FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&generatedFence))))
+                FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&generatedFence))) ||
+                FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&ownFence))))
                 return false;
 
             CreateTimestamps();
@@ -375,21 +382,39 @@ namespace
         }
 
         // Command list of one frame
-        ID3D12GraphicsCommandList* BeginFrame(Work work)
+        ID3D12GraphicsCommandList* BeginFrame(Work work, uint64_t inputValue = 0, bool own = false)
         {
             current = work == Work::Generate && asyncGeneration && compute.queue ? &compute : &direct;
             auto& r = *current;
+            ownRecording = own;
+            // Establish the compute submission's causal input dependency before it can wait on another queue.
+            if (&r == &compute && !cpuSync)
+                r.queue->Wait(inputFence.Get(), inputValue);
+            // ownValue names only a signal already enqueued after executed work. That signal precedes the
+            // shared output-fence ordering waits, so this dependency cannot wait on a future game input.
+            if (own && ownValue)
+                r.queue->Wait(ownFence.Get(), ownValue);
             r.frame = (r.frame + 1) % Frames;
             auto fence = r.allocatorFences[r.frame] ? r.allocatorFences[r.frame] : FrameFence();
             if (fence)
-                WaitFence(fence, r.allocatorValues[r.frame], 1000);
+            {
+                const auto required = r.allocatorValues[r.frame];
+                if (!WaitFence(fence, required, 1000) || fence->GetCompletedValue() == UINT64_MAX || fence->GetCompletedValue() < required)
+                {
+                    Log("Command allocator did not retire: restarting the helper before reuse");
+                    ExitProcess(ERROR_TIMEOUT);
+                }
+            }
             // Timestamps the GPU wrote: only once it is past the frame
             if (r.stampCounts[r.frame] && fence && fence->GetCompletedValue() >= r.allocatorValues[r.frame])
                 ReadStamps(r, r.frame);
             r.stampCounts[r.frame] = 0;
             r.stampWork[r.frame] = work;
-            r.allocators[r.frame]->Reset();
-            r.list->Reset(r.allocators[r.frame].Get(), nullptr);
+            if (FAILED(r.allocators[r.frame]->Reset()) || FAILED(r.list->Reset(r.allocators[r.frame].Get(), nullptr)))
+            {
+                Log("Command allocator/list could not reset: restarting the helper");
+                ExitProcess(ERROR_DEVICE_NOT_AVAILABLE);
+            }
             return r.list.Get();
         }
 
@@ -408,6 +433,8 @@ namespace
                 return false;
             ID3D12CommandList* lists[] = { r.list.Get() };
             r.queue->ExecuteCommandLists(1, lists);
+            if (ownRecording)
+                r.queue->Signal(ownFence.Get(), ++ownValue);
             r.queue->Signal(localFence.Get(), ++localValue);
             r.allocatorValues[r.frame] = localValue;
             r.allocatorFences[r.frame] = nullptr;
@@ -424,6 +451,8 @@ namespace
             {
                 ID3D12CommandList* lists[] = { r.list.Get() };
                 r.queue->ExecuteCommandLists(1, lists);
+                if (ownRecording)
+                    r.queue->Signal(ownFence.Get(), ++ownValue);
             }
             // The output fence only goes up: the value given to the other queue before this one is signalled first, or
             // this one's would let the game take that queue's frame before it is ready. The work itself still overlaps.
@@ -449,11 +478,37 @@ namespace
             {
                 ID3D12CommandList* lists[] = { r.list.Get() };
                 r.queue->ExecuteCommandLists(1, lists);
+                if (ownRecording)
+                    r.queue->Signal(ownFence.Get(), ++ownValue);
             }
             r.queue->Signal(generatedFence.Get(), ++generatedValue);
             r.allocatorValues[r.frame] = generatedValue;
             r.allocatorFences[r.frame] = generatedFence.Get();
             return generatedValue;
+        }
+
+        bool RetireOwnWork()
+        {
+            // The own ABI reuses its backend scratch on the host at Prepare. Wait only for that context's actual
+            // last submission, and only if incomplete; stock FG and unrelated queue work are unaffected.
+            if (!ownValue)
+                return true;
+            if (ownFence->GetCompletedValue() == UINT64_MAX || !WaitFence(ownFence.Get(), ownValue, 2000))
+                return false;
+            const auto completed = ownFence->GetCompletedValue();
+            return completed != UINT64_MAX && completed >= ownValue;
+        }
+
+        void DiscardFrame(uint64_t waitValue, uint64_t signalValue)
+        {
+            current->stampCounts[current->frame] = 0;
+            ownRecording = false;
+            if (cpuSync)
+                current->list->Close();
+            else if (signalValue)
+                SubmitFrame(waitValue, signalValue, false);
+            else
+                current->list->Close();
         }
 
         void ReleaseTextures()
@@ -589,18 +644,21 @@ namespace
 
         // Both queues done with everything submitted so far: before what their work uses goes, the upscaler's and the
         // frame generation's contexts among it (a Generate the game dropped is waited for by nobody else)
-        void Flush()
+        bool Flush()
         {
             if (!localFence)
-                return;
+                return true;
             for (auto& q : { direct.queue, compute.queue })
             {
                 if (q)
                 {
-                    q->Signal(localFence.Get(), ++localValue);
-                    WaitFence(localFence.Get(), localValue, 2000);
+                    if (FAILED(q->Signal(localFence.Get(), ++localValue)) ||
+                        !WaitFence(localFence.Get(), localValue, 2000) ||
+                        localFence->GetCompletedValue() == UINT64_MAX || localFence->GetCompletedValue() < localValue)
+                        return false;
                 }
             }
+            return true;
         }
 
         // What the upscaler and the frame generation read and write
@@ -861,6 +919,9 @@ namespace
         ffxFunctions functions{};
         ffxContext context = nullptr;
         ffxContext frameGeneration = nullptr;
+        OwnFrameInterpolation ownInterpolation;
+        bool ownFailure = false; // Sticky until helper restart; reconfiguration falls back to stock.
+
         ID3D12Device* device = nullptr;
         uint32_t displayWidth = 0;
         uint32_t displayHeight = 0;
@@ -897,6 +958,9 @@ namespace
     public:
         bool available = false;
         bool frameGenerationAvailable = false;
+        bool LastGenerationHadFrame = false;
+        bool IsOwnInterpolation() const { return bool(ownInterpolation); }
+        bool OwnFailed() const { return ownFailure; }
 
         bool Init(ID3D12Device* d3d, const std::vector<std::wstring>& searchPaths, std::string& message)
         {
@@ -1052,15 +1116,79 @@ namespace
             return true;
         }
 
+        bool CreateOwnInterpolation(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight,
+            bool hdr, bool eightBit, bool fused)
+        {
+            ReleaseFrameGeneration(); // Configure has already flushed both queues.
+            if (ownFailure)
+                return false;
+            OwnFiCreateDescription create{};
+            create.mode = fused ? OwnFiMode::Fused : OwnFiMode::Reference;
+            create.device = device;
+            create.maxRenderSize = { width, height };
+            create.displaySize = { outputWidth, outputHeight };
+            create.backBufferFormat = eightBit ? FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM : FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT;
+            create.historyFormat = create.backBufferFormat;
+            create.flags = hdr ? (1u << 3) : 0; // Own ABI flags differ from the stock API enum.
+            const auto result = ownInterpolation.Create(create);
+            if (result != OwnFiOk)
+            {
+                ownFailure = true;
+                Log("Own interpolation creation failed (%d): falling back to stock frame generation", result);
+                return false;
+            }
+            displayWidth = outputWidth;
+            displayHeight = outputHeight;
+            Log("Own interpolation: %s at %ux%u -> %ux%u", fused ? "fused" : "reference", width, height, outputWidth, outputHeight);
+            return true;
+        }
+
         bool HasFrameGeneration() const
         {
-            return frameGeneration != nullptr;
+            return frameGeneration != nullptr || bool(ownInterpolation);
         }
 
         // The configuration and the preparation of one frame, with its depth and motion vectors. Must come before
         // GenerateFrame of the same frame.
         bool PrepareFrame(ID3D12GraphicsCommandList* cmd, Device& d, const FrameParams& frame)
         {
+            if (ownInterpolation)
+            {
+                if (ownFailure)
+                    return false;
+                if (!d.RetireOwnWork())
+                {
+                    ownFailure = true;
+                    Log("Own interpolation history did not retire: discard list; next Configure uses stock");
+                    return false;
+                }
+                OwnFiPrepareDescription prepare{};
+                prepare.frameID = frame.frameId;
+                prepare.renderSize = { frame.width, frame.height };
+                prepare.jitter = { frame.jitterX, frame.jitterY };
+                prepare.motionVectorScale = { frame.motionScaleX, frame.motionScaleY };
+                prepare.frameTimeDelta = frame.frameTimeMs;
+                prepare.cameraNear = frame.cameraNear;
+                prepare.cameraFar = frame.cameraFar;
+                prepare.cameraFovAngleVertical = frame.cameraFovY;
+                for (int i = 0; i < 3; ++i)
+                {
+                    prepare.cameraPosition[i] = frame.cameraPosition[i];
+                    prepare.cameraUp[i] = frame.cameraUp[i];
+                    prepare.cameraRight[i] = frame.cameraRight[i];
+                    prepare.cameraForward[i] = frame.cameraForward[i];
+                }
+                prepare.depth = ffxApiGetResourceDX12(d.Texture(Protocol::Texture::Depth), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+                prepare.motionVectors = ffxApiGetResourceDX12(d.Texture(Protocol::Texture::Motion), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+                const auto result = ownInterpolation.Prepare(cmd, prepare);
+                if (result < 0)
+                {
+                    ownFailure = true;
+                    Log("Own interpolation Prepare failed (%d): discard list; next Configure uses stock", result);
+                    return false;
+                }
+                return true;
+            }
             if (!frameGeneration)
                 return false;
 
@@ -1107,6 +1235,57 @@ namespace
         // The frame between the previous Present and this one into Generated
         bool GenerateFrame(ID3D12GraphicsCommandList* cmd, Device& d, uint64_t frameId, bool reset, bool hdr, float maxLuminance)
         {
+            LastGenerationHadFrame = false;
+            if (ownInterpolation)
+            {
+                if (ownFailure)
+                    return false;
+                using T = Protocol::Texture;
+                OwnFiGenerateDescription generate{};
+                generate.frameID = frameId;
+                generate.color = ffxApiGetResourceDX12(d.Texture(T::Present), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+                generate.hudless = ffxApiGetResourceDX12(d.Texture(T::HudLess), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+                generate.output = ffxApiGetResourceDX12(d.Texture(T::Generated), FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
+                generate.interpolationRect = { 0, 0, static_cast<int32_t>(displayWidth), static_cast<int32_t>(displayHeight) };
+                generate.transferFunction = hdr ? FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SCRGB : FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
+                generate.minMaxLuminance[1] = maxLuminance;
+                generate.reset = reset ? 1 : 0;
+                const auto result = ownInterpolation.Generate(cmd, generate);
+                if (result < 0)
+                {
+                    ownFailure = true;
+                    Log("Own interpolation Generate failed (%d): discard list; next Configure uses stock", result);
+                    return false;
+                }
+                LastGenerationHadFrame = result == OwnFiOk;
+                if (!LastGenerationHadFrame)
+                {
+                    static bool reported = false;
+                    if (!reported)
+                        Log("Own interpolation: no-frame seeds history; helper suppresses interpolation, game output uses a complete rendered-frame copy");
+                    reported = true;
+                    // No-frame still records valid history work. Initialize every output pixel for game presentation,
+                    // independent of whether the SDK's reset kernel writes the complete interpolation output.
+                    D3D12_RESOURCE_BARRIER barriers[2]{};
+                    for (auto& b : barriers)
+                    {
+                        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                    }
+                    barriers[0].Transition.pResource = d.Texture(T::Present);
+                    barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                    barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+                    barriers[1].Transition.pResource = d.Texture(T::Generated);
+                    barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                    barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+                    cmd->ResourceBarrier(2, barriers);
+                    cmd->CopyResource(d.Texture(T::Generated), d.Texture(T::Present));
+                    for (auto& b : barriers)
+                        std::swap(b.Transition.StateBefore, b.Transition.StateAfter);
+                    cmd->ResourceBarrier(2, barriers);
+                }
+                return true; // OwnFiNoFrame is successful history maintenance, not a permanent failure.
+            }
             if (!frameGeneration)
                 return false;
 
@@ -1131,6 +1310,7 @@ namespace
                     Log("Frame generation dispatch failed: %u", result);
                 return false;
             }
+            LastGenerationHadFrame = !reset;
             return true;
         }
 
@@ -1288,6 +1468,9 @@ namespace
 
         void ReleaseFrameGeneration()
         {
+            // All callers retire GPU work before replacing/destroying either interpolation context.
+            ownInterpolation.Destroy();
+            LastGenerationHadFrame = false;
             StopSwapChainGeneration();
             if (frameGeneration)
                 functions.DestroyContext(&frameGeneration, nullptr);
@@ -2921,7 +3104,11 @@ namespace
             fsr.StopSwapChainGeneration();
             display.Drain();
             display.Bind(nullptr, nullptr, nullptr, nullptr, nullptr);
-            device.Flush();
+            if (!device.Flush())
+            {
+                Log("GPU work did not retire before Configure: restarting the helper with its contexts intact");
+                ExitProcess(ERROR_TIMEOUT);
+            }
             vulkan.Release();
             onVulkan = false;
             dlss.Release();
@@ -3003,7 +3190,24 @@ namespace
                     shared.Flags = flags;
                 }
                 auto format = eightBit ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R16G16B16A16_FLOAT;
-                bool generation = fsr.CreateFrameGeneration(width, height, outputWidth, outputHeight, hdr, eightBit) &&
+                // The own library where the game asked for it and it is there; the signed runtime where it isn't
+                const bool ownRequested = (flags & Protocol::ConfigureFlags::OwnInterpolation) != 0;
+                bool interpolation = ownRequested && fsr.CreateOwnInterpolation(width, height, outputWidth, outputHeight, hdr, eightBit, false);
+                if (interpolation)
+                {
+                    if (flags & Protocol::ConfigureFlags::AmdPacing)
+                        Log("Own interpolation: AMD pacing disabled; using the custom helper presenter");
+                    flags &= ~Protocol::ConfigureFlags::AmdPacing;
+                }
+                else
+                {
+                    if (ownRequested)
+                        Log("Own interpolation unavailable: stock runtime selected; clearing the own flag");
+                    flags &= ~Protocol::ConfigureFlags::OwnInterpolation;
+                    interpolation = fsr.CreateFrameGeneration(width, height, outputWidth, outputHeight, hdr, eightBit);
+                }
+                shared.Flags = flags;
+                bool generation = interpolation &&
                     device.CreateTexture(T::Present, outputWidth, outputHeight, format, false) &&
                     device.CreateTexture(T::Generated, outputWidth, outputHeight, format, true) &&
                     device.CreateTexture(T::HudLess, outputWidth, outputHeight, format, false);
@@ -3014,7 +3218,8 @@ namespace
                     device.ReleaseTexture(T::Present);
                     device.ReleaseTexture(T::Generated);
                     device.ReleaseTexture(T::HudLess);
-                    flags &= ~(Protocol::ConfigureFlags::FrameGeneration | Protocol::ConfigureFlags::EightBitFrames | Protocol::ConfigureFlags::AsyncGeneration);
+                    flags &= ~(Protocol::ConfigureFlags::FrameGeneration | Protocol::ConfigureFlags::EightBitFrames | Protocol::ConfigureFlags::AsyncGeneration |
+                        Protocol::ConfigureFlags::OwnInterpolation);
                     shared.Flags = flags;
                 }
             }
@@ -3029,7 +3234,7 @@ namespace
                 bool eightBit = generation ? (flags & Protocol::ConfigureFlags::EightBitFrames) != 0 : !hdr;
                 auto format = eightBit ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R16G16B16A16_FLOAT;
                 // AMD's swap chain only with its frame generation; ours where it can't be made
-                bool amd = generation && (flags & Protocol::ConfigureFlags::AmdPacing);
+                bool amd = generation && !fsr.IsOwnInterpolation() && (flags & Protocol::ConfigureFlags::AmdPacing);
                 auto window = reinterpret_cast<HWND>(shared.PresentWindow);
                 bool presenting = !device.wine && (hdr || eightBit) &&
                     (generation || device.CreateTexture(T::Present, outputWidth, outputHeight, format, false)) &&
@@ -3102,7 +3307,8 @@ namespace
         {
             auto& shared = *connection.shared;
             display.Stop();
-            flags &= ~(Protocol::ConfigureFlags::HelperPresent | Protocol::ConfigureFlags::AmdPacing);
+            // The own interpolation records on a D3D12 list; on Vulkan the signed runtime stays
+            flags &= ~(Protocol::ConfigureFlags::HelperPresent | Protocol::ConfigureFlags::AmdPacing | Protocol::ConfigureFlags::OwnInterpolation);
             auto input = reinterpret_cast<HANDLE>(shared.InputFenceHandle);
             auto output = reinterpret_cast<HANDLE>(shared.OutputFenceHandle);
             shared.InputFenceHandle = shared.OutputFenceHandle = shared.PresentFenceHandle = 0;
@@ -3176,14 +3382,19 @@ namespace
             }
             else
             {
-                cmd = device.BeginFrame(Device::Work::Evaluate);
+                cmd = device.BeginFrame(Device::Work::Evaluate, shared.WaitValue, fsr.IsOwnInterpolation());
                 device.Transition(cmd, true, { T::Color, T::Depth, T::Motion, T::Reactive, T::Output });
                 device.Stamp(cmd);
                 evaluated = backend == Protocol::Backend::DLSS ? dlss.Evaluate(cmd, device, frame) : fsr.Evaluate(cmd, device, frame);
                 device.Stamp(cmd);
-                // A failed preparation leaves the upscaled frame: Generate of this frame fails instead
-                // Recorded into the same command list, which is not executed when the upscaler failed
-                preparedFrame = generation && fsr.PrepareFrame(cmd, device, frame) && evaluated;
+                // Stock Prepare failure can leave the upscaled frame intact. A negative own result may have
+                // recorded partial work, so discard the entire list and fail Evaluate before anything executes.
+                preparedFrame = evaluated && generation && fsr.PrepareFrame(cmd, device, frame);
+                if (fsr.IsOwnInterpolation() && fsr.OwnFailed())
+                {
+                    device.DiscardFrame(shared.WaitValue, shared.SignalValue);
+                    return false;
+                }
                 if (generation)
                     device.Stamp(cmd);
             }
@@ -3252,13 +3463,20 @@ namespace
                 g.failed += prepared && !generated;
             }
             else
-                cmd = device.BeginFrame(Device::Work::Generate);
+                cmd = device.BeginFrame(Device::Work::Generate, shared.WaitValue, fsr.IsOwnInterpolation());
             if (prepared && !onVulkan)
             {
                 device.Transition(cmd, true, { T::Present, T::Generated, T::HudLess });
                 device.Stamp(cmd);
                 generated = fsr.GenerateFrame(cmd, device, shared.FrameId, shared.GenerateReset != 0,
                     (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0, shared.MaxLuminance);
+                if (fsr.IsOwnInterpolation() && fsr.OwnFailed())
+                {
+                    device.DiscardFrame(shared.WaitValue, shared.SignalValue);
+                    return false;
+                }
+                if (generated && fsr.IsOwnInterpolation() && !fsr.LastGenerationHadFrame)
+                    shared.GenerateReset = 1; // Existing response field also reports an own no-frame to the game.
                 device.Stamp(cmd);
                 g.failed += !generated;
                 device.Transition(cmd, false, { T::Present, T::Generated, T::HudLess });
@@ -3318,18 +3536,26 @@ namespace
                 if (prepared)
                 {
                     using T = Protocol::Texture;
-                    auto cmd = device.BeginFrame(Device::Work::Generate);
+                    auto cmd = device.BeginFrame(Device::Work::Generate, shared.WaitValue, fsr.IsOwnInterpolation());
                     device.Transition(cmd, true, { T::Present, T::Generated, T::HudLess });
                     device.Stamp(cmd);
                     bool generated = fsr.GenerateFrame(cmd, device, shared.FrameId, shared.GenerateReset != 0,
                         (flags & Protocol::ConfigureFlags::HighDynamicRange) != 0, shared.MaxLuminance);
+                    if (fsr.IsOwnInterpolation() && fsr.OwnFailed())
+                    {
+                        device.DiscardFrame(shared.WaitValue, 0);
+                        // No partial own commands execute. Still release this request's shared Present/HudLess
+                        // through a real-only presentation job, or the game's next input waits forever on presentFence.
+                        display.Post(job);
+                        return false;
+                    }
                     device.Stamp(cmd);
                     device.Transition(cmd, false, { T::Present, T::Generated, T::HudLess });
                     g.failed += !generated;
                     ok = generated;
                     job.generatedValue = device.SubmitGenerated(shared.WaitValue, generated);
                     // Nothing to interpolate from after a reset: the rendered frame alone
-                    job.showGenerated = generated && shared.GenerateReset == 0;
+                    job.showGenerated = generated && fsr.LastGenerationHadFrame && shared.GenerateReset == 0;
                 }
 
                 if (g.generates >= 300)
@@ -3500,7 +3726,11 @@ namespace
 
             // Both queues done before their work's resources go
             display.Release();
-            device.Flush();
+            if (!device.Flush())
+            {
+                Log("GPU work did not retire during shutdown: leaving context cleanup to process teardown");
+                ExitProcess(ERROR_TIMEOUT);
+            }
             vulkan.Shutdown();
             dlss.Shutdown();
             fsr.Shutdown();

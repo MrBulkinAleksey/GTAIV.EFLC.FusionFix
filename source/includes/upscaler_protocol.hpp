@@ -46,7 +46,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 18;
+    constexpr uint32_t Version = 19;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -119,6 +119,7 @@ namespace UpscalerProtocol
         constexpr uint32_t HelperPresent = 1 << 7;    // the helper presents the frames, with the frame generation too; cleared if it can't
         constexpr uint32_t AmdPacing = 1 << 8;        // with HelperPresent and the frame generation, AMD's swap chain generates and paces the frames; cleared if it can't
         constexpr uint32_t Vulkan = 1 << 9;           // FSR on the helper's Vulkan device; cleared if it can't, with GameFence outside Wine
+        constexpr uint32_t OwnInterpolation = 1 << 10; // the frame generation runs the helper's own interpolation library beside it; cleared if it can't
     }
 
     // ConfigureFlags::Vulkan: the usage the helper makes a shared image with, which the game's import of it repeats, as

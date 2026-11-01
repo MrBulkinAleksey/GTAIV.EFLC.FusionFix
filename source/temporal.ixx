@@ -2485,6 +2485,7 @@ public:
 
             FusionFix::onBeforeReset() += []()
             {
+                Upscaler::ResetHistory();
                 ReleaseSceneTargets();
             };
 
