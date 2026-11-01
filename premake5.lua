@@ -328,3 +328,52 @@ project "GTAIV.EFLC.FusionFix.Helper"
       defines { "NDEBUG" }
       optimize "On"
       symbols "On"
+
+-- Own FG records on the helper's command list; it does not implement an AMD swapchain.
+workspace "GTAIV.EFLC.FusionFix.FrameInterpolation"
+   configurations { "Release", "Debug" }
+   architecture "x86_64"
+   location "build"
+   cppdialect "C++20"
+   language "C++"
+   staticruntime "On"
+   characterset "Unicode"
+   multiprocessorcompile "On"
+
+project "GTAIV.EFLC.FusionFix.FrameInterpolation"
+   kind "SharedLib"
+   targetdir "bin"
+   targetextension ".dll"
+   objdir "build/obj/own-frameinterpolation/%{cfg.buildcfg}"
+   defines { "OWN_FI_BUILD", "OWN_FI_NO_PIX", "_WINDOWS", "WIN32_LEAN_AND_MEAN", "NOMINMAX", "_CRT_SECURE_NO_WARNINGS" }
+   includedirs { "build/own-frameinterpolation" }
+   files {
+      "source/frameinterpolation/*.h", "source/frameinterpolation/*.cpp", "source/frameinterpolation/*.hlsl",
+      "tools/own-frameinterpolation/*.py", "tools/own-frameinterpolation/*.ps1", "tools/own-frameinterpolation/*.md",
+      "external/fidelityfx-src/**.h", "external/fidelityfx-src/**.hpp",
+      "external/fidelityfx-src/**.hlsl", "external/fidelityfx-src/provenance.json",
+      "external/fidelityfx-src/backend/dx12/ffx_dx12.cpp",
+      "external/fidelityfx-src/api/internal/ffx_assert.cpp",
+      "external/fidelityfx-src/api/internal/ffx_message.cpp",
+      "external/fidelityfx-src/api/internal/ffx_object_management.cpp",
+      "external/fidelityfx-src/framegeneration/fsr3/internal/ffx_frameinterpolation.cpp",
+      "external/fidelityfx-src/framegeneration/fsr3/internal/ffx_opticalflow.cpp",
+   }
+   filter "files:**.hlsl"
+      buildaction "None"
+   filter "files:tools/own-frameinterpolation/**"
+      buildaction "None"
+   filter {}
+   links { "d3d12", "dxgi", "dxguid" }
+   prebuildcommands {
+      'python "../tools/own-frameinterpolation/verify_sources.py"',
+      'python "../tools/own-frameinterpolation/compile_shaders.py" --dxc "%OWN_FI_DXC%"',
+   }
+   filter "files:**.hlsl"
+      buildaction "None"
+   filter "configurations:Debug"
+      symbols "On"
+      defines { "DEBUG" }
+   filter "configurations:Release"
+      optimize "Speed"
+      defines { "NDEBUG" }

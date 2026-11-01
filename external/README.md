@@ -20,3 +20,11 @@ and `amd_fidelityfx_loader_dx12.dll` with `amd_fidelityfx_upscaler_dx12.dll` and
 the headers here are updated, update the versions in `before_packaging.bat` as well.
 
 The Vulkan headers are the `Vulkan-Headers` submodule.
+
+`fidelityfx-src` is the separately pinned AMD SDK 2.3.0 source subset used by
+the optional own frame-interpolation DLL. Its original license, third-party
+notice and source hashes are included with the game package. Shader bytecode is
+built from HLSL with the pinned DXC rather than imported as precompiled blobs.
+See `tools/own-frameinterpolation/README.md` for provenance, reproducible builds,
+the local fusion changes and validation limits. This target leaves the signed
+AMD upscaler and stock frame-generation runtimes available.
