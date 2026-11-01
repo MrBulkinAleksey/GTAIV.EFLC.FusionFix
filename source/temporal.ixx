@@ -1,7 +1,9 @@
 module;
 
 #include <common.hxx>
+#include <memory>
 #include "FusionLog.hpp"
+#include "VehicleMotion.hpp"
 
 export module temporal;
 
@@ -363,6 +365,12 @@ public:
                 rt = nullptr;
             }
         };
+        EndCaptureCleanup();
+        EntitiesCurrent.clear();
+        EntitiesPrevious.clear();
+        BonesCurrent.clear();
+        BonesPrevious.clear();
+        VehicleShaders.clear();
         destroy(MotionRT);
         destroy(HistoryRT[0]);
         destroy(HistoryRT[1]);
@@ -658,6 +666,13 @@ public:
         UINT NumVertices = 0;
         float World[16]{};
         int32_t Bones = -1;            // offset in the bone pool of the same frame
+        bool Wheel = false;
+        float WheelTransform[16]{};
+        bool Damage = false;
+        // Shared ownership keeps the identity pointer alive and comparable for one frame.
+        std::shared_ptr<IDirect3DBaseTexture9> DamageIdentity;
+        float DamageRadius = 0;
+        DWORD DamageStates[13]{};
     };
 
     struct EntityRecord
@@ -689,6 +704,12 @@ public:
         int32_t Bones = -1;             // current bones, offset in the current bone pool
         int32_t PrevBones = -1;         // previous bones, offset in the previous bone pool
         int32_t BoneRow = -1;
+        bool Wheel = false;
+        float WheelTransform[16]{};
+        // Shared ownership retains the GetTexture reference until the replay has run.
+        std::shared_ptr<IDirect3DBaseTexture9> DamageTexture;
+        float DamageRadius = 0;
+        DWORD DamageStates[13]{};
     };
 
     static inline std::unordered_map<IDirect3DVertexDeclaration9*, DeclInfo> DeclCache;
@@ -791,16 +812,20 @@ public:
         auto matches = [&](const DrawRecord& d)
         {
             return d.IndexBuffer == current.IndexBuffer && d.VertexBuffer == current.VertexBuffer && d.StartIndex == current.StartIndex &&
-                d.PrimitiveCount == current.PrimitiveCount;
+                d.PrimitiveCount == current.PrimitiveCount && d.Wheel == current.Wheel;
         };
 
         float position[3];
         const float* bones = current.Bones >= 0 && static_cast<size_t>(current.Bones + BoneTexels * 4) <= BonesCurrent.size() ? &BonesCurrent[current.Bones] : nullptr;
         DrawPosition(current.World, bones, position);
+        if (current.Wheel)
+            std::copy_n(current.WheelTransform + 12, 3, position);
         auto distance = [&](const DrawRecord& d)
         {
             float p[3];
             DrawPosition(d.World, PreviousBones(d), p);
+            if (d.Wheel)
+                std::copy_n(d.WheelTransform + 12, 3, p);
             return (p[0] - position[0]) * (p[0] - position[0]) + (p[1] - position[1]) * (p[1] - position[1]) + (p[2] - position[2]) * (p[2] - position[2]);
         };
 
@@ -818,6 +843,81 @@ public:
             }
         }
         return best;
+    }
+
+    struct VehicleShaderInfo
+    {
+        IDirect3DVertexShader9* Shader = nullptr;
+        bool Valid = false;
+        bool Damage = false;
+        bool Wheel = false;
+        UINT RadiusRegister = 208;
+        ~VehicleShaderInfo() { SAFE_RELEASE(Shader); }
+    };
+    static inline std::unordered_map<IDirect3DVertexShader9*, VehicleShaderInfo> VehicleShaders;
+
+    static const VehicleShaderInfo* GetVehicleShaderInfo(IDirect3DDevice9* device)
+    {
+        IDirect3DVertexShader9* shader = nullptr;
+        if (FAILED(device->GetVertexShader(&shader)) || !shader)
+            return nullptr;
+        auto known = VehicleShaders.find(shader);
+        if (known != VehicleShaders.end())
+        {
+            shader->Release();
+            return &known->second;
+        }
+        if (VehicleShaders.size() >= 512)
+        {
+            shader->Release();
+            return nullptr;
+        }
+        auto& info = VehicleShaders.try_emplace(shader).first->second;
+        info.Shader = shader; // Own the reference: pointer reuse cannot alias cached metadata.
+        UINT bytes = 0;
+        if (FAILED(shader->GetFunction(nullptr, &bytes)) || bytes < 8 || bytes > 256 * 1024 || bytes % 4)
+            return &info;
+        std::vector<DWORD> code(bytes / 4);
+        if (FAILED(shader->GetFunction(code.data(), &bytes)) || code[0] != D3DVS_VERSION(3, 0))
+            return &info;
+        unsigned samples = 0;
+        bool radius = false, toggle = false;
+        auto type = [](DWORD token) { return ((token >> 28) & 7) | ((token >> 8) & 24); };
+        for (size_t i = 1; i < code.size();)
+        {
+            DWORD opcode = code[i] & D3DSI_OPCODE_MASK;
+            if (opcode == D3DSIO_END)
+            {
+                info.Valid = true;
+                break;
+            }
+            size_t count = opcode == D3DSIO_COMMENT ? (code[i] >> 16) & 0x7fff : (code[i] >> 24) & 15;
+            if (count >= code.size() - i)
+                break;
+            if (opcode == D3DSIO_DEF && count == 5 && (code[i + 1] & D3DSP_REGNUM_MASK) == 230)
+            {
+                // FusionShaders' rigid tyre variants use matWheelTransform at c64..67.
+                const unsigned id = code[i + 5];
+                info.Wheel = id == 2760 || id == 2762 || id == 2764;
+            }
+            if (opcode == D3DSIO_TEXLDL && count == 3 && type(code[i + 3]) == D3DSPR_SAMPLER &&
+                (code[i + 3] & D3DSP_REGNUM_MASK) == 0)
+                ++samples;
+            if (opcode != D3DSIO_COMMENT && opcode != D3DSIO_DEF && opcode != D3DSIO_DEFI && opcode != D3DSIO_DEFB && opcode != D3DSIO_DCL)
+                for (size_t j = 1; j <= count; ++j)
+                {
+                    DWORD operand = code[i + j];
+                    if (type(operand) == D3DSPR_CONST && ((operand & D3DSP_REGNUM_MASK) == 208 || (operand & D3DSP_REGNUM_MASK) == 212))
+                    {
+                        radius = true;
+                        info.RadiusRegister = operand & D3DSP_REGNUM_MASK;
+                    }
+                    toggle |= type(operand) == D3DSPR_CONSTBOOL && (operand & D3DSP_REGNUM_MASK) == 8;
+                }
+            i += count + 1;
+        }
+        info.Damage = info.Valid && samples == 4 && radius && toggle;
+        return &info;
     }
 
     static void CaptureDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT baseVertex, UINT minIndex, UINT numVertices, UINT startIndex, UINT primitiveCount)
@@ -852,11 +952,44 @@ public:
         draw.PrimitiveCount = primitiveCount;
         draw.NumVertices = numVertices;
         device->GetVertexShaderConstantF(0, draw.World, 4);
+        const auto* shaderInfo = GetVehicleShaderInfo(device);
+        draw.Wheel = shaderInfo && shaderInfo->Valid && shaderInfo->Wheel && !declInfo.Skinned;
+        if (draw.Wheel)
+        {
+            device->GetVertexShaderConstantF(64, draw.WheelTransform, 4);
+            // The rigid tyre shader uses only gWorld[3]; c0..2 may contain stale
+            // values (c0 is even overridden by a local shader DEF).
+            fusionfix::motion::WheelWorld(draw.World, draw.WheelTransform, draw.World);
+        }
+        BOOL damageOn = FALSE;
+        bool damageStateValid = shaderInfo && shaderInfo->Valid;
+        if (damageStateValid && shaderInfo->Damage)
+        {
+            damageStateValid = SUCCEEDED(device->GetVertexShaderConstantB(8, &damageOn, 1));
+            draw.Damage = damageOn != FALSE;
+        }
         if (declInfo.Skinned)
         {
             draw.Bones = static_cast<int32_t>(BonesCurrent.size());
             BonesCurrent.resize(BonesCurrent.size() + BoneTexels * 4);
             device->GetVertexShaderConstantF(64, &BonesCurrent[draw.Bones], BoneTexels);
+        }
+
+        IDirect3DBaseTexture9* damageTexture = nullptr;
+        DWORD damageStates[13]{};
+        if (draw.Damage)
+        {
+            float bounds[4]{};
+            damageStateValid &= SUCCEEDED(device->GetVertexShaderConstantF(shaderInfo->RadiusRegister, bounds, 1));
+            draw.DamageRadius = bounds[0];
+            damageStateValid &= std::isfinite(bounds[0]) && bounds[0] > 0.001f && bounds[0] < 10000.0f;
+            damageStateValid &= SUCCEEDED(device->GetTexture(D3DVERTEXTEXTURESAMPLER0, &damageTexture)) && damageTexture &&
+                damageTexture->GetType() == D3DRTYPE_TEXTURE;
+            for (DWORD i = 0; i < 13; ++i)
+                damageStateValid &= SUCCEEDED(device->GetSamplerState(D3DVERTEXTEXTURESAMPLER0,
+                    static_cast<D3DSAMPLERSTATETYPE>(i + 1), &damageStates[i]));
+            draw.DamageIdentity.reset(damageTexture, [](IDirect3DBaseTexture9* texture) { if (texture) texture->Release(); });
+            std::copy_n(damageStates, 13, draw.DamageStates);
         }
 
         // Record this frame's draw for the next frame
@@ -881,7 +1014,14 @@ public:
             }
         }
 
-        if (!moved)
+        // Never replay an undeformed body over a damaged surface when required state is missing.
+        // A new damage binding/toggle/radius also lacks a matching previous surface: keep camera MV.
+        // An in-place texture edit cannot be detected from COM identity; see the replay limitation below.
+        bool damageContinuous = previous && fusionfix::motion::DamageHistoryMatches(draw.Damage, previous->Damage,
+            draw.DamageIdentity.get(), previous->DamageIdentity.get(), draw.DamageRadius, previous->DamageRadius) &&
+            (!draw.Damage || std::equal(std::begin(draw.DamageStates), std::end(draw.DamageStates), std::begin(previous->DamageStates)));
+        if (!moved || !damageStateValid || !damageContinuous || (declInfo.Skinned && prevBones < 0) ||
+            (draw.Damage && !bVertexTextureSupported))
         {
             decl->Release();
             indices->Release();
@@ -902,6 +1042,16 @@ public:
         capture.Skinned = declInfo.Skinned;
         capture.Bones = draw.Bones;
         capture.PrevBones = prevBones;
+        capture.Wheel = draw.Wheel;
+        std::copy_n(draw.WheelTransform, 16, capture.WheelTransform);
+        if (draw.Damage)
+        {
+            // Retaining a texture prevents destruction, NOT mutation of its contents. Both poses
+            // sample the current deformation. Fresh dents in the same map have no exact history.
+            capture.DamageTexture = draw.DamageIdentity;
+            capture.DamageRadius = draw.DamageRadius;
+            std::copy_n(damageStates, 13, capture.DamageStates);
+        }
         std::memcpy(capture.World, draw.World, sizeof(capture.World));
         std::memcpy(capture.PrevWorld, previous->World, sizeof(capture.PrevWorld));
 
@@ -968,7 +1118,7 @@ public:
         IDirect3DIndexBuffer9* indices = nullptr;
         IDirect3DBaseTexture9* texture0 = nullptr;
         IDirect3DBaseTexture9* vertexTexture0 = nullptr;
-        float vsConstants[21 * 4]{};
+        float vsConstants[26 * 4]{};
         float vsBones[BoneTexels * 4]{};
         float psConstants[7 * 4]{};
 
@@ -985,7 +1135,10 @@ public:
 
         static constexpr D3DSAMPLERSTATETYPE SamplerStates[] =
         {
-            D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE,
+            D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_ADDRESSW, D3DSAMP_BORDERCOLOR,
+            D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_MIPMAPLODBIAS,
+            D3DSAMP_MAXMIPLEVEL, D3DSAMP_MAXANISOTROPY, D3DSAMP_SRGBTEXTURE,
+            D3DSAMP_ELEMENTINDEX, D3DSAMP_DMAPOFFSET,
         };
         DWORD samplerStates0[std::size(SamplerStates)]{};
         DWORD vertexSamplerStates0[std::size(SamplerStates)]{};
@@ -1005,7 +1158,7 @@ public:
             device->GetIndices(&indices);
             device->GetTexture(0, &texture0);
             device->GetTexture(D3DVERTEXTEXTURESAMPLER0, &vertexTexture0);
-            device->GetVertexShaderConstantF(0, vsConstants, 21);
+            device->GetVertexShaderConstantF(0, vsConstants, 26);
             device->GetVertexShaderConstantF(64, vsBones, BoneTexels);
             device->GetPixelShaderConstantF(0, psConstants, 7);
             for (size_t i = 0; i < std::size(RenderStates); ++i)
@@ -1034,7 +1187,7 @@ public:
             device->SetIndices(indices);
             device->SetTexture(0, texture0);
             device->SetTexture(D3DVERTEXTEXTURESAMPLER0, vertexTexture0);
-            device->SetVertexShaderConstantF(0, vsConstants, 21);
+            device->SetVertexShaderConstantF(0, vsConstants, 26);
             device->SetVertexShaderConstantF(64, vsBones, BoneTexels);
             device->SetPixelShaderConstantF(0, psConstants, 7);
             for (size_t i = 0; i < std::size(RenderStates); ++i)
@@ -1279,15 +1432,23 @@ public:
 
         if (!rows)
             return;
-        BoneUpload->UnlockRect();
+        if (FAILED(BoneUpload->UnlockRect()))
+        {
+            for (auto& capture : Captures) capture.BoneRow = -1;
+            return;
+        }
 
         IDirect3DSurface9* boneSurface = nullptr;
         BoneRT->mD3DTexture->GetSurfaceLevel(0, &boneSurface);
         if (!boneSurface)
+        {
+            for (auto& capture : Captures) capture.BoneRow = -1;
             return;
+        }
         const RECT rect = { 0, 0, BoneTexels, rows };
         const POINT origin = { 0, 0 };
-        device->UpdateSurface(BoneUpload, &rect, boneSurface, &origin);
+        if (FAILED(device->UpdateSurface(BoneUpload, &rect, boneSurface, &origin)))
+            for (auto& capture : Captures) capture.BoneRow = -1;
         boneSurface->Release();
     }
 
@@ -1347,8 +1508,25 @@ public:
             device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
         }
 
+        SamplerBackup damageSampler(device, D3DVERTEXTEXTURESAMPLER1);
         for (auto& capture : Captures)
         {
+            // Missing/failed atlas uploads must not silently substitute current bones.
+            if (capture.Skinned && capture.BoneRow < 0)
+                continue;
+            float vehicleParams[4] = { capture.DamageTexture ? 1.0f : 0.0f, capture.Wheel ? 1.0f : 0.0f, capture.DamageRadius, 0.0f };
+            device->SetVertexShaderConstantF(21, vehicleParams, 1);
+            if (capture.Wheel)
+                device->SetVertexShaderConstantF(22, capture.WheelTransform, 4);
+            if (capture.DamageTexture)
+            {
+                bool bound = SUCCEEDED(device->SetTexture(D3DVERTEXTEXTURESAMPLER1, capture.DamageTexture.get()));
+                for (DWORD i = 0; i < 13; ++i)
+                    bound &= SUCCEEDED(device->SetSamplerState(D3DVERTEXTEXTURESAMPLER1,
+                        static_cast<D3DSAMPLERSTATETYPE>(i + 1), capture.DamageStates[i]));
+                if (!bound)
+                    continue; // Camera MV is safer than a body replay with the wrong deformation.
+            }
             device->SetVertexDeclaration(capture.Decl);
             for (uint32_t i = 0; i < capture.StreamCount; ++i)
                 device->SetStreamSource(i, capture.Streams[i], capture.Offsets[i], capture.Strides[i]);
