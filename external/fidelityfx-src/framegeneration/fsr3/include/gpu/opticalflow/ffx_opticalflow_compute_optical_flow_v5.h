@@ -204,8 +204,222 @@ void MapThreads(in FfxInt32x2 iGroupId, in FfxInt32 iLocalIndex,
     iPxPos = (iGroupId << 4u) + iSearchId * FfxInt32x2(4, 1);
 }
 
+#if FFX_OPTICALFLOW_USE_MSAD4_INSTRUCTION != 1
+// THE SEARCH OF A GROUP'S FOUR BLOCKS AT ONCE, for the plain-arithmetic path. Thread i works for block i >> 4 and
+// computes a whole row of the search, its row i & 15: sixteen sums, for which it takes apart 8 bytes of the block
+// and 23 of the window a row of the block's 8, instead of four sums from 19 bytes each. Everything is whole-number
+// arithmetic on AMD's own loads and words:
+//   - the same four predictions, the same four windows, the same 64 words of the block, at the same positions;
+//   - each of the 256 sums is the sum of the same 64 absolute differences;
+//   - each is packed with its offset by AMD's EncodeSearchCoord, and the minimum of the 256 packed words is taken
+//     (a minimum does not depend on the order);
+//   - the fallback's sum, the test against it, the decoded vector and the cell it is stored in are AMD's.
+// The 16 threads of a block lie in one wave when a wave is 32 or 64 lanes wide, so the two reductions (the smallest
+// packed sum, and the block's own sum for the fallback) are wave reductions and nothing is exchanged between waves.
+FFX_GROUPSHARED FfxUInt32 rowPixels[BlockCount * BlockCount][CompareSize][CompareSize / 4];
+FFX_GROUPSHARED FfxUInt32 rowSearch[BlockCount * BlockCount][SearchBufferSizeY * SearchBufferSizeX];
+// The pipelines' first static sampler, bound by its register alone (the name is not looked up): every optical flow
+// pipeline is given point/clamp there. A gather of the integer luma returns the four texels of a 2 by 2 square in
+// one fetch, so a pair of window rows costs two fetches instead of eight loads.
+SamplerState s_OfRowGather : register(s0);
+
+void ComputeOpticalFlowByRows(FfxInt32x2 iGroupId, FfxInt32 iLocalIndex)
+{
+    const FfxInt32   iBlock           = iLocalIndex >> 4;
+    const FfxInt32   iRow             = iLocalIndex & 15;
+    const FfxInt32x2 blockId          = FfxInt32x2(iBlock & 1, iBlock >> 1);
+    const FfxInt32x2 ofGroupOffset    = iGroupId << 1u;
+    const FfxInt32x2 pixelGroupOffset = iGroupId << 4u;
+
+    if (IsSceneChanged())
+    {
+        if (iRow == 0)
+        {
+            StoreOpticalFlow(ofGroupOffset + blockId, FfxInt32x2(0, 0));
+        }
+
+        return;
+    }
+
+    const FfxBoolean bUsePredictionFromPreviousLevel = (OpticalFlowPyramidLevel() != OpticalFlowPyramidLevelCount() - 1);
+
+    // this thread's word of its block (four pixels of the first image), and the fallback's differences on it
+    const FfxInt32x2 iWordPos = pixelGroupOffset + blockId * 8 + FfxInt32x2((iRow & 1) * 4, iRow >> 1);
+    const FfxUInt32  uFirst   = LoadFirstImagePackedLuma(iWordPos);
+    rowPixels[iBlock][iRow >> 1][iRow & 1] = uFirst;
+    const FfxUInt32  uOwnSad  = Sad(uFirst, LoadSecondImagePackedLuma(iWordPos));
+
+    // the four predictions, and the four search windows: 4 times 144 words, loaded by the 64 threads. A word and
+    // the word under it come from two gathers where the pair of rows and all four columns lie inside the picture;
+    // AMD's own load, with its clamp and its fill of what lies outside, everywhere else. A gather at the corner the
+    // four texels share returns exactly the texels (x, y + 1), (x + 1, y + 1), (x + 1, y), (x, y), and the words
+    // are packed as AMD's GetPackedLuma packs them, the first texel in the low byte.
+    FfxInt32x2 vectors[BlockCount * BlockCount];
+    for (FfxInt32 k = 0; k < BlockCount * BlockCount; k++)
+    {
+        vectors[k] = LoadRwOpticalFlow(ofGroupOffset + FfxInt32x2(k & 1, k >> 1));
+        if (!bUsePredictionFromPreviousLevel)
+        {
+            vectors[k] = FfxInt32x2(0, 0);
+        }
+    }
+    const FfxInt32x2 iLumaSize = FfxInt32x2(DisplaySize().x >> OpticalFlowPyramidLevel(), DisplaySize().y >> OpticalFlowPyramidLevel());
+    for (FfxInt32 id = iLocalIndex; id < BlockCount * BlockCount * SearchBufferSizeX * (SearchBufferSizeY / 2); id += ThreadCount)
+    {
+        const FfxInt32   k    = id / (SearchBufferSizeX * (SearchBufferSizeY / 2));
+        const FfxInt32   h    = id % (SearchBufferSizeX * (SearchBufferSizeY / 2));
+        const FfxInt32   w    = (h / SearchBufferSizeX) * 2 * SearchBufferSizeX + h % SearchBufferSizeX;
+        const FfxInt32x2 base = pixelGroupOffset + FfxInt32x2(k & 1, k >> 1) * 8 + vectors[k] - FfxInt32x2(SearchRadiusX, SearchRadiusY);
+        const FfxInt32x2 pos  = FfxInt32x2(base.x + (h % SearchBufferSizeX) * 4, base.y + (h / SearchBufferSizeX) * 2);
+        if (pos.x >= 0 && pos.x <= iLumaSize.x - 4 && pos.y >= 0 && pos.y <= iLumaSize.y - 2)
+        {
+            const FfxUInt32x4 g0 = r_optical_flow_previous_input.GatherRed(s_OfRowGather, FfxFloat32x2(pos + FfxInt32x2(1, 1)) / FfxFloat32x2(iLumaSize));
+            const FfxUInt32x4 g1 = r_optical_flow_previous_input.GatherRed(s_OfRowGather, FfxFloat32x2(pos + FfxInt32x2(3, 1)) / FfxFloat32x2(iLumaSize));
+            rowSearch[k][w]                     = g0.w | (g0.z << 8) | (g1.w << 16) | (g1.z << 24);
+            rowSearch[k][w + SearchBufferSizeX] = g0.x | (g0.y << 8) | (g1.x << 16) | (g1.y << 24);
+        }
+        else
+        {
+            rowSearch[k][w]                     = LoadSecondImagePackedLuma(pos);
+            rowSearch[k][w + SearchBufferSizeX] = LoadSecondImagePackedLuma(pos + FfxInt32x2(0, 1));
+        }
+    }
+    FFX_GROUP_MEMORY_BARRIER;
+
+    // Sixteen sums of absolute differences: this thread's row of the search, every column. For whole numbers that
+    // are not negative |a - b| = a + b - 2 min(a, b), so a sum over a block is the block's pixels' sum plus the
+    // window's sum under it less twice the sum of the minima: a minimum and an addition a pair instead of a
+    // subtraction, an absolute value and an addition. The sums are the same whole numbers (a sum is at most 64
+    // times 255, nothing overflows), packed and compared as before. The window's sums for the sixteen columns are
+    // sixteen sliding sums of 23 column totals.
+    FfxUInt32 sads[SearchRadiusX * 2];
+    FFX_UNROLL
+    for (FfxInt32 x0 = 0; x0 < SearchRadiusX * 2; x0++)
+    {
+        sads[x0] = 0u;
+    }
+    FfxInt32 mins[SearchRadiusX * 2];
+    FfxInt32 columns[SearchBufferSizeX * 4];
+    FfxInt32 pixelSum = 0;
+    FFX_UNROLL
+    for (FfxInt32 x2 = 0; x2 < SearchRadiusX * 2; x2++)
+    {
+        mins[x2] = 0;
+    }
+    FFX_UNROLL
+    for (FfxInt32 n2 = 0; n2 < SearchBufferSizeX * 4; n2++)
+    {
+        columns[n2] = 0;
+    }
+    for (FfxInt32 dy = 0; dy < CompareSize; dy++)
+    {
+        const FfxInt32 rowOffset = (iRow + dy) * SearchBufferSizeX;
+        FfxInt32 s[SearchBufferSizeX * 4];
+        FFX_UNROLL
+        for (FfxInt32 n = 0; n < SearchBufferSizeX; n++)
+        {
+            const FfxUInt32 a = rowSearch[iBlock][rowOffset + n];
+            s[n * 4 + 0] = FfxInt32((a >> 0) & 0xffu);
+            s[n * 4 + 1] = FfxInt32((a >> 8) & 0xffu);
+            s[n * 4 + 2] = FfxInt32((a >> 16) & 0xffu);
+            s[n * 4 + 3] = FfxInt32((a >> 24) & 0xffu);
+        }
+        FfxInt32 p[CompareSize];
+        FFX_UNROLL
+        for (FfxInt32 m = 0; m < CompareSize / 4; m++)
+        {
+            const FfxUInt32 b = rowPixels[iBlock][dy][m];
+            p[m * 4 + 0] = FfxInt32((b >> 0) & 0xffu);
+            p[m * 4 + 1] = FfxInt32((b >> 8) & 0xffu);
+            p[m * 4 + 2] = FfxInt32((b >> 16) & 0xffu);
+            p[m * 4 + 3] = FfxInt32((b >> 24) & 0xffu);
+        }
+        FFX_UNROLL
+        for (FfxInt32 j2 = 0; j2 < CompareSize; j2++)
+        {
+            pixelSum += p[j2];
+        }
+        FFX_UNROLL
+        for (FfxInt32 n3 = 0; n3 < SearchRadiusX * 2 + CompareSize - 1; n3++)
+        {
+            columns[n3] += s[n3];
+        }
+        FFX_UNROLL
+        for (FfxInt32 x = 0; x < SearchRadiusX * 2; x++)
+        {
+            FfxInt32 rowMin = 0;
+            FFX_UNROLL
+            for (FfxInt32 j = 0; j < CompareSize; j++)
+            {
+                rowMin += min(s[x + j], p[j]);
+            }
+            mins[x] += rowMin;
+        }
+    }
+    FfxInt32 windowSum = 0;
+    FFX_UNROLL
+    for (FfxInt32 j3 = 0; j3 < CompareSize; j3++)
+    {
+        windowSum += columns[j3];
+    }
+    FFX_UNROLL
+    for (FfxInt32 x3 = 0; x3 < SearchRadiusX * 2; x3++)
+    {
+        sads[x3] = FfxUInt32(windowSum + pixelSum - 2 * mins[x3]);
+        if (x3 + 1 < SearchRadiusX * 2)
+        {
+            windowSum += columns[x3 + CompareSize] - columns[x3];
+        }
+    }
+
+    // the smallest of this thread's sixteen packed sums (AMD's PrepareSadMap packs them the same way)
+    FfxUInt32 uOwnMin = 0xFFFFFFFFu;
+    FFX_UNROLL
+    for (FfxInt32 x1 = 0; x1 < SearchRadiusX * 2; x1++)
+    {
+        uOwnMin = ffxMin(uOwnMin, (sads[x1] << 16) | EncodeSearchCoord(FfxInt32x2(x1, iRow)));
+    }
+
+    // over the block's sixteen threads, which share a wave: the smallest packed sum, and the block's own sum
+    FfxUInt32 minSad      = 0xFFFFFFFFu;
+    FfxUInt32 blockSadSum = 0u;
+    for (FfxInt32 b0 = 0; b0 < BlockCount * BlockCount; b0++)
+    {
+        const FfxUInt32 uWaveMin = ffxWaveMin((iBlock == b0) ? uOwnMin : 0xFFFFFFFFu);
+        const FfxUInt32 uWaveSad = ffxWaveSum((iBlock == b0) ? uOwnSad : 0u);
+        if (iBlock == b0)
+        {
+            minSad      = uWaveMin;
+            blockSadSum = uWaveSad;
+        }
+    }
+
+    FfxInt32x2 newVector = vectors[iBlock] + DecodeSearchCoord(minSad);
+#if FFX_LOCAL_SEARCH_FALLBACK == 1
+    if (OpticalFlowPyramidLevel() == 0 && blockSadSum <= (minSad >> 16u))
+    {
+        newVector = FfxInt32x2(0, 0);
+    }
+#endif //FFX_LOCAL_SEARCH_FALLBACK
+
+    if (iRow == 0)
+    {
+        StoreOpticalFlow(ofGroupOffset + blockId, newVector);
+    }
+}
+#endif // FFX_OPTICALFLOW_USE_MSAD4_INSTRUCTION != 1
+
 void ComputeOpticalFlowAdvanced(FfxInt32x2 iGlobalId, FfxInt32x2 iLocalId, FfxInt32x2 iGroupId, FfxInt32 iLocalIndex)
 {
+#if FFX_OPTICALFLOW_USE_MSAD4_INSTRUCTION != 1
+    // The row path, where a block's sixteen threads share a wave; on a card whose waves are neither 32 nor 64
+    // lanes wide AMD's own code below runs, untouched
+    if (ffxWaveLaneCount() == 32 || ffxWaveLaneCount() == 64)
+    {
+        ComputeOpticalFlowByRows(iGroupId, iLocalIndex);
+        return;
+    }
+#endif
     FfxInt32x2 iSearchId;
     FfxInt32x2 iPxPos;
     FfxInt32 iLaneToBlockId;

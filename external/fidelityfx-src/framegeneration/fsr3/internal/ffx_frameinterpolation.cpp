@@ -1181,7 +1181,29 @@ FFX_API FfxErrorCode ffxFrameInterpolationDispatch(FfxFrameInterpolationContext*
             contextPrivate->contextDescription.backendInterface.fpScheduleGpuJob(&contextPrivate->contextDescription.backendInterface, &discardJob);
         }
 
-        scheduleDispatch(contextPrivate, &contextPrivate->pipelineFiSetup, renderDispatchSizeX, renderDispatchSizeY);
+        // The five images the setup pass zeroes, zeroed by clears of the backend's own kind (its clear writes the
+        // bits of 0.0f, the zero of all five formats, as the two depth clears above do). The pass itself runs one
+        // group of threads, for its counters alone: a clear zeroes the whole image, the largest guides the context
+        // was made for, and the pixels beyond this dispatch's guides are read by no pass - every load of the three
+        // kinds of image is at a position inside the guides' size, and the mask is written whole before its one
+        // reader. The shader is not edited; its 64 threads write 64 zeroes where the clears wrote them already.
+        {
+            const FfxUInt32 zeroedBySetup[] = {
+                FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_GAME_MOTION_VECTOR_FIELD_X,
+                FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_GAME_MOTION_VECTOR_FIELD_Y,
+                FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_OPTICAL_FLOW_MOTION_VECTOR_FIELD_X,
+                FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_OPTICAL_FLOW_MOTION_VECTOR_FIELD_Y,
+                FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_DISOCCLUSION_MASK
+            };
+            FfxGpuJobDescription clearJob = {FFX_GPU_JOB_CLEAR_FLOAT};      // (its four values are 0.f)
+            wcscpy_s(clearJob.jobLabel, L"Clear Setup Images");
+            for (int i = 0; i < _countof(zeroedBySetup); ++i)
+            {
+                clearJob.clearJobDescriptor.target = contextPrivate->uavResources[zeroedBySetup[i]];
+                contextPrivate->contextDescription.backendInterface.fpScheduleGpuJob(&contextPrivate->contextDescription.backendInterface, &clearJob);
+            }
+        }
+        scheduleDispatch(contextPrivate, &contextPrivate->pipelineFiSetup, 1, 1);
 
             // game vector field inpainting pyramid
         auto scheduleDispatchGameVectorFieldInpaintingPyramid = [&]() {

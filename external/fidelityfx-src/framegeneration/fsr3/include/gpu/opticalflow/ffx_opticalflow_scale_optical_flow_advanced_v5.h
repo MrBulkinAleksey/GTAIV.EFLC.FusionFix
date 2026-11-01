@@ -30,6 +30,52 @@ FFX_GROUPSHARED FfxInt32x2 nearestVectors[4][WG_HEIGHT][WG_WIDTH];
 FFX_GROUPSHARED FfxUInt32 localRegion[4][WG_HEIGHT][WG_WIDTH];
 FFX_GROUPSHARED FfxUInt32 sads[4][WG_HEIGHT][WG_WIDTH];
 
+// The filtered vector of a position, computed here from the search's own result instead of read from the filtered
+// image: the filter pass's arithmetic (each vector becomes the one of its 3 by 3 neighbourhood that lies nearest to
+// the other eight), word for word, with the position handed in. The image the scale pass reads is bound to the
+// search's result for the levels from 1 to 6, whose filter dispatch is then not scheduled: a level's filtered image
+// has exactly this one reader. A position outside the image is zero, as a load of the filtered image outside itself
+// was; the search's image is the same size as the filtered one was.
+FfxInt32x2 FilteredOpticalFlow(FfxInt32x2 iPos)
+{
+    FfxUInt32 uWidth;
+    FfxUInt32 uHeight;
+    r_optical_flow.GetDimensions(uWidth, uHeight);
+    if (FfxUInt32(iPos.x) >= uWidth || FfxUInt32(iPos.y) >= uHeight)
+    {
+        return FfxInt32x2(0, 0);
+    }
+
+    FfxInt32x2 tmpMV[9];
+    FfxInt32 idx = 0;
+    for (FfxInt32 xx = -1; xx < 2; xx++)
+    {
+        for (FfxInt32 yy = -1; yy < 2; yy++)
+        {
+
+            tmpMV[idx] = LoadOpticalFlow(iPos + FfxInt32x2(xx, yy));
+            idx++;
+        }
+    }
+
+    FfxUInt32  ret = 0xFFFFFFFF;
+    for (FfxInt32 i = 0; i < 9; ++i)
+    {
+        FfxUInt32 tmp = 0;
+        for (FfxInt32 j = 0; j < 9; ++j)
+        {
+            FfxInt32x2 delta = tmpMV[i] - tmpMV[j];
+            tmp = delta.x * delta.x + (delta.y * delta.y + tmp);
+        }
+
+        ret = min(((tmp) << 4) | i, ret);
+    }
+
+    FfxUInt32 minIdx = ret & 0xF;
+
+    return tmpMV[minIdx];
+}
+
 void ScaleOpticalFlowAdvanced(FfxInt32x3 iGlobalId, FfxInt32x3 iLocalId)
 {
     if (IsSceneChanged())
@@ -47,7 +93,7 @@ void ScaleOpticalFlowAdvanced(FfxInt32x3 iGlobalId, FfxInt32x3 iLocalId)
         (iGlobalId.y / 2) + yOffset
     );
 
-    FfxInt32x2 nearestVector = LoadOpticalFlow(srcOFPos);
+    FfxInt32x2 nearestVector = FilteredOpticalFlow(srcOFPos);
     nearestVectors[iLocalId.z][iLocalId.y][iLocalId.x] = nearestVector * 2;
 
     int maxY = 4;

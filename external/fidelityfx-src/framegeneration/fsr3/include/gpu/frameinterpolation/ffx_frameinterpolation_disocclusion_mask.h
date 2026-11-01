@@ -47,8 +47,9 @@ FfxFloat32 ComputeSampleDepthClip(FfxInt32x2 iPxSamplePos, FfxFloat32 fPreviousD
 FfxFloat32 LoadEstimatedDepth(FfxUInt32 estimatedIndex, FfxInt32x2 iSamplePos)
 {
     const FfxFloat32x2 fUv = FfxFloat32x2(iSamplePos + 0.5f) / RenderSize();
-    const FfxFloat32x2 fDistortionFieldUv = SampleDistortionField(fUv);
-    FfxInt32x2 iDistortionPixelOffset = FfxInt32x2(fDistortionFieldUv.xy * RenderSize());
+    // No distortion field is handed to this library, and the backend's 1x1 default of zeroes samples (0, 0)
+    // everywhere: the offset is the constant (0, 0) and the lookups, one per depth read, are gone.
+    const FfxInt32x2 iDistortionPixelOffset = FfxInt32x2(0, 0);
 
     if (estimatedIndex == 0)
     {

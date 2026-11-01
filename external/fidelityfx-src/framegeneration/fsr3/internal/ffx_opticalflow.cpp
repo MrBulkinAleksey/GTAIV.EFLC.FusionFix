@@ -886,6 +886,9 @@ static FfxErrorCode dispatch(FfxOpticalflowContext_Private* context, const FfxOp
                     const uint32_t dispatchY = (levelHeight + threadGroupSizeY - 1) / threadGroupSizeY;
                     std::wstring pipelineName = L"OF " + std::to_wstring(level) + L" Filter";
 
+                    // A level from 1 to 6 is filtered by its scale pass, which reads the search's own result: only
+                    // level 0, whose filtered vectors are optical flow's output, still runs the filter pass.
+                    if (level == 0)
                     {
                         scheduleDispatch(context, &context->pipelineFilterOpticalFlowV5, pipelineName.c_str(), dispatchX, dispatchY);
                     }
@@ -899,7 +902,8 @@ static FfxErrorCode dispatch(FfxOpticalflowContext_Private* context, const FfxOp
                 if (level > 0)
                 {
                     {
-                        context->srvBindings[FFX_OF_BINDING_IDENTIFIER_OPTICAL_FLOW] = context->resources[opticalFlowResourceIndexB + level];
+                        // The search's own result, not the filtered image: the scale pass filters what it reads
+                        context->srvBindings[FFX_OF_BINDING_IDENTIFIER_OPTICAL_FLOW] = context->resources[opticalFlowResourceIndexA + level];
                         context->uavBindings[FFX_OF_BINDING_IDENTIFIER_OPTICAL_FLOW_NEXT_LEVEL] = level > 0 ? context->resources[opticalFlowResourceIndexB + level - 1] : FfxResourceInternal{ FFX_OF_RESOURCE_IDENTIFIER_NULL };
                     }
 

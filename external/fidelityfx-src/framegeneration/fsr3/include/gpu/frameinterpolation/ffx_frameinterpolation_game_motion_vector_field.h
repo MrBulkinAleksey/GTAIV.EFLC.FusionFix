@@ -36,8 +36,10 @@ void computeGameFieldMvs(FfxInt32x2 iPxPos)
 {
     const FfxFloat32x2 fUvInScreenSpace            = (FfxFloat32x2(iPxPos) + 0.5f) / RenderSize();
 
-    const FfxFloat32x2 fDistortionFieldUv          = SampleDistortionField(fUvInScreenSpace);
-    FfxInt32x2 iDistortionPixelOffset              = FfxInt32x2(fDistortionFieldUv.xy * RenderSize());
+    // This library hands no distortion field, and the 1x1 image of zeroes the backend binds by default samples
+    // (0, 0) at every coordinate: the offset every read position is moved by is the constant (0, 0), and the
+    // lookup is that constant. The image leaves the pass's reflection with it.
+    const FfxInt32x2 iDistortionPixelOffset        = FfxInt32x2(0, 0);
 
     const FfxFloat32x2 fUvInInterpolationRectStart = FfxFloat32x2(InterpolationRectBase()) / DisplaySize();
     const FfxFloat32x2 fUvLetterBoxScale           = FfxFloat32x2(InterpolationRectSize()) / DisplaySize();

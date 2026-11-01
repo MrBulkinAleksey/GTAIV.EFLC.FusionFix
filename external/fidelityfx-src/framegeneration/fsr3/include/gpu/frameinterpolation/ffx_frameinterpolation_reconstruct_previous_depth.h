@@ -70,8 +70,9 @@ void ReconstructPrevDepth(FfxInt32x2 iPxPos, FfxUInt32 depthTarget, FfxFloat32 f
 void reconstructPreviousDepth(FfxInt32x2 iPxPos)
 {
     const FfxFloat32x2 fUv = (iPxPos + FfxFloat32(0.5f)) / RenderSize();
-    const FfxFloat32x2 fDistortionFieldUv = SampleDistortionField(fUv);
-    FfxInt32x2 iDistortionPixelOffset = FfxInt32x2(fDistortionFieldUv.xy * RenderSize());
+    // No distortion field is handed to this library, and the backend's 1x1 default of zeroes samples (0, 0)
+    // everywhere: the offset is the constant (0, 0) and the lookup is gone.
+    const FfxInt32x2 iDistortionPixelOffset = FfxInt32x2(0, 0);
 
     FfxFloat32x2 fMotionVector = LoadDilatedMotionVector(iPxPos + iDistortionPixelOffset);
     FfxFloat32   fDilatedDepth = LoadDilatedDepth(iPxPos + iDistortionPixelOffset);
