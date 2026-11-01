@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Provenance hashes cover upstream bytes, including the original license line endings.
+external/fidelityfx-src/** -text -whitespace
