@@ -78,6 +78,9 @@ namespace
     // unused); 2: the helper's own pacing above.
     bool bHelperPresent = false;
     bool bAmdPacing = false;
+    // FSRVulkan in [ANTIALIASING]: FSR runs on a Vulkan device of the helper's (AMD's Vulkan runtime), not on D3D12. DXVK only;
+    // the game presents then, HelperPresent unused.
+    bool bVulkanHelper = false;
     bool bHelperPresentBroken = false;  // the game's Present did not come through the device
     bool bPresentedByHelper = false;    // this frame
     HWND GameWindow = nullptr;          // the swap chain's, for the helper's window
@@ -898,10 +901,11 @@ namespace
         auto helperPresent = std::clamp(iniReader.ReadInteger("ANTIALIASING", "HelperPresent", 1), 0, 2);
         bHelperPresent = helperPresent != 0;
         bAmdPacing = helperPresent == 1;
+        bVulkanHelper = iniReader.ReadInteger("ANTIALIASING", "FSRVulkan", 0) != 0;
         // The aims may have changed
         TargetDraws[0] = TargetDraws[1] = 0.0;
-        Log("Frame generation settings: delay %.2f, pacing %d, deferred %d (generated frame at %.2f), compute queue %d, debug %d, helper presents %d", fDelay, nPacing,
-            int(bDeferredSetting), fShowGeneratedAt, int(bAsyncCompute), nDebug, bAmdPacing ? 1 : bHelperPresent ? 2 : 0);
+        Log("Frame generation settings: delay %.2f, pacing %d, deferred %d (generated frame at %.2f), compute queue %d, debug %d, helper presents %d, FSR on Vulkan %d",
+            fDelay, nPacing, int(bDeferredSetting), fShowGeneratedAt, int(bAsyncCompute), nDebug, bAmdPacing ? 1 : bHelperPresent ? 2 : 0, int(bVulkanHelper));
 
         // A fresh start for the statistics
         Stats = {};
@@ -1373,6 +1377,12 @@ export namespace FrameGeneration
     bool UsesAmdPacing()
     {
         return bAmdPacing;
+    }
+
+    // FSRVulkan: FSR on the helper's Vulkan device
+    bool UsesVulkanHelper()
+    {
+        return bVulkanHelper;
     }
 
     // The helper generates on its compute queue, beside the game's next frame

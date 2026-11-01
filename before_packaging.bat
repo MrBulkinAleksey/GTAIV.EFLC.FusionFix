@@ -7,7 +7,7 @@ rem - NVIDIA DLSS and AMD FidelityFX runtimes for DLAA and FSR, in the game fold
 rem   plugins\GTAIV.EFLC.FusionFix.exe. Their versions match the SDK headers the helper is built with, see external\README.md.
 set "DXVK_VERSION=v3.1.1"
 set "DLSS_VERSION=v310.9.1"
-set "FIDELITYFX_VERSION=v2.3.0"
+set "FIDELITYFX_VERSION=v2.4.0"
 
 cd /d "%~dp0"
 set "TAR=%SystemRoot%\System32\tar.exe"
@@ -43,8 +43,9 @@ curl -fsSL -o data\nvngx_dlss.dll https://raw.githubusercontent.com/NVIDIA/DLSS/
   echo Failed to download DLSS & exit /b 1
 )
 
-rem AMD FidelityFX: the loader and the upscaler and frame generation it loads from its own folder
-for %%F in (amd_fidelityfx_loader_dx12.dll amd_fidelityfx_upscaler_dx12.dll amd_fidelityfx_framegeneration_dx12.dll) do (
+rem AMD FidelityFX: the loader and the upscaler and frame generation it loads from its own folder, for D3D12 and for
+rem Vulkan (FSRVulkan)
+for %%F in (amd_fidelityfx_loader_dx12.dll amd_fidelityfx_upscaler_dx12.dll amd_fidelityfx_framegeneration_dx12.dll amd_fidelityfx_loader_vk.dll amd_fidelityfx_upscaler_vk.dll amd_fidelityfx_framegeneration_vk.dll) do (
   del "data\%%F" 2>nul
   curl -fsSL -o "data\%%F" https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/%FIDELITYFX_VERSION%/Kits/FidelityFX/signedbin/%%F || (
     del "data\%%F" 2>nul
