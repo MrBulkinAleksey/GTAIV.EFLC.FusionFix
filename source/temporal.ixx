@@ -2098,6 +2098,10 @@ public:
     {
         using namespace TemporalAA;
 
+        // A dropped generated frame must not put a queue wait ahead of its still-pending real frame
+        if (!FrameGeneration::BeforeUpscale(RealDevice()))
+            return false;
+
         LARGE_INTEGER now, frequency;
         QueryPerformanceCounter(&now);
         QueryPerformanceFrequency(&frequency);

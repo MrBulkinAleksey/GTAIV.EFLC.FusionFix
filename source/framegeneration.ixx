@@ -9,6 +9,7 @@ module;
 #include <vector>
 
 #include "FusionLog.hpp"
+#include "frame_pacing.hpp"
 
 export module framegeneration;
 
@@ -166,6 +167,14 @@ namespace
     bool bSkipPresent = false;
     bool bDeferredFlow = false;             // the waiting frames came from the deferred flow
     LARGE_INTEGER PendingGeneratedDue{};
+
+    // The adaptive plan of one deferred handoff: the real frame's deadline is fixed there and never rebased, the
+    // generated one either goes before it, expires, or loses to it. The budget is the bounded p90 of the observed
+    // handoff-to-GPU-ready intervals; a missed observation is no sample and cannot grow it.
+    fusionfix::framepacing::ReadinessBudget Readiness;
+    fusionfix::framepacing::PairDeadlines Deadlines;
+    LARGE_INTEGER PairStart{};
+    bool bReadinessReady = false;
 
     // Logs the order the frames go in whenever it changes
     void LogFlow(bool deferred)
@@ -737,9 +746,13 @@ namespace
                 (generated ? bPendingGenerated : bPending) = true;
             else if (generated)
             {
-                // The rendered frame follows FrameGenerationDelay of a frame later
                 GeneratedAt = presentedAt;
-                PendingDue = After(presentedAt, std::clamp(FrameMs * fDelay, 0.0, 50.0));
+                if (!Deadlines.valid)
+                {
+                    // The rendered frame follows FrameGenerationDelay of a frame later
+                    PendingDue = After(presentedAt, std::clamp(FrameMs * fDelay, 0.0, 50.0));
+                }
+                // Deferred with the deadline plan: PendingDue was fixed at the handoff and does not move
             }
             else
                 Stats.Add(Ms(GeneratedAt, presentedAt), Ms(GeneratedAt, PendingDue), late);
@@ -762,6 +775,15 @@ namespace
         return Now().QuadPart >= due.QuadPart;
     }
 
+    // Drops the optional generated frame of the current pair; the real frame's schedule is untouched.
+    // DropGenerated retains the pending request and drains its GPU dependency before the textures are reused;
+    // TakeGenerated must not run here, it would enqueue a GPU wait in front of the real frame.
+    void DropStalledGenerated()
+    {
+        bPendingGenerated = false;
+        Upscaler::DropGenerated();
+    }
+
     // Draw calls of the render thread: the waiting frames go once their time has come, the generated one first
     void CheckPending(IDirect3DDevice9* device)
     {
@@ -776,13 +798,47 @@ namespace
         if (bInPresent || bEndOfFrameOnly)
             return;
 
+        if (bPendingGenerated && IsPhoneVisible())
+            DropStalledGenerated();
         if (bPendingGenerated)
         {
-            if (IsDue(0, PendingGeneratedDue))
+            if (!Deadlines.valid)
+            {
+                if (IsDue(0, PendingGeneratedDue))
+                    PresentWaiting(device, false, true);
+                return;
+            }
+
+            // A deadline pair: the real frame's deadline was fixed at the handoff; the generated frame either goes
+            // before it, expires, or loses to it - it can never postpone the real frame (fail open to it). Once per
+            // pair the helper's frame is asked whether it is actually GPU-ready, nonblocking; a CPU acknowledgement
+            // is not readiness.
+            if (!bReadinessReady && Upscaler::IsGeneratedReady())
+            {
+                bReadinessReady = true;
+                Readiness.Observe(Ms(PairStart, Now()));
+            }
+            const bool generatedDue = IsDue(0, PendingGeneratedDue);
+            const bool realDue = Now().QuadPart >= PendingDue.QuadPart;
+            switch (Deadlines.Choose(Ms(PairStart, Now()), true, generatedDue, realDue, bReadinessReady))
+            {
+            case fusionfix::framepacing::Action::Wait:
+                return;
+            case fusionfix::framepacing::Action::Generated:
                 PresentWaiting(device, false, true);
-            return;
+                return;
+            case fusionfix::framepacing::Action::DropGenerated:
+                // Expired: dropped, the real frame goes at its own deadline
+                DropStalledGenerated();
+                break;
+            case fusionfix::framepacing::Action::Real:
+                DropStalledGenerated();
+                if (bPending)
+                    PresentWaiting(device, false, false);
+                return;
+            }
         }
-        if (bPending && IsDue(1, PendingDue))
+        if (bPending && (Deadlines.valid ? Now().QuadPart >= PendingDue.QuadPart : IsDue(1, PendingDue)))
             PresentWaiting(device, false, false);
     }
 
@@ -949,6 +1005,8 @@ namespace
             Log("Frame generation: %s", mode == Mode::Off ? "off" : mode == Mode::ShowGenerated ? "showing the generated frames" : "on");
             // A fresh start for the pacing
             LastFrameEnd.QuadPart = 0;
+            Deadlines = {};
+            Readiness.Reset();
             bPending = false;
             bPendingGenerated = false;
             bSkipPresent = false;
@@ -1113,7 +1171,7 @@ namespace
         ++FrameNumber;
         UpdateMode();
         // A texture left over from an earlier frame is not a valid HUD mask
-        bool hudLess = bHudLessCaptured && HudLessRT != nullptr && HudLessFrame == FrameNumber;
+        bool hudLess = fusionfix::framepacing::HasFreshHudLess(bHudLessCaptured, HudLessRT != nullptr, HudLessFrame, FrameNumber);
         bHudLessCaptured = false;
         // The transitions of the two suppressions, so a report says why no frame was generated
         static int previousPhone = -1, previousMissingHudLess = -1;
@@ -1202,19 +1260,18 @@ namespace
         // This frame ended before the last one's frames went: they go first, in their order
         if (bPendingGenerated)
         {
-            // The phone came up while the generated frame waited: it is stale, and interpolating across the phone's
-            // appearance drags it; the real frame's schedule is untouched
-            if (IsPhoneVisible())
-            {
-                bPendingGenerated = false;
-                Upscaler::DropGenerated();
-            }
+            // The next frame has ended: with a deadline plan the optional frame is stale (its expiry was before the
+            // real frame's deadline, which has passed), and so it is while the phone is up - interpolating across
+            // the phone's appearance drags it. The real frame's schedule is untouched.
+            if (Deadlines.valid || IsPhoneVisible())
+                DropStalledGenerated();
             else
                 PresentWaiting(device, true, true);
         }
         if (bPending)
             PresentWaiting(device, true, false);
         bBackBufferDrawn = false;
+        Deadlines = {};
 
         // Not in the menus, not while the phone is up, not without a fresh HUD-less copy of this frame: the generation
         // starts over once they come back. Skipping it leaves a gap in the frame numbers, which asks for the reset.
@@ -1302,7 +1359,18 @@ namespace
                 bDeferredFlow = true;
                 LogFlow(true);
                 FusionFix::bFrameGenerationPresenting = true;
-                PendingGeneratedDue = After(Now(), std::clamp(FrameMs * fShowGeneratedAt, 0.0, 50.0));
+                // The plan of this pair: the real frame's deadline is fixed now and never rebased; the generated
+                // one aims at FrameGenerationShowGeneratedAt and expires by the observed readiness budget, never
+                // later than a gap before the real one. Without a budget yet it may use the whole safe interval.
+                PairStart = Now();
+                bReadinessReady = false;
+                Deadlines = fusionfix::framepacing::PairDeadlines::Make(
+                    FrameMs, fShowGeneratedAt, std::min(fShowGeneratedAt + fDelay, 0.98f), Readiness.BudgetMs());
+                PendingGeneratedDue = After(PairStart, std::clamp(FrameMs * fShowGeneratedAt, 0.0, 50.0));
+                // Also initialize the legacy fallback if taking or presenting the generated frame fails.
+                GeneratedAt = PendingGeneratedDue;
+                PendingDue = After(PairStart, Deadlines.valid ? Deadlines.realMs :
+                    std::clamp(FrameMs * std::min(fShowGeneratedAt + fDelay, 0.98f), 0.0, 50.0));
             }
             else
             {
@@ -1393,6 +1461,40 @@ namespace
 
 export namespace FrameGeneration
 {
+    // Before Upscaler::Evaluate drains or reuses the shared frame generation guides. False: the caller must skip
+    // Evaluate; a runtime that refuses an in-scene Present must finish this pair at OnBeforePresent instead.
+    bool BeforeUpscale(IDirect3DDevice9* device)
+    {
+        if (!Deadlines.valid || (!bPending && !bPendingGenerated))
+            return true; // No plan or nothing waiting: the legacy pacing is unchanged.
+        if (!device || GetCurrentThreadId() != RenderThread || bInPresent ||
+            bEndOfFrameOnly || rage::grcDevice::IsDeviceLost())
+            return false;
+
+        if (bPendingGenerated)
+        {
+            if (!bReadinessReady && Upscaler::IsGeneratedReady())
+            {
+                bReadinessReady = true;
+                Readiness.Observe(Ms(PairStart, Now()));
+            }
+            const auto elapsed = Ms(PairStart, Now());
+            if (bReadinessReady && !Upscaler::WasGenerateReset() && !IsPhoneVisible() && elapsed >= 0.0 &&
+                elapsed < Deadlines.generatedExpiryMs && elapsed < Deadlines.realMs)
+                PresentWaiting(device, false, true); // late=false: keep the game's scene open, as in draw hooks.
+            else
+                DropStalledGenerated();
+        }
+        if (bEndOfFrameOnly)
+            return false;
+        if (bPending)
+            PresentWaiting(device, false, false); // Early real is preferable to queuing it behind a dropped wait.
+        if (bPending || bPendingGenerated)
+            return false;
+        Deadlines = {};
+        return true;
+    }
+
     // Frames being presented from inside a draw call of the render thread (CheckPending): their draws are not the game's
     bool PresentingInDraw()
     {

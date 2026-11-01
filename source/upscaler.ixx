@@ -2175,6 +2175,23 @@ export namespace Upscaler
         preparedFrameId = 0;
     }
 
+    // Render thread: the frame PostGenerate posted is on the GPU, without a wait of any kind: no CPU wait, no queue
+    // wait, no shared request mutation. Polling makes an observation an upper bound of the interval it measures;
+    // a frame that is not through is not a sample. The answer of a Generate still pending is published here as
+    // CollectPending would: the own interpolation's history seeding says its no-frame in it.
+    bool IsGeneratedReady()
+    {
+        if (!generatedValue || state != State::Ready || generationFailed || configureFailed || !bridge ||
+            !helper.process || WaitForSingleObject(helper.process, 0) != WAIT_TIMEOUT)
+            return false;
+        MemoryBarrier();
+        if (helper.pending && (helper.shared->ResponseSerial != helper.serial || helper.shared->ResponseStatus != Protocol::Status::Ok))
+            return false;
+        if (helper.pending && pendingCommand == Protocol::Command::Generate)
+            generatedReset |= helper.shared->GenerateReset != 0;
+        return bridge->OutputReady(generatedValue);
+    }
+
     // Render thread: call before a device reset or when no scene was evaluated.
     // Next Evaluate recreates the imports/fences after collecting the outstanding request.
     void ResetHistory()
