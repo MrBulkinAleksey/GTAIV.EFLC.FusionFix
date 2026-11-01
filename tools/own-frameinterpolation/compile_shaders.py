@@ -45,7 +45,7 @@ def compile_one(job, args, scratch):
     return kind,pi,opt,b,groups
 
 def emit(records):
-    out=['// Generated from AMD FidelityFX SDK 2.3.0; AMD MIT notices are distributed alongside the DLL.','#pragma once']
+    out=['// Generated from AMD FidelityFX SDK 2.4.0; AMD MIT notices are distributed alongside the DLL.','#pragma once']
     blobs={}; tables={'frameinterpolation':{},'opticalflow':{}}
     for kind,pi,opt,b,groups in records:
         digest=hashlib.sha256(b).hexdigest(); symbol='s_'+digest[:20]

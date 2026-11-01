@@ -41,8 +41,8 @@ void computeGameFieldMvs(FfxInt32x2 iPxPos)
     // lookup is that constant. The image leaves the pass's reflection with it.
     const FfxInt32x2 iDistortionPixelOffset        = FfxInt32x2(0, 0);
 
-    const FfxFloat32x2 fUvInInterpolationRectStart = FfxFloat32x2(InterpolationRectBase()) / DisplaySize();
-    const FfxFloat32x2 fUvLetterBoxScale           = FfxFloat32x2(InterpolationRectSize()) / DisplaySize();
+    const FfxFloat32x2 fUvInInterpolationRectStart = FfxFloat32x2(ColorRectBase()) / DisplaySize();
+    const FfxFloat32x2 fUvLetterBoxScale           = FfxFloat32x2(ColorRectSize()) / DisplaySize();
     const FfxFloat32x2 fUvInInterpolationRect      = fUvInInterpolationRectStart + fUvInScreenSpace * fUvLetterBoxScale;
 
     const FfxFloat32 fDepthSample = LoadDilatedDepth(iPxPos + iDistortionPixelOffset);

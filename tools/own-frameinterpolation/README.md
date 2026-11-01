@@ -10,11 +10,13 @@ The independent four-export C ABI and helper loader are in
 
 ## Provenance and licensing
 
-AMD source is SDK **v2.3.0**, commit
-`60f4ea81909200d8542eca14dccb2628b763a9a3`, from
-https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/tree/60f4ea81909200d8542eca14dccb2628b763a9a3/Kits/FidelityFX .
-All 73 original C++/header files and 18 HLSL files were compared byte-for-byte
-against that official commit before local patches. `provenance.json` records
+AMD source is SDK **v2.4.0**, commit
+`7539ae8b6568ad29ed78a753404351daf3b5cca7`, from
+https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/tree/7539ae8b6568ad29ed78a753404351daf3b5cca7/Kits/FidelityFX .
+Every one of the 91 upstream files is byte-for-byte that commit's except the
+13 files listed in `provenance.json`, `local_changes`, which carry this
+repository's edits (the dispatch and kernel changes described below).
+`provenance.json` records
 upstream SHA-256 hashes, local exceptions and final vendored hashes. Local
 verification normalizes CRLF to LF only, so Windows checkout line endings do
 not cause false source-drift failures. AMD's full
