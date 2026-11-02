@@ -4,7 +4,7 @@ texture PrevDepthTex2D;
 texture SSRAccumTex2D;
 texture SSRFallbackTex2D;
 texture SSRHitDistTex2D;
-texture MarchDepthTex2D;
+texture MarchDepthTex2D, HiZDepthTex2D, HiZDepth1Tex2D, HiZDepth2Tex2D;
 texture MotionTex2D;
 texture AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D;
 texture SceneTex2D, SkinIDTex2D, SkinLightTex2D;
@@ -98,6 +98,29 @@ sampler2D MarchDepthTex
     MinFilter = POINT;
     MagFilter = POINT;
     MipFilter = NONE;
+};
+
+sampler2D HiZDepthTex
+{
+    Texture = <HiZDepthTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
+};
+
+sampler2D HiZDepth1Tex
+{
+    Texture = <HiZDepth1Tex2D>;
+    AddressU = Clamp; AddressV = Clamp;
+    MinFilter = POINT; MagFilter = POINT; MipFilter = NONE;
+};
+sampler2D HiZDepth2Tex
+{
+    Texture = <HiZDepth2Tex2D>;
+    AddressU = Clamp; AddressV = Clamp;
+    MinFilter = POINT; MagFilter = POINT; MipFilter = NONE;
 };
 
 sampler2D DebugTex
@@ -261,6 +284,9 @@ uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDeno
 uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing contact shadows
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
 uniform float fStepsPerPixel;     // march steps per pixel of a ray on this pass's target, 1 / SSRStepPixels
+uniform float fUseHiZ;
+uniform float fStochasticSSR;
+uniform float2 vec2HiZSize;
 uniform float fMarchFullDepth;    // 1 marches through the full size depth instead of MarchDepthTex (SSRMarchFullDepth, temporary, to compare)
 uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step (set per pass: SSR and contact shadows each have their own switch)
 uniform float2 vec2NoiseOffset;   // pixels, moves where PixelJitter is read every frame while the passes accumulate (FrameHistory::NoiseOffset), 0 otherwise
@@ -475,13 +501,13 @@ struct ReflectionRay
     float len; // from P0 to the far end, uv1, in view space
 };
 
-bool SetupReflectionRay(float3 C, float3 n, out ReflectionRay ray)
+bool SetupReflectionRay(float3 C, float3 n, float3 microNormal, out ReflectionRay ray)
 {
     ray = (ReflectionRay) 0;
     gTracePath = 0.0;
     float z = C.z;
     float3 V = normalize(C);
-    float3 R = reflect(V, n);
+    float3 R = reflect(V, microNormal);
     gTraceRayZ = R.z;
 
     // Rays reflected back towards the camera see the side of things the screen does not show:
@@ -529,15 +555,35 @@ float MarchDepth(float2 uv)
     return fMarchFullDepth > 0.0 ? LinearDepth(uv) : tex2Dlod(MarchDepthTex, float4(uv, 0, 0)).r;
 }
 
+// A projected segment in one hierarchy cell is empty when both endpoint depths are in front
+// of its minimum. Inverse depth is linear along the projected ray, so depth is monotonic there.
+bool HiZCanSkip(sampler2D depth, float2 gridSize, float2 uv0, float2 uv1, float2 sampleUV,
+                float invZ0, float invZ1, float rayZ, float tEnd, float steps, float jitter,
+                int index, int count, out float3 candidate)
+{
+    candidate = 0.0;
+    if (index + count >= NUM_STEPS || (float)(index + count) >= steps)
+        return false;
+    float s = ((float)(index + count) + jitter) / steps;
+    float t = tEnd * s * s;
+    float2 endUV = lerp(uv0, uv1, t);
+    if (any(floor(sampleUV * gridSize) != floor(endUV * gridSize)))
+        return false;
+    float nearest = tex2Dlod(depth, float4(sampleUV, 0, 0)).r;
+    float z = 1.0 / lerp(invZ0, invZ1, t);
+    candidate = float3(t, z, nearest);
+    return max(rayZ, z) < nearest;
+}
+
 // Marches the reflected ray of the surface at C with normal n. The hit is (where to read it in
 // HistoryTex, confidence 0..1, the ray's length over fMaxDistance), 0 for a miss; HitColour
 // turns it into a colour.
 // jitter in (0, 1] shifts every step of this pixel's ray by up to one step.
 // distanceFade: reflections fade out towards this distance from the surface, 0 disables.
-float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
+float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float distanceFade)
 {
     ReflectionRay ray;
-    if (!SetupReflectionRay(C, n, ray))
+    if (!SetupReflectionRay(C, n, microNormal, ray))
         return 0.0;
     float facing = ray.facing;
     float3 P0 = ray.P0;
@@ -582,7 +628,7 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
     // reads fall four times as close together in the texture cache, which is most of what a
     // step costs, and need no decoding. Nearest, so a ray does not slip past a thin pole between
     // two of its samples; the refinement below finds the hit in the full size depth.
-    [loop] [fastopt]
+    [loop]
     for (int i = 0; i < NUM_STEPS; ++i)
     {
         if ((float) i >= steps)
@@ -593,6 +639,33 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
         float2 sampleUV = lerp(uv0, uv1, t);
         float rayZ = 1.0 / lerp(invZ0, invZ1, t);
 
+        // Try coarser levels first, but only skip a segment contained in one cell. There is
+        // no nested dynamic loop here: this effect is compiled by D3DX at game startup.
+        [branch]
+        if (fUseHiZ > 0.0 && prevDelta <= 0.0)
+        {
+            float3 candidate = 0.0;
+            int skip = 0;
+            if (fUseHiZ >= 3.0 && HiZCanSkip(HiZDepth2Tex, vec2HiZSize * 0.25, uv0, uv1, sampleUV,
+                                              invZ0, invZ1, rayZ, tEnd, steps, jitter, i, 7, candidate))
+                skip = 7;
+            else if (fUseHiZ >= 2.0 && HiZCanSkip(HiZDepth1Tex, vec2HiZSize * 0.5, uv0, uv1, sampleUV,
+                                                   invZ0, invZ1, rayZ, tEnd, steps, jitter, i, 5, candidate))
+                skip = 5;
+            else if (HiZCanSkip(HiZDepthTex, vec2HiZSize, uv0, uv1, sampleUV,
+                                invZ0, invZ1, rayZ, tEnd, steps, jitter, i, 3, candidate))
+                skip = 3;
+            if (skip > 0)
+            {
+                prevT = candidate.x;
+                prevU = candidate.x * invZ1 * candidate.y;
+                // The coarse minimum proves the segment empty; use the actual half-resolution
+                // depth at its end for the next crossing's interpolation and thickness test.
+                prevDelta = candidate.y - MarchDepth(lerp(uv0, uv1, candidate.x));
+                i += skip;
+                continue;
+            }
+        }
         float delta = rayZ - MarchDepth(sampleUV);
 
         // The ray went behind the scene since the last sample, which was in front of it.
@@ -661,6 +734,12 @@ float4 TraceHit(float3 C, float3 n, float jitter, float distanceFade)
     // The surface the depth buffer holds where the ray hit; hitP is up to a thickness off it.
     float3 surfP = ViewPosFromUVZ(finalUV, surfZ);
     float2 histUV = HistoryUV(surfP);
+    // The hit may itself be a moving car or pedestrian. The camera transform alone reprojects
+    // such a surface to the wrong point in the previous scene; when motion vectors exist, use
+    // the hit pixel's vector. The previous depth check below still rejects disocclusions.
+    [branch]
+    if (fUseMotion > 0.0)
+        histUV = finalUV + tex2Dlod(MotionTex, float4(finalUV, 0, 0)).xy + vec2MotionJitter;
 
     float2 edge = saturate(min(min(finalUV, histUV), 1.0 - max(finalUV, histUV)) / max(fEdgeFade, 1e-4));
     float e = min(edge.x, edge.y);
@@ -862,12 +941,17 @@ float3 NeighbourFill(float2 uv, float2 vPos, float z, out float weight)
     }; // pixels of this pass's target
     float3 sum = 0.0;
     float sumW = 0.0;
+    float3 fillNormal = 0.0;
+    if (fStochasticSSR > 0.0 && fUseGBufferNormals > 0.0)
+        fillNormal = GBufferNormalWorld(uv);
     [loop] [fastopt]
     for (int i = 0; i < 12; ++i)
     {
         float2 tapUV = uv + mul(turn, taps[i]) * vec2InvViewportSize;
         float4 hit = tex2Dlod(SSRResultTex, float4(tapUV, 0, 0));
         float w = max(hit.a, 0.0) * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
+        if (fStochasticSSR > 0.0 && fUseGBufferNormals > 0.0 && w > 0.0)
+            w *= smoothstep(0.8, 0.98, dot(fillNormal, GBufferNormalWorld(tapUV)));
         // A miss beside the reflection of something standing close to the surface (the player at a car's bonnet) most
         // likely sees what is behind it, not it: filled from such hits the misses around his reflection took its dark
         // colour, a halo of him 9 to 36 pixels wide. Only hits farther along their ray than fFillMinDistance fill.
@@ -924,6 +1008,17 @@ float4 MarchDepth_PS(float2 uv : TEXCOORD0) : COLOR0
     return pow(fFarDivNear, min(min(a, b), min(c, d))) * fNearPlane;
 }
 
+// Reduce the linear half-size depth to the nearest depth of each 2x2 block.
+float4 HiZDepth_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    float2 r = 0.25 * vec2InvViewportSize;
+    float a = tex2Dlod(MarchDepthTex, float4(uv - r, 0, 0)).r;
+    float b = tex2Dlod(MarchDepthTex, float4(uv + r, 0, 0)).r;
+    float c = tex2Dlod(MarchDepthTex, float4(uv + float2(r.x, -r.y), 0, 0)).r;
+    float d = tex2Dlod(MarchDepthTex, float4(uv + float2(-r.x, r.y), 0, 0)).r;
+    return min(min(a, b), min(c, d));
+}
+
 // What SSRTrace_PS writes into both its targets where SSRSurfaceWeight is 0: the passes after it
 // tell those pixels by one read of its target instead of the depth, specular and, in the rain,
 // normal reads of SSRSurfaceWeight each. Both targets are half float, so it stays negative.
@@ -932,6 +1027,27 @@ static const float4 kNoSurface = -1.0;
 bool NoSurface(float4 trace)
 {
     return trace.a < -0.5;
+}
+
+// Sample a GGX half-vector from the stored gloss. The G-buffer's gloss is an artistic
+// parameter rather than calibrated roughness; this mapping is deliberately conservative.
+float3 SSRMicroNormal(float2 uv, float2 vPos, float3 n, float3 C)
+{
+    if (fStochasticSSR <= 0.0)
+        return n;
+    float gloss = saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).y);
+    float roughness = 1.0 - gloss;
+    float alpha = max(roughness * roughness, 0.02);
+    float u = min(PixelJitter(vPos + float2(83.0, 47.0) + vec2NoiseOffset), 0.9999);
+    float phi = 6.2831853 * PixelJitter(vPos.yx + float2(17.0, 59.0) + vec2NoiseOffset.yx);
+    float cosTheta = sqrt((1.0 - u) / (1.0 + (alpha * alpha - 1.0) * u));
+    float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
+    float3 up = abs(n.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
+    float3 tangent = normalize(cross(up, n));
+    float3 bitangent = cross(n, tangent);
+    float3 m = normalize(n * cosTheta + (tangent * cos(phi) + bitangent * sin(phi)) * sinTheta);
+    // Invalid reflected directions cannot contribute; use the geometric reflection instead.
+    return dot(reflect(normalize(C), m), n) > 0.0 ? m : n;
 }
 
 TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
@@ -949,7 +1065,8 @@ TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
     // While accumulating, vec2NoiseOffset moves every pixel's steps on each frame, so the
     // accumulation averages the steps out and fewer of them do.
     float jitter = fStepJitter > 0.0 ? PixelJitter(vPos + vec2NoiseOffset) : 1.0;
-    float4 hit = TraceHit(C, n, jitter, fDistanceFade);
+    float3 microNormal = SSRMicroNormal(uv, vPos, n, C);
+    float4 hit = TraceHit(C, n, microNormal, jitter, fDistanceFade);
     o.distance = hit.z > 0.0 ? hit.w : 0.0;
     // Debug view 3 (for now): what the ray hit in place of the hit, which SSR_PS passes on, see
     // SSRDebug_PS.
@@ -979,9 +1096,10 @@ float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 n;
     float3 C = SSRSurface(uv, vPos, n);
     ReflectionRay ray;
-    SetupReflectionRay(C, n, ray);
+    float3 microNormal = SSRMicroNormal(uv, vPos, n, C);
+    SetupReflectionRay(C, n, microNormal, ray);
     float weight;
-    float3 fallback = ScreenFallback(C, reflect(normalize(C), n), weight);
+    float3 fallback = ScreenFallback(C, reflect(normalize(C), microNormal), weight);
     if (weight <= 0.0)
         fallback = NeighbourFill(uv, vPos, C.z, weight);
     return float4(fallback, weight);
@@ -1005,6 +1123,9 @@ float4 SSRSpread_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         float2( 0.7,  0.7), float2(-0.7,  0.7), float2( 0.7, -0.7), float2(-0.7, -0.7)
     };
     float z = LinearDepth(uv);
+    float3 fillNormal = 0.0;
+    if (fStochasticSSR > 0.0 && fUseGBufferNormals > 0.0)
+        fillNormal = GBufferNormalWorld(uv);
     float3 sum = 0.0;
     float sumW = 0.0, top = 0.0;
     [loop] [fastopt]
@@ -1013,6 +1134,8 @@ float4 SSRSpread_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         float2 tapUV = uv + mul(turn, taps[i]) * fSpreadRadius * vec2InvViewportSize;
         float4 tap = tex2Dlod(SSRFallbackTex, float4(tapUV, 0, 0));
         float w = tap.a * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
+        if (fStochasticSSR > 0.0 && fUseGBufferNormals > 0.0 && w > 0.0)
+            w *= smoothstep(0.8, 0.98, dot(fillNormal, GBufferNormalWorld(tapUV)));
         sum += tap.rgb * w;
         sumW += w;
         top = max(top, w);
@@ -1134,7 +1257,7 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 n = WaterNormal(worldXY, dot(C, C));
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = HitColour(TraceHit(C, n, 1.0, 0.0), fWaterBlur);
+    float4 r = HitColour(TraceHit(C, n, n, 1.0, 0.0), fWaterBlur);
 
     return float4(r.rgb, saturate(r.a * fWaterIntensity));
 }
@@ -1274,6 +1397,10 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
         return centre;
 
     float centreZ = LinearDepth(uv);
+    // A crease can separate surfaces at the same depth. Keep their reflection samples apart.
+    float3 centreNormal = 0.0;
+    if (fDenoiseSSROnly > 0.0 && fUseGBufferNormals > 0.0)
+        centreNormal = GBufferNormalWorld(uv);
     float colourWeight = fDenoiseSSROnly > 0.0 ? centre.a : 1.0;
     float4 sum = float4(centre.rgb * colourWeight, colourWeight);
     float alphaSum = centre.a;
@@ -1284,6 +1411,8 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
     {
         float w = exp(-dot(taps[j], taps[j]) * 2.0);
         w *= saturate(1.0 - abs(LinearDepth(uv + taps[j] * radius) - centreZ) / (centreZ * 0.02));
+        if (fDenoiseSSROnly > 0.0 && fUseGBufferNormals > 0.0 && w > 0.0)
+            w *= smoothstep(0.8, 0.98, dot(centreNormal, GBufferNormalWorld(uv + taps[j] * radius)));
         colourWeight = w * (fDenoiseSSROnly > 0.0 ? s[j].a : 1.0);
         sum += float4(s[j].rgb * colourWeight, colourWeight);
         alphaSum += w * s[j].a;
@@ -1522,6 +1651,11 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     // the light either way.
     if (fTemporalAnySurface > 0.0)
         spread = max(spread, 0.25 * abs(m1));
+    else if (fStochasticSSR > 0.0)
+        // Spatial smoothing can make one stochastic frame nearly uniform. Preserve a small
+        // colour window for accumulation, but keep the original confidence clamp so old hits
+        // cannot linger when the surface no longer reflects them.
+        spread.rgb = max(spread.rgb, 0.15 * abs(m1.rgb));
     float4 lo = m1 - 1.5 * spread, hi = m1 + 1.5 * spread;
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
@@ -2077,6 +2211,11 @@ technique SSR
     {
         VertexShader = compile vs_3_0 FullscreenQuadVS();
         PixelShader = compile ps_3_0 MarchDepth_PS();
+    }
+    pass HiZDepth
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 HiZDepth_PS();
     }
 }
 

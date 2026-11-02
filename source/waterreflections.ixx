@@ -226,6 +226,9 @@ export void RenderWaterReflections()
     effect->SetVector(h.vec4WaterWorldX, &worldX);
     effect->SetVector(h.vec4WaterWorldY, &worldY);
 
+    // Water traces in a different pass and cannot assume the main view hierarchy is current.
+    effect->SetFloat(h.fUseHiZ, 0.0f);
+    effect->SetFloat(h.fUseMotion, 0.0f);
     effect->SetFloat(h.fMaxDistance, R.fSSRMaxDistance);
     effect->SetFloat(h.fThickness, R.fSSRThickness);
     effect->SetFloat(h.fEdgeFade, R.fSSREdgeFade);

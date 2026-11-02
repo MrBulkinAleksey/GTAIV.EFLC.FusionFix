@@ -166,6 +166,15 @@ private:
         SAFE_RELEASE(PostFxResources.SSRHalfSurf);
         SAFE_RELEASE(PostFxResources.SSRHalfDenoisedSurf);
         SAFE_RELEASE(PostFxResources.SSRMarchDepthSurf);
+        for (int i = 0; i < PostFxResource::kSSRHiZLevels; ++i)
+        {
+            SAFE_RELEASE(PostFxResources.SSRHiZDepthSurf[i]);
+            if (PostFxResources.SSRHiZDepthTex[i])
+            {
+                PostFxResources.SSRHiZDepthTex[i]->Destroy();
+                PostFxResources.SSRHiZDepthTex[i] = nullptr;
+            }
+        }
         for (int i = 0; i < 2; ++i)
         {
             SAFE_RELEASE(PostFxResources.SSRTraceSurf[i]);
@@ -586,6 +595,19 @@ private:
                 auto marchDesc = rage::OwnRenderTargetDesc(rage::GRCFMT_R32F);
                 PostFxResources.SSRMarchDepthTex = rage::CreateEmptyRenderTarget("SSRMarchDepthTex", width / 2, height / 2, 32, marchDesc,
                     PostFxResources.SSRMarchDepthSurf);
+                static const char* hiZNames[] = { "SSRHiZDepth0", "SSRHiZDepth1", "SSRHiZDepth2" };
+                for (int i = 0; i < PostFxResource::kSSRHiZLevels; ++i)
+                {
+                    const int divisor = 4 << i;
+                    // Exact 2x2 reductions only: otherwise edge texels would not cover the same
+                    // screen cells used by the traversal. Retain the finer available levels.
+                    if (width < divisor || height < divisor || width % divisor || height % divisor)
+                        break;
+                    PostFxResources.SSRHiZDepthTex[i] = rage::CreateEmptyRenderTarget(hiZNames[i], width / divisor, height / divisor,
+                        32, marchDesc, PostFxResources.SSRHiZDepthSurf[i]);
+                    if (!PostFxResources.SSRHiZDepthTex[i] || !PostFxResources.SSRHiZDepthSurf[i])
+                        break;
+                }
             }
 
             PostFxResources.ContactRawTex = rage::CreateEmptyRenderTarget("ContactShadowRawTex", width, height, 64, aoDesc, PostFxResources.ContactRawSurf);

@@ -339,7 +339,7 @@ public:
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY, vec4WaterRings;
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, SSRFallbackTex2D, SSRHitDistTex2D;
-        D3DXHANDLE MarchDepthTex2D, fStepsPerPixel, fMarchFullDepth;
+        D3DXHANDLE MarchDepthTex2D, HiZDepthTex2D[3], fUseHiZ, vec2HiZSize, fStochasticSSR, fStepsPerPixel, fMarchFullDepth;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
         D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
@@ -351,6 +351,8 @@ public:
     // PREF_SSR: 0 off, 1 half resolution, 2 full resolution.
     static bool SSREnabled() { static auto p = FusionFixSettings.GetRef("PREF_SSR"); return p && p->get() != 0; }
     static bool SSRHalfRes() { static auto p = FusionFixSettings.GetRef("PREF_SSR"); return p && p->get() == 1; }
+    static bool SSRStochastic() { static auto p = FusionFixSettings.GetRef("PREF_SSR_STOCHASTIC"); return p && p->get() != 0; }
+    static bool SSRHiZ() { static auto p = FusionFixSettings.GetRef("PREF_SSR_HIZ"); return p && p->get() != 0; }
     // SSR debug view from the graphics menu (PREF_SSR_DEBUG), see SSRDebug_PS in SSR.fx.
     // Built after the SSR pass and shown over the finished frame.
     // Contact shadows (ContactShadows_PS in SSR.fx), bound to s9 for deferred_lighting
@@ -1103,6 +1105,10 @@ public:
     // march steps through at either SSR size; R32F.
     rage::grcRenderTargetPC* SSRMarchDepthTex = nullptr;
     IDirect3DSurface9* SSRMarchDepthSurf = nullptr;
+    // Conservative minimum-depth levels at 1/4, 1/8 and 1/16 of the viewport.
+    static constexpr int kSSRHiZLevels = 3;
+    rage::grcRenderTargetPC* SSRHiZDepthTex[kSSRHiZLevels] = {};
+    IDirect3DSurface9* SSRHiZDepthSurf[kSSRHiZLevels] = {};
     // Accumulation over frames (SSRTemporal_PS in SSR.fx): each frame blends the smoothed
     // result with the previous accumulation into the other target of a pair, one pair per
     // resolution. SSRTemporal is the share of the history kept, 0 turns
@@ -1736,6 +1742,12 @@ public:
                 h.SSRFallbackTex2D = SSREffect->GetParameterByName(nullptr, "SSRFallbackTex2D");
                 h.SSRHitDistTex2D = SSREffect->GetParameterByName(nullptr, "SSRHitDistTex2D");
                 h.MarchDepthTex2D = SSREffect->GetParameterByName(nullptr, "MarchDepthTex2D");
+                h.HiZDepthTex2D[0] = SSREffect->GetParameterByName(nullptr, "HiZDepthTex2D");
+                h.HiZDepthTex2D[1] = SSREffect->GetParameterByName(nullptr, "HiZDepth1Tex2D");
+                h.HiZDepthTex2D[2] = SSREffect->GetParameterByName(nullptr, "HiZDepth2Tex2D");
+                h.fUseHiZ = SSREffect->GetParameterByName(nullptr, "fUseHiZ");
+                h.fStochasticSSR = SSREffect->GetParameterByName(nullptr, "fStochasticSSR");
+                h.vec2HiZSize = SSREffect->GetParameterByName(nullptr, "vec2HiZSize");
                 h.fStepsPerPixel = SSREffect->GetParameterByName(nullptr, "fStepsPerPixel");
                 h.fMarchFullDepth = SSREffect->GetParameterByName(nullptr, "fMarchFullDepth");
                 h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");

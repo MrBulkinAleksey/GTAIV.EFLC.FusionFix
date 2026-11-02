@@ -98,7 +98,8 @@ export void RenderScreenSpaceReflections()
     if (vp)
         SSRTrace::Line("ssr: vp %p %dx%d near %.3f far %.1f", static_cast<void*>(vp), int(vp->mWidth), int(vp->mHeight), vp->mNearClip, vp->mFarClip);
     if (!R.SSREffect || !R.mDepthRT || !R.SSRHistoryTex || !vp || R.fSSRIntensity <= 0.0f ||
-        !R.SSRTraceSurf[0] || !R.SSRFallbackSurf[0] || !R.SSRMarchDepthSurf)
+        !R.SSRTraceSurf[0] || !R.SSRFallbackSurf[0] || !R.SSRMarchDepthSurf || !R.SSRMarchDepthTex ||
+        !R.SSRMarchDepthTex->mD3DTexture)
     {
         SSRTrace::Line("ssr: left, effect %p depth %p history %p vp %p intensity %.2f trace %p fallback %p march depth %p",
             static_cast<void*>(R.SSREffect), static_cast<void*>(R.mDepthRT), static_cast<void*>(R.SSRHistoryTex),
@@ -157,6 +158,9 @@ export void RenderScreenSpaceReflections()
     effect->SetTexture(h.PrevDepthTex2D, prevDepth ? R.PreAlphaDepthCopyRT->mD3DTexture : nullptr);
     effect->SetFloat(h.fUsePrevDepth, prevDepth ? 1.0f : 0.0f);
     SetPrevDepthRange(effect, h);
+    // SSR traces this frame's depth into the previous scene colour. Reproject the hit with its
+    // own motion vector when available, rather than only following the reflecting surface.
+    BindMotionVectors(effect, FrameHistory::CanReproject(R.nSSRHistoryFrame));
 
     // _DEFERRED_GBUFFER_2_ is (specular intensity, gloss, AO). Gloss decides what reflects:
     // car paint sits around 0.8, roads and walls around 0.2-0.35. Car paint stores almost no
@@ -192,7 +196,13 @@ export void RenderScreenSpaceReflections()
     effect->SetFloat(h.fMarchFullDepth, R.SSRMarchFullDepth() ? 1.0f : 0.0f);
     const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1] &&
                           R.SSRHitDistSurf[half];
-    SetNoiseOffset(effect, temporal && R.bSSRTemporalJitter);
+    const bool stochastic = R.SSRStochastic() && temporal && hasSpecular;
+    static bool previousStochastic = false;
+    if (stochastic != previousStochastic)
+        R.nSSRAccumFrame = 0;
+    previousStochastic = stochastic;
+    effect->SetFloat(h.fStochasticSSR, stochastic ? 1.0f : 0.0f);
+    SetNoiseOffset(effect, temporal && (R.bSSRTemporalJitter || stochastic));
     effect->SetFloat(h.fTowardCamera, R.fSSRTowardCamera);
     effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);
     effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);
@@ -236,7 +246,10 @@ export void RenderScreenSpaceReflections()
     AppliedRenderStates renderStates(pDevice, kSSRRenderStates);
     AppliedSamplerStates samplerStates(pDevice);
     {
-        SetTextureBoth(pDevice, 3, nullptr);
+        // A previous frame may have left a hierarchy texture bound to any shader sampler.
+        // Unbind all saved slots before using those textures as render targets.
+        for (DWORD slot = 0; slot < kSSRTextureSlots; ++slot)
+            SetTextureBoth(pDevice, slot, nullptr);
 
         // D3DX saving the state it changes, through state blocks, left the smoothing and the
         // accumulation in play drawing with what the game had bound: the textures they set
@@ -251,7 +264,11 @@ export void RenderScreenSpaceReflections()
         auto draw = [&](UINT pass, IDirect3DSurface9* target)
         {
             const HRESULT rtHr = pDevice->SetRenderTarget(0, target);
+            if (FAILED(rtHr))
+                return false;
             const HRESULT passHr = effect->BeginPass(pass);
+            if (FAILED(passHr))
+                return false;
             effect->CommitChanges();
             BindEffectSamplers(pDevice, effect);
             SSRTrace::State(pDevice, "ssr pass");
@@ -265,14 +282,52 @@ export void RenderScreenSpaceReflections()
                     pass, passes, static_cast<void*>(target), unsigned(view.Width), unsigned(view.Height),
                     unsigned(rtHr), unsigned(passHr), unsigned(drawHr));
             }
+            return SUCCEEDED(drawHr);
         };
         // The depth the march steps through, at half the full size whatever size SSR runs at;
         // timed with the march.
         ProfilerMark(pDevice, kProfSSRTrace, true);
         setPassSize(float(DWORD(width) / 2), float(DWORD(height) / 2));
-        draw(4, R.SSRMarchDepthSurf);
-        setPassSize(half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height);
+        if (!draw(4, R.SSRMarchDepthSurf))
+        {
+            ProfilerMark(pDevice, kProfSSRTrace, false);
+            effect->End();
+            clearSSR();
+            R.nSSRAccumFrame = 0;
+            return;
+        }
+        int hiZLevels = 0;
+        IDirect3DTexture9* depthLevel = R.SSRMarchDepthTex->mD3DTexture;
+        D3DSURFACE_DESC marchDesc = {};
+        const bool marchSizeMatches = SUCCEEDED(R.SSRMarchDepthSurf->GetDesc(&marchDesc)) &&
+            marchDesc.Width == DWORD(width) / 2 && marchDesc.Height == DWORD(height) / 2;
+        if (R.SSRHiZ() && !R.SSRMarchFullDepth() && marchSizeMatches)
+        {
+            for (int i = 0; i < PostFxResource::kSSRHiZLevels; ++i)
+            {
+                if (!R.SSRHiZDepthTex[i] || !R.SSRHiZDepthTex[i]->mD3DTexture || !R.SSRHiZDepthSurf[i])
+                    break;
+                const DWORD divisor = 4u << i;
+                D3DSURFACE_DESC levelDesc = {};
+                if (FAILED(R.SSRHiZDepthSurf[i]->GetDesc(&levelDesc)) ||
+                    levelDesc.Width != DWORD(width) / divisor || levelDesc.Height != DWORD(height) / divisor)
+                    break;
+                effect->SetTexture(h.MarchDepthTex2D, depthLevel);
+                setPassSize(float(levelDesc.Width), float(levelDesc.Height));
+                if (!draw(5, R.SSRHiZDepthSurf[i]))
+                    break;
+                depthLevel = R.SSRHiZDepthTex[i]->mD3DTexture;
+                effect->SetTexture(h.HiZDepthTex2D[i], depthLevel);
+                ++hiZLevels;
+            }
+        }
         effect->SetTexture(h.MarchDepthTex2D, R.SSRMarchDepthTex->mD3DTexture);
+        D3DXVECTOR2 hiZSize(float(DWORD(width) / 4), float(DWORD(height) / 4));
+        effect->SetFloatArray(h.vec2HiZSize, &hiZSize.x, 2);
+        effect->SetFloat(h.fUseHiZ, float(hiZLevels));
+        SSRTrace::Line("ssr: Hi-Z levels %d, stochastic %d, march size matches %d",
+                       hiZLevels, int(stochastic), int(marchSizeMatches));
+        setPassSize(half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height);
 
         // The march also writes how far its rays went, for the accumulation and the fill's distance gate.
         IDirect3DSurface9* oldTarget1 = nullptr;
@@ -281,12 +336,19 @@ export void RenderScreenSpaceReflections()
             pDevice->GetRenderTarget(1, &oldTarget1);
             pDevice->SetRenderTarget(1, R.SSRHitDistSurf[half]);
         }
-        draw(0, R.SSRTraceSurf[half]);
+        const bool traceOk = draw(0, R.SSRTraceSurf[half]);
         ProfilerMark(pDevice, kProfSSRTrace, false);
         if (temporal || hitDistances)
         {
             pDevice->SetRenderTarget(1, oldTarget1);
             SAFE_RELEASE(oldTarget1);
+        }
+        if (!traceOk)
+        {
+            effect->End();
+            clearSSR();
+            R.nSSRAccumFrame = 0;
+            return;
         }
         if (hitDistances)
             effect->SetTexture(h.SSRHitDistTex2D, R.SSRHitDistTex[half]->mD3DTexture);
@@ -295,10 +357,15 @@ export void RenderScreenSpaceReflections()
         ProfilerMark(pDevice, kProfSSRFill, true);
         if (R.fSSRFallback > 0.0f || R.fSSRNeighbourFill > 0.0f)
         {
-            draw(1, R.SSRFallbackSurf[half]);
+            const bool filled = draw(1, R.SSRFallbackSurf[half]);
+            if (!filled)
+            {
+                effect->SetFloat(h.fFallback, 0.0f);
+                effect->SetFloat(h.fNeighbourFill, 0.0f);
+            }
             // The fill's cascade, each step twice as far out as the last (the first reached nine
             // pixels), taking turns between the two targets; in pixels of this size.
-            if (R.SSRSpreadSurf[half] && R.fSSRNeighbourFill > 0.0f)
+            if (filled && R.SSRSpreadSurf[half] && R.fSSRNeighbourFill > 0.0f)
             {
                 IDirect3DSurface9* surfs[2] = { R.SSRSpreadSurf[half], R.SSRFallbackSurf[half] };
                 IDirect3DTexture9* texs[2] = { R.SSRSpreadTex[half]->mD3DTexture, R.SSRFallbackTex[half]->mD3DTexture };
@@ -306,7 +373,8 @@ export void RenderScreenSpaceReflections()
                 {
                     effect->SetTexture(h.SSRFallbackTex2D, fill);
                     effect->SetFloat(h.fSpreadRadius, step ? 36.0f : 18.0f);
-                    draw(2, surfs[step]);
+                    if (!draw(2, surfs[step]))
+                        break;
                     fill = texs[step];
                 }
             }
@@ -314,8 +382,15 @@ export void RenderScreenSpaceReflections()
         ProfilerMark(pDevice, kProfSSRFill, false);
         effect->SetTexture(h.SSRFallbackTex2D, fill);
         ProfilerMark(pDevice, kProfSSRResolve, true);
-        draw(3, ssrSurf);
+        const bool resolved = draw(3, ssrSurf);
         ProfilerMark(pDevice, kProfSSRResolve, false);
+        if (!resolved)
+        {
+            effect->End();
+            clearSSR();
+            R.nSSRAccumFrame = 0;
+            return;
+        }
     }
     effect->End();
 

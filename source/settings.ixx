@@ -2119,6 +2119,8 @@ public:
             { 0, "PREF_STUNTJUMPCAM",           "MISC",       "StuntJumpCamera",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_ACTIONCAM",              "MISC",       "ActionCamera",                       "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSR",                    "REFLECTIONS", "SSR",                               "MENU_DISPLAY_SSR_QUALITY",   0, nullptr, 0, 2 },
+            { 0, "PREF_SSR_HIZ",                "REFLECTIONS", "SSRHiZ",                           "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_SSR_STOCHASTIC",         "REFLECTIONS", "SSRStochastic",                    "",                           0, nullptr, 0, 1 },
             { 0, "PREF_SSR_DEBUG",              "DEBUG",      "SSRDebug",                           "MENU_DISPLAY_SSR_DEBUG",     0, nullptr, 0, 10 },
             { 0, "PREF_GROUND_DEBUG",           "DEBUG",      "GroundSurfacesDebug",                "",                           0, nullptr, 0, 1 },
             { 0, "PREF_WET_GROUND_DEBUG",       "DEBUG",      "WetGroundDebug",                     "MENU_DISPLAY_WET_DEBUG",     0, nullptr, 0, 2 },
@@ -2410,6 +2412,8 @@ public:
             if (category == MenuScreen::Invalid)
                 continue;
             AddRow(category, "SSR", "PREF_SSR", 3, "MENU_DISPLAY_SSR_QUALITY");
+            AddRow(category, "SSRHiZ", "PREF_SSR_HIZ", 2, toggle);
+            AddRow(category, "SSRStochastic", "PREF_SSR_STOCHASTIC", 2, toggle);
             AddRow(category, "SSGI", "PREF_SSGI", 2, toggle);
             AddRow(category, "Contact Shadows", "PREF_CONTACTSHADOWS", 2, toggle);
             AddRow(category, "SkinSSS", "PREF_SKIN_SSS", 2, toggle);

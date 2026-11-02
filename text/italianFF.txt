@@ -172,6 +172,12 @@ Screen Space Reflections
 [SSR Debug]
 SSR Debug View
 
+[SSRHiZ]
+Hierarchical SSR
+
+[SSRStochastic]
+Stochastic Reflections
+
 [SSRHalf]
 Half Resolution
 

@@ -172,6 +172,12 @@ Logitech LightSync RGB
 [SSR Debug]
 Отладка отражений
 
+[SSRHiZ]
+Иерархия глубины SSR
+
+[SSRStochastic]
+Стохастические отражения
+
 [SSRHalf]
 Половинное разрешение
 

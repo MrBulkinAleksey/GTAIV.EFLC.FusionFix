@@ -78,8 +78,8 @@ namespace PostFxPass
         // Depths, normals and light: never sRGB, whatever the game's last draw left on the register
         { D3DSAMP_SRGBTEXTURE, FALSE },
     };
-    export constexpr DWORD kSSRSamplerSlots = 8;
-    export constexpr DWORD kSSRTextureSlots = 8;
+    export constexpr DWORD kSSRSamplerSlots = 16;
+    export constexpr DWORD kSSRTextureSlots = 16;
 
     // The textures and the sampler states of the first kSSRTextureSlots samplers, saved on
     // construction and put back on destruction: deferred_lighting draws right after FusionFix's
