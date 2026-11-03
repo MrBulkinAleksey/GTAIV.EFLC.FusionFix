@@ -588,9 +588,11 @@ private:
                         64, aoDesc, PostFxResources.SSRSpreadSurf[half]);
                     PostFxResources.SSRTraceTex[half] = rage::CreateEmptyRenderTarget(traceNames[half], w, hgt, 64, aoDesc,
                         PostFxResources.SSRTraceSurf[half]);
-                    if (PostFxResources.fSSRTemporalBlend > 0.0f)
-                        PostFxResources.SSRHitDistTex[half] = rage::CreateEmptyRenderTarget(half ? "SSRHalfHitDistTex" : "SSRHitDistTex",
-                            w, hgt, 64, aoDesc, PostFxResources.SSRHitDistSurf[half]);
+                    // Spatial denoising and neighbour fill also use hit distances,
+                    // including when temporal accumulation is disabled. Keep the
+                    // targets available if those settings change after allocation.
+                    PostFxResources.SSRHitDistTex[half] = rage::CreateEmptyRenderTarget(half ? "SSRHalfHitDistTex" : "SSRHitDistTex",
+                        w, hgt, 64, aoDesc, PostFxResources.SSRHitDistSurf[half]);
                 }
                 auto marchDesc = rage::OwnRenderTargetDesc(rage::GRCFMT_R32F);
                 PostFxResources.SSRMarchDepthTex = rage::CreateEmptyRenderTarget("SSRMarchDepthTex", width / 2, height / 2, 32, marchDesc,

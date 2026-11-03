@@ -229,7 +229,7 @@ export void RenderScreenSpaceReflections()
     const bool denoise = R.fSSRDenoiseRadius > 0.0f && denoisedSurf && denoisedTex && h.techSSRDenoise;
     const bool distanceAvailable = R.SSRHitDistSurf[half] && R.SSRHitDistTex[half] && R.SSRHitDistTex[half]->mD3DTexture;
     // The distance target serves temporal, the fill's gate and the spatial filter.
-    const bool hitDistances = distanceAvailable && R.fSSRNeighbourFillMinDistance > 0.0f;
+    const bool hitDistances = distanceAvailable && R.fSSRNeighbourFill > 0.0f && R.fSSRNeighbourFillMinDistance > 0.0f;
     const bool writeHitDistances = distanceAvailable && (temporal || hitDistances || denoise);
     effect->SetFloat(h.fFillMinDistance, hitDistances ? R.fSSRNeighbourFillMinDistance / (std::max)(R.fSSRMaxDistance, 0.01f) : 0.0f);
     effect->SetFloat(h.fDenoiseHitDistance, writeHitDistances && denoise ? 1.0f : 0.0f);
