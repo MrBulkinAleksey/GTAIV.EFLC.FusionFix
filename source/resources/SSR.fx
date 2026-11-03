@@ -1470,6 +1470,16 @@ float SSRHitDistanceWeight(float a, float b)
     return 1.0 - smoothstep(tolerance, 2.0 * tolerance, difference);
 }
 
+// A stochastic ray can miss even when a nearby ray hits the same reflection.
+// Let those hits bound history for a missed centre, while keeping misses out of
+// a hit centre's window: lowering hit confidence there reveals the bright map.
+float SSRTemporalHitWeight(float centre, float tap, float stochastic)
+{
+    if (stochastic > 0.0 && centre == 0.0 && tap > 0.0)
+        return 1.0;
+    return SSRHitDistanceWeight(centre, tap);
+}
+
 // Each pixel decides on its own whether its ray hit and where, so neighbours on a car panel
 // pick slightly different points and the reflection looks grainy. A small depth aware blur,
 // in premultiplied form so misses (alpha 0) neither darken the colour nor bleed a halo, and
@@ -1752,10 +1762,12 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float4 m1 = current, m2 = current * current;
     float sampleWeight = 1.0;
     float centreHitDistance = fTemporalAnySurface <= 0.0 ? tex2Dlod(SSRHitDistTex, float4(uv, 0, 0)).r : 0.0;
-    [unroll]
+    bool stochasticMiss = fTemporalAnySurface <= 0.0 && fStochasticSSR > 0.0 && centreHitDistance == 0.0;
+    float centreDepth = stochasticMiss ? LinearDepth(uv) : 0.0;
+    [loop] [fastopt]
     for (int y = -1; y <= 1; ++y)
     {
-        [unroll]
+        [loop] [fastopt]
         for (int x = -1; x <= 1; ++x)
         {
             if (x == 0 && y == 0)
@@ -1764,7 +1776,14 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
             float4 s = TemporalPremultiply(tex2Dlod(SSRResultTex, float4(tapUV, 0, 0)));
             float w = 1.0;
             if (fTemporalAnySurface <= 0.0)
-                w = SSRHitDistanceWeight(centreHitDistance, tex2Dlod(SSRHitDistTex, float4(tapUV, 0, 0)).r);
+            {
+                float tapHitDistance = tex2Dlod(SSRHitDistTex, float4(tapUV, 0, 0)).r;
+                w = SSRTemporalHitWeight(centreHitDistance, tapHitDistance, fStochasticSSR);
+                // A hit across the receiver's silhouette is not evidence of a
+                // stochastic miss on this surface.
+                if (stochasticMiss && tapHitDistance > 0.0)
+                    w *= saturate(1.0 - abs(LinearDepth(tapUV) - centreDepth) / (0.02 * centreDepth + 0.01));
+            }
             m1 += w * s;
             m2 += w * s * s;
             sampleWeight += w;
@@ -1774,7 +1793,7 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float4 spread = sqrt(max(m2 / sampleWeight - m1 * m1, 0.0));
     // Stochastic radiance can vary between frames even when spatial filtering made this
     // frame uniform. Apply its RGB window before the uniform-neighbourhood early out.
-    // Alpha is still clamped exactly; an entirely empty neighbourhood cannot retain old hits.
+    // Alpha is still clamped to the neighbourhood; an entirely empty one cannot retain old hits.
     if (fTemporalAnySurface <= 0.0 && fStochasticSSR > 0.0)
         spread.rgb = max(spread.rgb, 0.15 * abs(m1.rgb));
     // A neighbourhood all alike clamps any history to the current value, as where a glossy

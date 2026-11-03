@@ -46,6 +46,18 @@ int main() {
     float missWeight=SSRHitDistanceWeight(dist(.8f),0.0f);
     float filteredAlpha=1.0f/(1.0f+4.0f*missWeight);
     check(std::abs(filteredAlpha-1.0f)<1e-6,"miss darkened hit confidence");
+    // A single stochastic miss surrounded by hits must retain a nonzero
+    // temporal window, while a deterministic miss and the hit side of the
+    // same edge keep the strict foreground/background separation.
+    float borrowed=SSRTemporalHitWeight(0,dist(.8f),1);
+    check(borrowed==1,"stochastic miss discarded surrounding hits");
+    check(SSRTemporalHitWeight(0,dist(.8f),0)==0,"deterministic miss borrowed hits");
+    check(SSRTemporalHitWeight(dist(.8f),0,1)==0,"stochastic hit borrowed misses");
+    check(SSRTemporalHitWeight(0,0,1)==1,"empty neighbourhood changed");
+    check(SSRTemporalHitWeight(-1,dist(.8f),1)==0,"untraced surface borrowed hits");
+    float alphaMean=8*borrowed/(1+8*borrowed);
+    float alphaSpread=std::sqrt(alphaMean-alphaMean*alphaMean);
+    check(alphaMean+1.5f*alphaSpread>0,"stochastic miss cannot retain history");
     for (int i=0;i<100;++i) {
         float a=dist(.1f+i*.2f), b=dist(.1f+(99-i)*.2f);
         float w1=SSRHitDistanceWeight(a,b),w2=SSRHitDistanceWeight(b,a);
