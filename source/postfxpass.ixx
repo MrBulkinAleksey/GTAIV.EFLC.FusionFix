@@ -718,22 +718,33 @@ namespace PostFxPass
     }
 
     // Draws one full screen quad of the SSR effect's technique into target, then restores the
-    // device state it touched. The draw is timed as profile, see ProfilerSection.
-    export void DrawEffectPass(IDirect3DDevice9* pDevice, ID3DXEffect* effect, D3DXHANDLE technique, IDirect3DSurface9* target, float width, float height,
+    // shaders it touched. Callers must only publish the result when this returns true.
+    // The caller restores targets and other state. The draw is timed as profile, see ProfilerSection.
+    export bool DrawEffectPass(IDirect3DDevice9* pDevice, ID3DXEffect* effect, D3DXHANDLE technique, IDirect3DSurface9* target, float width, float height,
                                int profile = -1)
     {
         const ScreenQuad screenQuad = ScreenQuad::Full(width, height);
-        pDevice->SetRenderTarget(0, target);
+        if (FAILED(pDevice->SetRenderTarget(0, target)))
+            return false;
 
         // No state saving by D3DX (see SavedShaders): the callers save and restore textures, samplers, render states
         // and constants themselves, the shaders, which the effect sets, are put back here.
         SavedShaders shaders(pDevice);
 
         UINT passes = 0;
-        effect->SetTechnique(technique);
-        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
-        effect->BeginPass(0);
-        effect->CommitChanges();
+        if (FAILED(effect->SetTechnique(technique)) || FAILED(effect->Begin(&passes, D3DXFX_DONOTSAVESTATE)))
+            return false;
+        if (FAILED(effect->BeginPass(0)))
+        {
+            effect->End();
+            return false;
+        }
+        if (FAILED(effect->CommitChanges()))
+        {
+            effect->EndPass();
+            effect->End();
+            return false;
+        }
         BindEffectSamplers(pDevice, effect);
         if (SSRTrace::Active())
         {
@@ -750,8 +761,9 @@ namespace PostFxPass
                 desc.Width, desc.Height, unsigned(view.Width), unsigned(view.Height), unsigned(view.X), unsigned(view.Y), width, height);
         }
         ProfilerScope timed(pDevice, profile);
-        screenQuad.Draw(pDevice);
-        effect->EndPass();
-        effect->End();
+        const HRESULT drawHr = screenQuad.Draw(pDevice);
+        const HRESULT passHr = effect->EndPass();
+        const HRESULT endHr = effect->End();
+        return SUCCEEDED(drawHr) && SUCCEEDED(passHr) && SUCCEEDED(endHr);
     }
 }

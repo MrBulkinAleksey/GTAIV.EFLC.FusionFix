@@ -194,8 +194,11 @@ export void RenderScreenSpaceReflections()
     effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
     effect->SetFloat(h.fStepsPerPixel, 1.0f / R.fSSRStepPixels);
     effect->SetFloat(h.fMarchFullDepth, R.SSRMarchFullDepth() ? 1.0f : 0.0f);
-    const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal && R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1] &&
-                          R.SSRHitDistSurf[half];
+    const bool temporal = R.fSSRTemporalBlend > 0.0f && h.techSSRTemporal &&
+        R.SSRAccumSurf[half][0] && R.SSRAccumSurf[half][1] &&
+        R.SSRAccumTex[half][0] && R.SSRAccumTex[half][0]->mD3DTexture &&
+        R.SSRAccumTex[half][1] && R.SSRAccumTex[half][1]->mD3DTexture &&
+        R.SSRHitDistSurf[half] && R.SSRHitDistTex[half] && R.SSRHitDistTex[half]->mD3DTexture;
     const bool stochastic = R.SSRStochastic() && temporal && hasSpecular;
     static bool previousStochastic = false;
     if (stochastic != previousStochastic)
@@ -208,6 +211,7 @@ export void RenderScreenSpaceReflections()
     effect->SetFloat(h.fDistanceFade, R.fSSRDistanceFade);
     effect->SetFloat(h.fFallback, R.fSSRFallback);
     effect->SetFloat(h.fNeighbourFill, R.fSSRNeighbourFill);
+    effect->SetFloat(h.fFillPixelScale, half ? 0.5f : 1.0f);
     // The fill's distance gate reads how far the hits went, which the march writes with its second target
     const bool hitDistances = R.SSRHitDistSurf[half] && R.SSRHitDistTex[half] && R.fSSRNeighbourFillMinDistance > 0.0f;
     effect->SetFloat(h.fFillMinDistance, hitDistances ? R.fSSRNeighbourFillMinDistance / (std::max)(R.fSSRMaxDistance, 0.01f) : 0.0f);
@@ -254,8 +258,12 @@ export void RenderScreenSpaceReflections()
         // D3DX saving the state it changes, through state blocks, left the smoothing and the
         // accumulation in play drawing with what the game had bound: the textures they set
         // did not take. This function saves and puts back what the passes touch itself.
-        effect->SetTechnique(h.techSSR);
-        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
+        if (FAILED(effect->SetTechnique(h.techSSR)) || FAILED(effect->Begin(&passes, D3DXFX_DONOTSAVESTATE)))
+        {
+            clearSSR();
+            R.nSSRAccumFrame = 0;
+            return;
+        }
     }
     {
         // The march, the guess for its misses (skipped while SSRFallback is
@@ -269,11 +277,15 @@ export void RenderScreenSpaceReflections()
             const HRESULT passHr = effect->BeginPass(pass);
             if (FAILED(passHr))
                 return false;
-            effect->CommitChanges();
+            if (FAILED(effect->CommitChanges()))
+            {
+                effect->EndPass();
+                return false;
+            }
             BindEffectSamplers(pDevice, effect);
             SSRTrace::State(pDevice, "ssr pass");
             const HRESULT drawHr = screenQuad.Draw(pDevice);
-            effect->EndPass();
+            const HRESULT endHr = effect->EndPass();
             if (SSRTrace::Active())
             {
                 D3DVIEWPORT9 view = {};
@@ -282,7 +294,7 @@ export void RenderScreenSpaceReflections()
                     pass, passes, static_cast<void*>(target), unsigned(view.Width), unsigned(view.Height),
                     unsigned(rtHr), unsigned(passHr), unsigned(drawHr));
             }
-            return SUCCEEDED(drawHr);
+            return SUCCEEDED(drawHr) && SUCCEEDED(endHr);
         };
         // The depth the march steps through, at half the full size whatever size SSR runs at;
         // timed with the march.
@@ -334,7 +346,15 @@ export void RenderScreenSpaceReflections()
         if (temporal || hitDistances)
         {
             pDevice->GetRenderTarget(1, &oldTarget1);
-            pDevice->SetRenderTarget(1, R.SSRHitDistSurf[half]);
+            if (FAILED(pDevice->SetRenderTarget(1, R.SSRHitDistSurf[half])))
+            {
+                SAFE_RELEASE(oldTarget1);
+                ProfilerMark(pDevice, kProfSSRTrace, false);
+                effect->End();
+                clearSSR();
+                R.nSSRAccumFrame = 0;
+                return;
+            }
         }
         const bool traceOk = draw(0, R.SSRTraceSurf[half]);
         ProfilerMark(pDevice, kProfSSRTrace, false);
@@ -403,22 +423,11 @@ export void RenderScreenSpaceReflections()
         // The radius is in full size pixels, so the blur covers the same part of the screen.
         effect->SetFloat(h.fDenoiseRadius, half ? R.fSSRDenoiseRadius * 0.5f : R.fSSRDenoiseRadius);
         effect->SetFloat(h.fDenoiseSSROnly, 1.0f);
-        pDevice->SetRenderTarget(0, denoisedSurf);
-        effect->SetTechnique(h.techSSRDenoise);
-        const HRESULT beginHr = effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
-        const HRESULT passHr = effect->BeginPass(0);
-        effect->CommitChanges();
-        BindEffectSamplers(pDevice, effect);
-        SSRTrace::State(pDevice, "ssr denoise");
         SSRTrace::Contents(pDevice, "denoise input", ssrTex);
-        ProfilerMark(pDevice, kProfSSRDenoise, true);
-        const HRESULT drawHr = screenQuad.Draw(pDevice);
-        ProfilerMark(pDevice, kProfSSRDenoise, false);
-        effect->EndPass();
-        effect->End();
-        SSRTrace::Line("ssr denoise: begin %08x pass %08x draw %08x passes %u", unsigned(beginHr), unsigned(passHr), unsigned(drawHr), passes);
-        SSRTrace::Contents(pDevice, "denoise output", denoisedTex);
-        R.bSSRDenoised = true;
+        R.bSSRDenoised = DrawEffectPass(pDevice, effect, h.techSSRDenoise, denoisedSurf,
+            half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height, kProfSSRDenoise);
+        if (R.bSSRDenoised)
+            SSRTrace::Contents(pDevice, "denoise output", denoisedTex);
     }
     IDirect3DTexture9* ssrResult = R.bSSRDenoised ? denoisedTex : ssrTex;
 
@@ -445,21 +454,15 @@ export void RenderScreenSpaceReflections()
             SSRTrace::Contents(pDevice, "temporal input", ssrResult);
             SSRTrace::Contents(pDevice, "temporal history", R.SSRAccumTex[sizeIndex][prev]->mD3DTexture);
         }
-        pDevice->SetRenderTarget(0, R.SSRAccumSurf[sizeIndex][next]);
-        effect->SetTechnique(h.techSSRTemporal);
-        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
-        effect->BeginPass(0);
-        effect->CommitChanges();
-        BindEffectSamplers(pDevice, effect);
-        SSRTrace::State(pDevice, "ssr temporal");
-        ProfilerMark(pDevice, kProfSSRTemporal, true);
-        screenQuad.Draw(pDevice);
-        ProfilerMark(pDevice, kProfSSRTemporal, false);
-        effect->EndPass();
-        effect->End();
-        ssrResult = R.SSRAccumTex[sizeIndex][next]->mD3DTexture;
-        R.nSSRAccumIndex = next;
-        R.nSSRAccumFrame = FrameHistory::Frame();
+        if (DrawEffectPass(pDevice, effect, h.techSSRTemporal, R.SSRAccumSurf[sizeIndex][next],
+            half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height, kProfSSRTemporal))
+        {
+            ssrResult = R.SSRAccumTex[sizeIndex][next]->mD3DTexture;
+            R.nSSRAccumIndex = next;
+            R.nSSRAccumFrame = FrameHistory::Frame();
+        }
+        else
+            R.nSSRAccumFrame = 0;
     }
     else
         R.nSSRAccumFrame = 0;

@@ -286,6 +286,7 @@ uniform float fFallback;          // 0..1, strength of the fill from past what h
 uniform float fNeighbourFill;     // 0..1, strength of the fill from the hits around a miss (NeighbourFill, SSRSpread_PS)
 uniform float fFillMinDistance;   // over fMaxDistance: hits nearer than this along their ray fill no misses (0: all do)
 uniform float fVehicleScale = 1.0; // SSRVehicleUnits / (10 x the game's c39.w) on car bodies, SkinIDTex their material IDs
+uniform float fFillPixelScale;     // full-size pixels to this pass's pixels
 uniform float fSpreadRadius;      // pixels, how far SSRSpread_PS looks this step
 uniform float fContactBlend;      // GIContactTemporal_PS: share of last frame's contact shadows kept, 0 while there is none
 
@@ -695,13 +696,10 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
 
     // The surface the depth buffer holds where the ray hit; hitP is up to a thickness off it.
     float3 surfP = ViewPosFromUVZ(finalUV, surfZ);
-    float2 histUV = HistoryUV(surfP);
-    // The hit may itself be a moving car or pedestrian. The camera transform alone reprojects
-    // such a surface to the wrong point in the previous scene; when motion vectors exist, use
-    // the hit pixel's vector. The previous depth check below still rejects disocclusions.
-    [branch]
-    if (fUseMotion > 0.0)
-        histUV = finalUV + tex2Dlod(MotionTex, float4(finalUV, 0, 0)).xy + vec2MotionJitter;
+    // Motion vectors carry the hit to its previous pixel, but do not carry its previous Z.
+    // Use the same camera-only depth validation policy as the accumulation passes.
+    bool checkHitDepth;
+    float2 histUV = TemporalHistoryUV(finalUV, surfP, checkHitDepth);
 
     float2 edge = saturate(min(min(finalUV, histUV), 1.0 - max(finalUV, histUV)) / max(fEdgeFade, 1e-4));
     float e = min(edge.x, edge.y);
@@ -737,7 +735,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // step to metres far out and let the ped through. clip.w is the view depth in the
     // history's camera.
     [branch]
-    if (fUsePrevDepth > 0.0)
+    if (fUsePrevDepth > 0.0 && checkHitDepth)
     {
         float prevSurfZ = dot(float4(surfP, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
                                                          vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
@@ -900,20 +898,23 @@ float3 NeighbourFill(float2 uv, float2 vPos, float z, out float weight)
         float2( 2.0,  0.0), float2(-2.0,  0.0), float2( 0.0,  2.0), float2( 0.0, -2.0),
         float2( 4.0,  4.0), float2(-4.0,  4.0), float2( 4.0, -4.0), float2(-4.0, -4.0),
         float2( 9.0,  0.0), float2(-9.0,  0.0), float2( 0.0,  9.0), float2( 0.0, -9.0)
-    }; // pixels of this pass's target
+    }; // full-size pixels
     float3 sum = 0.0;
     float sumW = 0.0;
+    float fillGloss = fGlossCutoff >= 0.0 ? tex2Dlod(SpecularTex, float4(uv, 0, 0)).y : 0.0;
     float3 fillNormal = 0.0;
-    if (fStochasticSSR > 0.0 && fUseGBufferNormals > 0.0)
+    if (fUseGBufferNormals > 0.0)
         fillNormal = GBufferNormalWorld(uv);
     [loop] [fastopt]
     for (int i = 0; i < 12; ++i)
     {
-        float2 tapUV = uv + mul(turn, taps[i]) * vec2InvViewportSize;
+        float2 tapUV = uv + mul(turn, taps[i]) * fFillPixelScale * vec2InvViewportSize;
         float4 hit = tex2Dlod(SSRResultTex, float4(tapUV, 0, 0));
         float w = max(hit.a, 0.0) * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
-        if (fStochasticSSR > 0.0 && fUseGBufferNormals > 0.0 && w > 0.0)
+        if (fUseGBufferNormals > 0.0 && w > 0.0)
             w *= smoothstep(0.8, 0.98, dot(fillNormal, GBufferNormalWorld(tapUV)));
+        if (fGlossCutoff >= 0.0 && w > 0.0)
+            w *= saturate(1.0 - abs(fillGloss - tex2Dlod(SpecularTex, float4(tapUV, 0, 0)).y) / 0.2);
         // A miss beside the reflection of something standing close to the surface (the player at a car's bonnet) most
         // likely sees what is behind it, not it: filled from such hits the misses around his reflection took its dark
         // colour, a halo of him 9 to 36 pixels wide. Only hits farther along their ray than fFillMinDistance fill.
@@ -1085,19 +1086,22 @@ float4 SSRSpread_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         float2( 0.7,  0.7), float2(-0.7,  0.7), float2( 0.7, -0.7), float2(-0.7, -0.7)
     };
     float z = LinearDepth(uv);
+    float fillGloss = fGlossCutoff >= 0.0 ? tex2Dlod(SpecularTex, float4(uv, 0, 0)).y : 0.0;
     float3 fillNormal = 0.0;
-    if (fStochasticSSR > 0.0 && fUseGBufferNormals > 0.0)
+    if (fUseGBufferNormals > 0.0)
         fillNormal = GBufferNormalWorld(uv);
     float3 sum = 0.0;
     float sumW = 0.0, top = 0.0;
     [loop] [fastopt]
     for (int i = 0; i < 8; ++i)
     {
-        float2 tapUV = uv + mul(turn, taps[i]) * fSpreadRadius * vec2InvViewportSize;
+        float2 tapUV = uv + mul(turn, taps[i]) * fSpreadRadius * fFillPixelScale * vec2InvViewportSize;
         float4 tap = tex2Dlod(SSRFallbackTex, float4(tapUV, 0, 0));
         float w = tap.a * saturate(1.0 - abs(LinearDepth(tapUV) - z) / (0.05 * z + 0.05));
-        if (fStochasticSSR > 0.0 && fUseGBufferNormals > 0.0 && w > 0.0)
+        if (fUseGBufferNormals > 0.0 && w > 0.0)
             w *= smoothstep(0.8, 0.98, dot(fillNormal, GBufferNormalWorld(tapUV)));
+        if (fGlossCutoff >= 0.0 && w > 0.0)
+            w *= saturate(1.0 - abs(fillGloss - tex2Dlod(SpecularTex, float4(tapUV, 0, 0)).y) / 0.2);
         sum += tap.rgb * w;
         sumW += w;
         top = max(top, w);
@@ -1601,6 +1605,11 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     }
     m1 /= 9.0;
     float4 spread = sqrt(max(m2 / 9.0 - m1 * m1, 0.0));
+    // Stochastic radiance can vary between frames even when spatial filtering made this
+    // frame uniform. Apply its RGB window before the uniform-neighbourhood early out.
+    // Alpha is still clamped exactly; an entirely empty neighbourhood cannot retain old hits.
+    if (fTemporalAnySurface <= 0.0 && fStochasticSSR > 0.0)
+        spread.rgb = max(spread.rgb, 0.15 * abs(m1.rgb));
     // A neighbourhood all alike clamps any history to the current value, as where a glossy
     // surface reflects nothing this frame.
     [branch]
@@ -1613,11 +1622,6 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     // the light either way.
     if (fTemporalAnySurface > 0.0)
         spread = max(spread, 0.25 * abs(m1));
-    else if (fStochasticSSR > 0.0)
-        // Spatial smoothing can make one stochastic frame nearly uniform. Preserve a small
-        // colour window for accumulation, but keep the original confidence clamp so old hits
-        // cannot linger when the surface no longer reflects them.
-        spread.rgb = max(spread.rgb, 0.15 * abs(m1.rgb));
     float4 lo = m1 - 1.5 * spread, hi = m1 + 1.5 * spread;
 
     float3 C = ReconstructViewPos(vPos, LinearDepth(uv));
