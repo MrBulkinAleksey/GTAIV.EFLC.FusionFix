@@ -1176,6 +1176,13 @@ public:
                     *static_cast<uint32_t*>(locked.pBits) = 0;
                     TransparentTexture->UnlockRect(0);
                 }
+                else
+                {
+                    // Do not bind uninitialised pixels as a transparent fallback.
+                    // Leave it null so a later frame can retry the allocation.
+                    TransparentTexture->Release();
+                    TransparentTexture = nullptr;
+                }
             }
         }
         return TransparentTexture;

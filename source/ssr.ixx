@@ -59,6 +59,7 @@ export void RenderScreenSpaceReflections()
     R.bWaterDoneThisFrame = false;
     R.SSRResult = nullptr;
     R.bSSRValidThisFrame = false;
+    R.bSSRReprojValid = false;
     R.bSSRDebugValid = false;
     R.bGlassFrameValid = false;
     R.bSSRDenoised = false;
@@ -73,23 +74,9 @@ export void RenderScreenSpaceReflections()
     if (!pDevice)
         return;
 
-    auto clearSSR = [&]()
-    {
-        IDirect3DSurface9* oldRT = nullptr;
-        pDevice->GetRenderTarget(0, &oldRT);
-        pDevice->SetRenderTarget(0, R.SSRSurf);
-        pDevice->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
-        if (oldRT)
-        {
-            pDevice->SetRenderTarget(0, oldRT);
-            oldRT->Release();
-        }
-    };
-
     if (!R.SSREnabled())
     {
         SSRTrace::Line("ssr: left, off in the menu");
-        clearSSR();
         R.nSSRAccumFrame = 0;
         return;
     }
@@ -97,15 +84,16 @@ export void RenderScreenSpaceReflections()
     rage::grcViewport* vp = rage::GetCurrentViewport();
     if (vp)
         SSRTrace::Line("ssr: vp %p %dx%d near %.3f far %.1f", static_cast<void*>(vp), int(vp->mWidth), int(vp->mHeight), vp->mNearClip, vp->mFarClip);
-    if (!R.SSREffect || !R.mDepthRT || !R.SSRHistoryTex || !vp || R.fSSRIntensity <= 0.0f ||
-        !R.SSRTraceSurf[0] || !R.SSRFallbackSurf[0] || !R.SSRMarchDepthSurf || !R.SSRMarchDepthTex ||
+    auto hasTexture = [](rage::grcRenderTargetPC* target) { return target && target->mD3DTexture; };
+    if (!R.SSREffect || !hasTexture(R.mDepthRT) || !hasTexture(R.SSRHistoryTex) || !vp || R.fSSRIntensity <= 0.0f ||
+        !hasTexture(R.SSRTex) || !R.SSRTraceSurf[0] || !hasTexture(R.SSRTraceTex[0]) ||
+        !R.SSRFallbackSurf[0] || !hasTexture(R.SSRFallbackTex[0]) || !R.SSRMarchDepthSurf || !R.SSRMarchDepthTex ||
         !R.SSRMarchDepthTex->mD3DTexture)
     {
         SSRTrace::Line("ssr: left, effect %p depth %p history %p vp %p intensity %.2f trace %p fallback %p march depth %p",
             static_cast<void*>(R.SSREffect), static_cast<void*>(R.mDepthRT), static_cast<void*>(R.SSRHistoryTex),
             static_cast<void*>(vp), R.fSSRIntensity, static_cast<void*>(R.SSRTraceSurf[0]), static_cast<void*>(R.SSRFallbackSurf[0]),
             static_cast<void*>(R.SSRMarchDepthSurf));
-        clearSSR();
         R.nSSRAccumFrame = 0;
         return;
     }
@@ -116,7 +104,6 @@ export void RenderScreenSpaceReflections()
     if (!FrameHistory::CanReproject(R.nSSRHistoryFrame))
     {
         SSRTrace::Line("ssr: left, scene history cannot be reprojected");
-        clearSSR();
         R.nSSRAccumFrame = 0;
         R.bSSRReprojValid = false;
         return;
@@ -136,12 +123,13 @@ export void RenderScreenSpaceReflections()
 
     // Half: the march and the smoothing run on the half size targets, created as the full
     // size halved; the debug view stays full size.
-    const bool half = R.SSRHalfRes() && R.SSRHalfSurf && R.SSRHalfDenoisedSurf && R.SSRTraceSurf[1] && R.SSRFallbackSurf[1];
+    const bool half = R.SSRHalfRes() && R.SSRHalfSurf && hasTexture(R.SSRHalfTex) &&
+        R.SSRTraceSurf[1] && hasTexture(R.SSRTraceTex[1]) && R.SSRFallbackSurf[1] && hasTexture(R.SSRFallbackTex[1]);
     IDirect3DSurface9* ssrSurf = half ? R.SSRHalfSurf : R.SSRSurf;
     IDirect3DTexture9* ssrTex = half ? R.SSRHalfTex->mD3DTexture : R.SSRTex->mD3DTexture;
     IDirect3DSurface9* denoisedSurf = half ? R.SSRHalfDenoisedSurf : R.SSRDenoisedSurf;
-    IDirect3DTexture9* denoisedTex = half ? R.SSRHalfDenoisedTex->mD3DTexture
-                                          : (R.SSRDenoisedTex ? R.SSRDenoisedTex->mD3DTexture : nullptr);
+    IDirect3DTexture9* denoisedTex = half ? (hasTexture(R.SSRHalfDenoisedTex) ? R.SSRHalfDenoisedTex->mD3DTexture : nullptr)
+                                          : (hasTexture(R.SSRDenoisedTex) ? R.SSRDenoisedTex->mD3DTexture : nullptr);
 
     auto& h = R.SSREffectHandles;
     ID3DXEffect* effect = R.SSREffect;
@@ -278,7 +266,6 @@ export void RenderScreenSpaceReflections()
         // did not take. This function saves and puts back what the passes touch itself.
         if (FAILED(effect->SetTechnique(h.techSSR)) || FAILED(effect->Begin(&passes, D3DXFX_DONOTSAVESTATE)))
         {
-            clearSSR();
             R.nSSRAccumFrame = 0;
             return;
         }
@@ -321,7 +308,6 @@ export void RenderScreenSpaceReflections()
         {
             ProfilerMark(pDevice, kProfSSRDepth, false);
             effect->End();
-            clearSSR();
             R.nSSRAccumFrame = 0;
             return;
         }
@@ -371,7 +357,6 @@ export void RenderScreenSpaceReflections()
                 SAFE_RELEASE(oldTarget1);
                 ProfilerMark(pDevice, kProfSSRTrace, false);
                 effect->End();
-                clearSSR();
                 R.nSSRAccumFrame = 0;
                 return;
             }
@@ -386,7 +371,6 @@ export void RenderScreenSpaceReflections()
         if (!traceOk)
         {
             effect->End();
-            clearSSR();
             R.nSSRAccumFrame = 0;
             return;
         }
@@ -405,7 +389,7 @@ export void RenderScreenSpaceReflections()
             }
             // The fill's cascade, each step twice as far out as the last (the first reached nine
             // pixels), taking turns between the two targets; in pixels of this size.
-            if (filled && R.SSRSpreadSurf[half] && R.fSSRNeighbourFill > 0.0f)
+            if (filled && R.SSRSpreadSurf[half] && hasTexture(R.SSRSpreadTex[half]) && R.fSSRNeighbourFill > 0.0f)
             {
                 IDirect3DSurface9* surfs[2] = { R.SSRSpreadSurf[half], R.SSRFallbackSurf[half] };
                 IDirect3DTexture9* texs[2] = { R.SSRSpreadTex[half]->mD3DTexture, R.SSRFallbackTex[half]->mD3DTexture };
@@ -427,7 +411,6 @@ export void RenderScreenSpaceReflections()
         if (!resolved)
         {
             effect->End();
-            clearSSR();
             R.nSSRAccumFrame = 0;
             return;
         }
@@ -507,17 +490,8 @@ export void RenderScreenSpaceReflections()
         effect->SetTexture(h.SSRResultTex2D, (debugMode == 3 || debugMode == 11) ? ssrTex : ssrResult);
         effect->SetFloat(h.fDebugMode, float(debugMode));
 
-        pDevice->SetRenderTarget(0, R.SSRDebugSurf);
-        effect->SetTechnique(h.techSSRDebug);
-        effect->Begin(&passes, D3DXFX_DONOTSAVESTATE);
-        effect->BeginPass(0);
-        effect->CommitChanges();
-        BindEffectSamplers(pDevice, effect);
-        ProfilerScope timed(pDevice, kProfSSRDebug);
-        screenQuad.Draw(pDevice);
-        effect->EndPass();
-        effect->End();
-        R.bSSRDebugValid = true;
+        R.bSSRDebugValid = DrawEffectPass(pDevice, effect, h.techSSRDebug, R.SSRDebugSurf,
+                                         width, height, kProfSSRDebug);
     }
 
     // Camera for the car glass shaders, which draw after lighting.

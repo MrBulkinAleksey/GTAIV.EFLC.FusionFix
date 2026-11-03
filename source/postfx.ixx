@@ -3062,8 +3062,6 @@ public:
         IDirect3DBaseTexture9* tex = R.TransparentTex();
         if (R.SSRResult)
             tex = R.SSRResult;
-        else if (R.SSRTex && R.SSRTex->mD3DTexture)
-            tex = R.SSRTex->mD3DTexture; // cleared while SSR is off
         SetTextureBoth(pDevice, 3, tex);
         SSRTrace::Line("bind for lighting: s3 %s, ssr valid this frame %d", SSRTrace::TextureName(tex).c_str(), int(R.bSSRValidThisFrame));
         pDevice->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
