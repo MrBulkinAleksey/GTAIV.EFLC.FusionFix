@@ -329,7 +329,7 @@ public:
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth, vec2PrevDepthRange;
-        D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, fNeighbourFill, fFillMinDistance, fFillPixelScale, fSpreadRadius, fVehicleScale;
+        D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, fDenoiseHitDistance, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, fNeighbourFill, fFillMinDistance, fFillPixelScale, fSpreadRadius, fVehicleScale;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, fCSGrassGloss, techContactShadows;
         D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, vec2InvHistorySize, fNearPlane, fFarDivNear, vec4ProjInfo;
@@ -1716,6 +1716,7 @@ public:
                 h.fUseWaterMask = SSREffect->GetParameterByName(nullptr, "fUseWaterMask");
                 h.fDenoiseRadius = SSREffect->GetParameterByName(nullptr, "fDenoiseRadius");
                 h.fDenoiseSSROnly = SSREffect->GetParameterByName(nullptr, "fDenoiseSSROnly");
+                h.fDenoiseHitDistance = SSREffect->GetParameterByName(nullptr, "fDenoiseHitDistance");
                 h.fPassThinObjects = SSREffect->GetParameterByName(nullptr, "fPassThinObjects");
                 h.fStepJitter = SSREffect->GetParameterByName(nullptr, "fStepJitter");
                 h.fTowardCamera = SSREffect->GetParameterByName(nullptr, "fTowardCamera");

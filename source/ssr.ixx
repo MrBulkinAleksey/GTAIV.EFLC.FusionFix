@@ -214,9 +214,13 @@ export void RenderScreenSpaceReflections()
     effect->SetFloat(h.fFallback, R.fSSRFallback);
     effect->SetFloat(h.fNeighbourFill, R.fSSRNeighbourFill);
     effect->SetFloat(h.fFillPixelScale, half ? 0.5f : 1.0f);
-    // The fill's distance gate reads how far the hits went, which the march writes with its second target
-    const bool hitDistances = R.SSRHitDistSurf[half] && R.SSRHitDistTex[half] && R.fSSRNeighbourFillMinDistance > 0.0f;
+    const bool denoise = R.fSSRDenoiseRadius > 0.0f && denoisedSurf && denoisedTex && h.techSSRDenoise;
+    const bool distanceAvailable = R.SSRHitDistSurf[half] && R.SSRHitDistTex[half] && R.SSRHitDistTex[half]->mD3DTexture;
+    // The distance target serves temporal, the fill's gate and the spatial filter.
+    const bool hitDistances = distanceAvailable && R.fSSRNeighbourFillMinDistance > 0.0f;
+    const bool writeHitDistances = distanceAvailable && (temporal || hitDistances || denoise);
     effect->SetFloat(h.fFillMinDistance, hitDistances ? R.fSSRNeighbourFillMinDistance / (std::max)(R.fSSRMaxDistance, 0.01f) : 0.0f);
+    effect->SetFloat(h.fDenoiseHitDistance, writeHitDistances && denoise ? 1.0f : 0.0f);
     // Car bodies: SSR's colour in the units of the game's parabolic map, see fSSRVehicleUnits (last frame's c39.w).
     const bool vehicleUnits = R.fGameReflectionScale > 0.0f && R.mMaterialIdRT && R.mMaterialIdRT->mD3DTexture;
     if (vehicleUnits)
@@ -347,7 +351,7 @@ export void RenderScreenSpaceReflections()
         // The march also writes how far its rays went, for the accumulation and the fill's distance gate.
         ProfilerMark(pDevice, kProfSSRTrace, true);
         IDirect3DSurface9* oldTarget1 = nullptr;
-        if (temporal || hitDistances)
+        if (writeHitDistances)
         {
             pDevice->GetRenderTarget(1, &oldTarget1);
             if (FAILED(pDevice->SetRenderTarget(1, R.SSRHitDistSurf[half])))
@@ -362,7 +366,7 @@ export void RenderScreenSpaceReflections()
         }
         const bool traceOk = draw(0, R.SSRTraceSurf[half]);
         ProfilerMark(pDevice, kProfSSRTrace, false);
-        if (temporal || hitDistances)
+        if (writeHitDistances)
         {
             pDevice->SetRenderTarget(1, oldTarget1);
             SAFE_RELEASE(oldTarget1);
@@ -374,7 +378,7 @@ export void RenderScreenSpaceReflections()
             R.nSSRAccumFrame = 0;
             return;
         }
-        if (hitDistances)
+        if (writeHitDistances)
             effect->SetTexture(h.SSRHitDistTex2D, R.SSRHitDistTex[half]->mD3DTexture);
         effect->SetTexture(h.SSRResultTex2D, R.SSRTraceTex[half]->mD3DTexture);
         IDirect3DTexture9* fill = R.SSRFallbackTex[half]->mD3DTexture;
@@ -421,7 +425,7 @@ export void RenderScreenSpaceReflections()
     // Debug view, while the G-buffer still holds this frame. Changes nothing the game sees.
     // Smooth the result into the texture deferred_lighting reads.
     R.bSSRDenoised = false;
-    if (R.fSSRDenoiseRadius > 0.0f && denoisedSurf && denoisedTex && h.techSSRDenoise)
+    if (denoise)
     {
         effect->SetTexture(h.SSRResultTex2D, ssrTex);
         // The radius is in full size pixels, so the blur covers the same part of the screen.

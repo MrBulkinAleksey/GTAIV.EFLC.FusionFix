@@ -270,6 +270,7 @@ uniform float fDebugMode; // SSR debug view from the graphics menu, see SSRDebug
 uniform float fUseGBufferNormals; // 1 reads the G-buffer normal, 0 rebuilds it from depth
 uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDenoise_PS
 uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing contact shadows
+uniform float fDenoiseHitDistance; // hit-distance MRT is valid for SSR's spatial filter
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
 uniform float fStepsPerPixel;     // march steps per pixel of a ray on this pass's target, 1 / SSRStepPixels
 uniform float fUseHiZ;
@@ -1456,6 +1457,19 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     return float4(ssr.a * (1.0 - fade), ssr.a * fade, 0.0, 1.0);
 }
 
+// SSRHitDistTex stores distance divided by fMaxDistance; zero means a miss.
+// A nearby person and the road several metres behind them can reflect on the same
+// bonnet. Reflecting-surface depth and normal alone cannot tell those hits apart.
+float SSRHitDistanceWeight(float a, float b)
+{
+    if (a <= 0.0 || b <= 0.0)
+        return (a <= 0.0 && b <= 0.0) ? 1.0 : 0.0;
+    float nearest = min(a, b) * fMaxDistance;
+    float tolerance = 0.1 + 0.1 * nearest;
+    float difference = abs(a - b) * fMaxDistance;
+    return 1.0 - smoothstep(tolerance, 2.0 * tolerance, difference);
+}
+
 // Each pixel decides on its own whether its ray hit and where, so neighbours on a car panel
 // pick slightly different points and the reflection looks grainy. A small depth aware blur,
 // in premultiplied form so misses (alpha 0) neither darken the colour nor bleed a halo, and
@@ -1489,19 +1503,21 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
     // Where every tap reads what the centre does, the blur gives the centre back, whatever the
     // weights: for contact shadows most of the screen, lit through. Telling that takes the
     // colour taps alone, not the depth of every tap, which is most of what the pass costs.
-    float4 s[12];
     bool same = true;
-    [unroll]
+    [loop] [fastopt]
     for (int i = 0; i < 12; ++i)
     {
-        s[i] = tex2Dlod(SSRResultTex, float4(uv + taps[i] * radius, 0, 0));
-        same = same && all(s[i] == centre);
+        float4 tap = tex2Dlod(SSRResultTex, float4(uv + taps[i] * radius, 0, 0));
+        same = same && all(tap == centre);
     }
     [branch]
     if (same)
         return centre;
 
     float centreZ = LinearDepth(uv);
+    float centreHitDistance = 0.0;
+    if (fDenoiseSSROnly > 0.0 && fDenoiseHitDistance > 0.0)
+        centreHitDistance = tex2Dlod(SSRHitDistTex, float4(uv, 0, 0)).r;
     // A crease can separate surfaces at the same depth. Keep their reflection samples apart.
     float3 centreNormal = 0.0;
     if (fDenoiseSSROnly > 0.0 && fUseGBufferNormals > 0.0)
@@ -1511,16 +1527,21 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
     float alphaSum = centre.a;
     float weightSum = 1.0;
 
-    [unroll]
+    // Reread colour in this loop: the same taps are cached, and keeping twelve
+    // colours in registers made the distance-aware shader too large for ps_3_0.
+    [loop] [fastopt]
     for (int j = 0; j < 12; ++j)
     {
         float w = exp(-dot(taps[j], taps[j]) * 2.0);
         w *= saturate(1.0 - abs(LinearDepth(uv + taps[j] * radius) - centreZ) / (centreZ * 0.02));
         if (fDenoiseSSROnly > 0.0 && fUseGBufferNormals > 0.0 && w > 0.0)
             w *= smoothstep(0.8, 0.98, dot(centreNormal, GBufferNormalWorld(uv + taps[j] * radius)));
-        colourWeight = w * (fDenoiseSSROnly > 0.0 ? s[j].a : 1.0);
-        sum += float4(s[j].rgb * colourWeight, colourWeight);
-        alphaSum += w * s[j].a;
+        if (fDenoiseSSROnly > 0.0 && fDenoiseHitDistance > 0.0 && w > 0.0)
+            w *= SSRHitDistanceWeight(centreHitDistance, tex2Dlod(SSRHitDistTex, float4(uv + taps[j] * radius, 0, 0)).r);
+        float4 sample = tex2Dlod(SSRResultTex, float4(uv + taps[j] * radius, 0, 0));
+        colourWeight = w * (fDenoiseSSROnly > 0.0 ? sample.a : 1.0);
+        sum += float4(sample.rgb * colourWeight, colourWeight);
+        alphaSum += w * sample.a;
         weightSum += w;
     }
 
@@ -1729,6 +1750,8 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         return GIHistoryDebug() ? float4(1.0, 0.0, 1.0, 1.0) : TemporalResult(current);
 
     float4 m1 = current, m2 = current * current;
+    float sampleWeight = 1.0;
+    float centreHitDistance = fTemporalAnySurface <= 0.0 ? tex2Dlod(SSRHitDistTex, float4(uv, 0, 0)).r : 0.0;
     [unroll]
     for (int y = -1; y <= 1; ++y)
     {
@@ -1737,13 +1760,18 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         {
             if (x == 0 && y == 0)
                 continue;
-            float4 s = TemporalPremultiply(tex2Dlod(SSRResultTex, float4(uv + float2(x, y) * vec2InvViewportSize, 0, 0)));
-            m1 += s;
-            m2 += s * s;
+            float2 tapUV = uv + float2(x, y) * vec2InvViewportSize;
+            float4 s = TemporalPremultiply(tex2Dlod(SSRResultTex, float4(tapUV, 0, 0)));
+            float w = 1.0;
+            if (fTemporalAnySurface <= 0.0)
+                w = SSRHitDistanceWeight(centreHitDistance, tex2Dlod(SSRHitDistTex, float4(tapUV, 0, 0)).r);
+            m1 += w * s;
+            m2 += w * s * s;
+            sampleWeight += w;
         }
     }
-    m1 /= 9.0;
-    float4 spread = sqrt(max(m2 / 9.0 - m1 * m1, 0.0));
+    m1 /= sampleWeight;
+    float4 spread = sqrt(max(m2 / sampleWeight - m1 * m1, 0.0));
     // Stochastic radiance can vary between frames even when spatial filtering made this
     // frame uniform. Apply its RGB window before the uniform-neighbourhood early out.
     // Alpha is still clamped exactly; an entirely empty neighbourhood cannot retain old hits.
