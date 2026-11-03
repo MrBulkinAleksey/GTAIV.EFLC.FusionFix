@@ -340,7 +340,9 @@ float3 SampleHistoryBlurred(float2 uv, float radiusPixels)
     if (radiusPixels <= 0.0)
         return c;
 
-    float2 r = radiusPixels * vec2InvViewportSize;
+    // HistoryTex is full size even when SSR is traced at half resolution.
+    // The blur radius is in history pixels, not pixels of the current pass.
+    float2 r = radiusPixels * vec2InvHistorySize;
 
     c += SampleHistory(uv + r);
     c += SampleHistory(uv - r);
