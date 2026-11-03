@@ -110,6 +110,18 @@ export void RenderScreenSpaceReflections()
         return;
     }
 
+    // The trace samples the previous scene even when temporal accumulation is
+    // disabled. A stale scene or a camera cut would reflect unrelated pixels.
+    // The fog pass will capture a fresh scene later in this frame.
+    if (!FrameHistory::CanReproject(R.nSSRHistoryFrame))
+    {
+        SSRTrace::Line("ssr: left, scene history cannot be reprojected");
+        clearSSR();
+        R.nSSRAccumFrame = 0;
+        R.bSSRReprojValid = false;
+        return;
+    }
+
     // Put back in the reverse order as the function ends.
     SavedVertexInput savedVertexInput(pDevice);
     SavedTargets savedTargets(pDevice);
@@ -162,7 +174,7 @@ export void RenderScreenSpaceReflections()
     SetPrevDepthRange(effect, h);
     // SSR traces this frame's depth into the previous scene colour. Reproject the hit with its
     // own motion vector when available, rather than only following the reflecting surface.
-    BindMotionVectors(effect, FrameHistory::CanReproject(R.nSSRHistoryFrame));
+    BindMotionVectors(effect, true);
 
     // _DEFERRED_GBUFFER_2_ is (specular intensity, gloss, AO). Gloss decides what reflects:
     // car paint sits around 0.8, roads and walls around 0.2-0.35. Car paint stores almost no

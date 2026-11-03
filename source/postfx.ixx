@@ -1193,11 +1193,11 @@ private:
                         pDevice->GetViewport(&vpBeforeCapture);
 
                         pDevice->SetRenderTarget(0, PostFxResources.SSRSurf);
-                        pDevice->StretchRect(PostFxResources.HDRFullScreenSurface, nullptr, PostFxResources.SSRHistorySurf, nullptr, D3DTEXF_NONE);
+                        const HRESULT historyCopy = pDevice->StretchRect(PostFxResources.HDRFullScreenSurface, nullptr, PostFxResources.SSRHistorySurf, nullptr, D3DTEXF_NONE);
                         pDevice->SetRenderTarget(0, PostFxResources.HDRFullScreenSurface);
-                        PostFxResources.bSSRHistoryThisFrame = true;
-                        SSRTrace::Line("fog pass: history copied");
-                        PostFxResources.nSSRHistoryFrame = FrameHistory::Frame();
+                        PostFxResources.bSSRHistoryThisFrame = SUCCEEDED(historyCopy);
+                        PostFxResources.nSSRHistoryFrame = SUCCEEDED(historyCopy) ? FrameHistory::Frame() : 0;
+                        SSRTrace::Line("fog pass: history copy %08x", unsigned(historyCopy));
 
                         pDevice->SetViewport(&vpBeforeCapture);
                     }
