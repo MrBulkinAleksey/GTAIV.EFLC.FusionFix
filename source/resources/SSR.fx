@@ -4,7 +4,7 @@ texture PrevDepthTex2D;
 texture SSRAccumTex2D;
 texture SSRFallbackTex2D;
 texture SSRHitDistTex2D;
-texture MarchDepthTex2D, HiZDepthTex2D, HiZDepth1Tex2D, HiZDepth2Tex2D;
+texture MarchDepthTex2D, HiZDepthTex2D;
 texture MotionTex2D;
 texture AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D;
 texture SceneTex2D, SkinIDTex2D, SkinLightTex2D;
@@ -108,19 +108,6 @@ sampler2D HiZDepthTex
     MinFilter = POINT;
     MagFilter = POINT;
     MipFilter = NONE;
-};
-
-sampler2D HiZDepth1Tex
-{
-    Texture = <HiZDepth1Tex2D>;
-    AddressU = Clamp; AddressV = Clamp;
-    MinFilter = POINT; MagFilter = POINT; MipFilter = NONE;
-};
-sampler2D HiZDepth2Tex
-{
-    Texture = <HiZDepth2Tex2D>;
-    AddressU = Clamp; AddressV = Clamp;
-    MinFilter = POINT; MagFilter = POINT; MipFilter = NONE;
 };
 
 sampler2D DebugTex
@@ -555,26 +542,6 @@ float MarchDepth(float2 uv)
     return fMarchFullDepth > 0.0 ? LinearDepth(uv) : tex2Dlod(MarchDepthTex, float4(uv, 0, 0)).r;
 }
 
-// A projected segment in one hierarchy cell is empty when both endpoint depths are in front
-// of its minimum. Inverse depth is linear along the projected ray, so depth is monotonic there.
-bool HiZCanSkip(sampler2D depth, float2 gridSize, float2 uv0, float2 uv1, float2 sampleUV,
-                float invZ0, float invZ1, float rayZ, float tEnd, float steps, float jitter,
-                int index, int count, out float3 candidate)
-{
-    candidate = 0.0;
-    if (index + count >= NUM_STEPS || (float)(index + count) >= steps)
-        return false;
-    float s = ((float)(index + count) + jitter) / steps;
-    float t = tEnd * s * s;
-    float2 endUV = lerp(uv0, uv1, t);
-    if (any(floor(sampleUV * gridSize) != floor(endUV * gridSize)))
-        return false;
-    float nearest = tex2Dlod(depth, float4(sampleUV, 0, 0)).r;
-    float z = 1.0 / lerp(invZ0, invZ1, t);
-    candidate = float3(t, z, nearest);
-    return max(rayZ, z) < nearest;
-}
-
 // Marches the reflected ray of the surface at C with normal n. The hit is (where to read it in
 // HistoryTex, confidence 0..1, the ray's length over fMaxDistance), 0 for a miss; HitColour
 // turns it into a colour.
@@ -628,7 +595,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // reads fall four times as close together in the texture cache, which is most of what a
     // step costs, and need no decoding. Nearest, so a ray does not slip past a thin pole between
     // two of its samples; the refinement below finds the hit in the full size depth.
-    [loop]
+    [loop] [fastopt]
     for (int i = 0; i < NUM_STEPS; ++i)
     {
         if ((float) i >= steps)
@@ -639,31 +606,26 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
         float2 sampleUV = lerp(uv0, uv1, t);
         float rayZ = 1.0 / lerp(invZ0, invZ1, t);
 
-        // Try coarser levels first, but only skip a segment contained in one cell. There is
-        // no nested dynamic loop here: this effect is compiled by D3DX at game startup.
+        // Only skip a segment wholly in one quarter-size cell and in front of its
+        // minimum depth. Keep this branch small: D3DX compiles the march at startup.
         [branch]
-        if (fUseHiZ > 0.0 && prevDelta <= 0.0)
+        if (fUseHiZ > 0.0 && prevDelta <= 0.0 && i + 3 < NUM_STEPS && (float)(i + 3) < steps)
         {
-            float3 candidate = 0.0;
-            int skip = 0;
-            if (fUseHiZ >= 3.0 && HiZCanSkip(HiZDepth2Tex, vec2HiZSize * 0.25, uv0, uv1, sampleUV,
-                                              invZ0, invZ1, rayZ, tEnd, steps, jitter, i, 7, candidate))
-                skip = 7;
-            else if (fUseHiZ >= 2.0 && HiZCanSkip(HiZDepth1Tex, vec2HiZSize * 0.5, uv0, uv1, sampleUV,
-                                                   invZ0, invZ1, rayZ, tEnd, steps, jitter, i, 5, candidate))
-                skip = 5;
-            else if (HiZCanSkip(HiZDepthTex, vec2HiZSize, uv0, uv1, sampleUV,
-                                invZ0, invZ1, rayZ, tEnd, steps, jitter, i, 3, candidate))
-                skip = 3;
-            if (skip > 0)
+            float endS = ((float)(i + 3) + jitter) / steps;
+            float endT = tEnd * endS * endS;
+            float2 endUV = lerp(uv0, uv1, endT);
+            if (all(floor(sampleUV * vec2HiZSize) == floor(endUV * vec2HiZSize)))
             {
-                prevT = candidate.x;
-                prevU = candidate.x * invZ1 * candidate.y;
-                // The coarse minimum proves the segment empty; use the actual half-resolution
-                // depth at its end for the next crossing's interpolation and thickness test.
-                prevDelta = candidate.y - MarchDepth(lerp(uv0, uv1, candidate.x));
-                i += skip;
-                continue;
+                float nearest = tex2Dlod(HiZDepthTex, float4(sampleUV, 0, 0)).r;
+                float endZ = 1.0 / lerp(invZ0, invZ1, endT);
+                if (max(rayZ, endZ) < nearest)
+                {
+                    prevT = endT;
+                    prevU = endT * invZ1 * endZ;
+                    prevDelta = endZ - MarchDepth(endUV);
+                    i += 3;
+                    continue;
+                }
             }
         }
         float delta = rayZ - MarchDepth(sampleUV);

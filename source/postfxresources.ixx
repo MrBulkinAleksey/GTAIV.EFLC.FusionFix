@@ -339,7 +339,7 @@ public:
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY, vec4WaterRings;
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, SSRFallbackTex2D, SSRHitDistTex2D;
-        D3DXHANDLE MarchDepthTex2D, HiZDepthTex2D[3], fUseHiZ, vec2HiZSize, fStochasticSSR, fStepsPerPixel, fMarchFullDepth;
+        D3DXHANDLE MarchDepthTex2D, HiZDepthTex2D[1], fUseHiZ, vec2HiZSize, fStochasticSSR, fStepsPerPixel, fMarchFullDepth;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
         D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
@@ -1105,8 +1105,8 @@ public:
     // march steps through at either SSR size; R32F.
     rage::grcRenderTargetPC* SSRMarchDepthTex = nullptr;
     IDirect3DSurface9* SSRMarchDepthSurf = nullptr;
-    // Conservative minimum-depth levels at 1/4, 1/8 and 1/16 of the viewport.
-    static constexpr int kSSRHiZLevels = 3;
+    // A conservative minimum-depth level at 1/4 of the viewport.
+    static constexpr int kSSRHiZLevels = 1;
     rage::grcRenderTargetPC* SSRHiZDepthTex[kSSRHiZLevels] = {};
     IDirect3DSurface9* SSRHiZDepthSurf[kSSRHiZLevels] = {};
     // Accumulation over frames (SSRTemporal_PS in SSR.fx): each frame blends the smoothed
@@ -1743,8 +1743,6 @@ public:
                 h.SSRHitDistTex2D = SSREffect->GetParameterByName(nullptr, "SSRHitDistTex2D");
                 h.MarchDepthTex2D = SSREffect->GetParameterByName(nullptr, "MarchDepthTex2D");
                 h.HiZDepthTex2D[0] = SSREffect->GetParameterByName(nullptr, "HiZDepthTex2D");
-                h.HiZDepthTex2D[1] = SSREffect->GetParameterByName(nullptr, "HiZDepth1Tex2D");
-                h.HiZDepthTex2D[2] = SSREffect->GetParameterByName(nullptr, "HiZDepth2Tex2D");
                 h.fUseHiZ = SSREffect->GetParameterByName(nullptr, "fUseHiZ");
                 h.fStochasticSSR = SSREffect->GetParameterByName(nullptr, "fStochasticSSR");
                 h.vec2HiZSize = SSREffect->GetParameterByName(nullptr, "vec2HiZSize");
