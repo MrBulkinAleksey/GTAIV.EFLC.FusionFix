@@ -296,18 +296,18 @@ export void RenderScreenSpaceReflections()
             }
             return SUCCEEDED(drawHr) && SUCCEEDED(endHr);
         };
-        // The depth the march steps through, at half the full size whatever size SSR runs at;
-        // timed with the march.
-        ProfilerMark(pDevice, kProfSSRTrace, true);
+        // Time depth preparation separately so a Hi-Z A/B includes its construction cost.
+        ProfilerMark(pDevice, kProfSSRDepth, true);
         setPassSize(float(DWORD(width) / 2), float(DWORD(height) / 2));
         if (!draw(4, R.SSRMarchDepthSurf))
         {
-            ProfilerMark(pDevice, kProfSSRTrace, false);
+            ProfilerMark(pDevice, kProfSSRDepth, false);
             effect->End();
             clearSSR();
             R.nSSRAccumFrame = 0;
             return;
         }
+        ProfilerMark(pDevice, kProfSSRDepth, false);
         int hiZLevels = 0;
         IDirect3DTexture9* depthLevel = R.SSRMarchDepthTex->mD3DTexture;
         D3DSURFACE_DESC marchDesc = {};
@@ -315,6 +315,7 @@ export void RenderScreenSpaceReflections()
             marchDesc.Width == DWORD(width) / 2 && marchDesc.Height == DWORD(height) / 2;
         if (R.SSRHiZ() && !R.SSRMarchFullDepth() && marchSizeMatches)
         {
+            ProfilerScope timedHiZ(pDevice, kProfSSRHiZ);
             for (int i = 0; i < PostFxResource::kSSRHiZLevels; ++i)
             {
                 if (!R.SSRHiZDepthTex[i] || !R.SSRHiZDepthTex[i]->mD3DTexture || !R.SSRHiZDepthSurf[i])
@@ -342,6 +343,7 @@ export void RenderScreenSpaceReflections()
         setPassSize(half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height);
 
         // The march also writes how far its rays went, for the accumulation and the fill's distance gate.
+        ProfilerMark(pDevice, kProfSSRTrace, true);
         IDirect3DSurface9* oldTarget1 = nullptr;
         if (temporal || hitDistances)
         {

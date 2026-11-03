@@ -589,18 +589,78 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     float firstHidden = -1.0;
     float prevU = 0.0;
 
-    // One loop, no nested refinement inside it: D3DX compiles this effect while the game
-    // loads, and an unrolled refinement inside the march made it take long enough to look
-    // like a hang.
+    // March and refinement share one bounded loop. A conservative 2x2 depth can report
+    // the silhouette of a neighbouring pixel; reject that candidate in full-size depth
+    // and resume the ray instead of turning the entire ray into a miss. Allow one retry.
+    // There is no nested refinement loop: D3DX compiles this effect at startup.
     // The march reads MarchDepthTex, the nearest depth of each 2x2 pixels, already linear: its
     // reads fall four times as close together in the texture cache, which is most of what a
     // step costs, and need no decoding. Nearest, so a ray does not slip past a thin pole between
     // two of its samples; the refinement below finds the hit in the full size depth.
+    int marchIndex = 0;
+    int refineLeft = -1;
+    int candidates = 0;
+    float candidateEnd = 0.0;
+    float acceptedSurfaceZ = 0.0;
+    bool verifyCoarseDepth = false;
+    float rayPixelsPerT = max(abs(dUV.x / vec2InvViewportSize.x), abs(dUV.y / vec2InvViewportSize.y));
     [loop] [fastopt]
-    for (int i = 0; i < NUM_STEPS; ++i)
+    for (int iteration = 0; iteration < NUM_STEPS + 2 * (NUM_REFINE_STEPS + 1); ++iteration)
     {
-        if ((float) i >= steps)
+        [branch]
+        if (refineLeft >= 0)
+        {
+            // Stop only when the bracket is small both on screen and in depth. A ray
+            // nearly along the view axis can cover metres inside a fraction of a pixel.
+            bool narrow = (hitHi - hitLo) * rayPixelsPerT <= 0.125;
+            if (narrow)
+                narrow = abs(1.0 / lerp(invZ0, invZ1, hitHi) - 1.0 / lerp(invZ0, invZ1, hitLo)) <= 0.25 * fThickness;
+            if (refineLeft > 0 && !narrow)
+            {
+                float mid = (hitLo + hitHi) * 0.5;
+                float midZ = 1.0 / lerp(invZ0, invZ1, mid);
+                if (midZ > LinearDepth(lerp(uv0, uv1, mid)))
+                    hitHi = mid;
+                else
+                    hitLo = mid;
+                --refineLeft;
+                continue;
+            }
+            float candidateZ = 1.0 / lerp(invZ0, invZ1, hitHi);
+            float surfaceZ = LinearDepth(lerp(uv0, uv1, hitHi));
+            float thickness = abs(candidateZ - 1.0 / lerp(invZ0, invZ1, hitLo)) + fThickness;
+            if (abs(candidateZ - surfaceZ) < thickness)
+            {
+                hit = 1.0;
+                acceptedSurfaceZ = surfaceZ;
+                break;
+            }
+            if (candidates >= 2)
+                break;
+
+            // Resume after the rejected interval. Full-size depth, not the dilated
+            // coarse silhouette, determines whether this point is actually hidden.
+            float endZ = 1.0 / lerp(invZ0, invZ1, candidateEnd);
+            float endDelta = endZ - LinearDepth(lerp(uv0, uv1, candidateEnd));
+            float endU = candidateEnd * invZ1 * endZ;
+            if (endDelta > 0.0)
+            {
+                if (firstHidden < 0.0)
+                    firstHidden = prevU;
+                if (fPassThinObjects <= 0.0)
+                    break;
+                hidden += endU - prevU;
+            }
+            prevT = candidateEnd;
+            prevU = endU;
+            prevDelta = endDelta;
+            verifyCoarseDepth = endDelta <= 0.0;
+            refineLeft = -1;
+            continue;
+        }
+        if ((float) marchIndex >= steps || marchIndex >= NUM_STEPS)
             break;
+        int i = marchIndex++;
         float s = ((float) i + jitter) / steps;
         float t = tEnd * s * s;
 
@@ -624,12 +684,21 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
                     prevT = endT;
                     prevU = endT * invZ1 * endZ;
                     prevDelta = endZ - MarchDepth(endUV);
-                    i += 3;
+                    marchIndex += 3;
                     continue;
                 }
             }
         }
         float delta = rayZ - MarchDepth(sampleUV);
+        // Do not immediately rediscover the same rejected coarse silhouette. Until
+        // the ray leaves it, use full depth to find the actual surface behind it.
+        if (verifyCoarseDepth)
+        {
+            if (delta > 0.0)
+                delta = rayZ - LinearDepth(sampleUV);
+            else
+                verifyCoarseDepth = false;
+        }
 
         // The ray went behind the scene since the last sample, which was in front of it.
         // Estimate where it crossed from the two samples and judge the thickness there, not
@@ -641,14 +710,17 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
         {
             float tc = lerp(prevT, t, saturate(-prevDelta / max(delta - prevDelta, 1e-5)));
             float zc = 1.0 / lerp(invZ0, invZ1, tc);
-            float crossDelta = zc - MarchDepth(lerp(uv0, uv1, tc));
+            float2 crossUV = lerp(uv0, uv1, tc);
+            float crossDelta = zc - (verifyCoarseDepth ? LinearDepth(crossUV) : MarchDepth(crossUV));
             float crossThickness = abs(rayZ - 1.0 / lerp(invZ0, invZ1, prevT)) + fThickness;
             if (crossDelta <= crossThickness)
             {
-                hit = 1.0;
                 hitLo = prevT;
                 hitHi = t;
-                break;
+                candidateEnd = t;
+                refineLeft = NUM_REFINE_STEPS;
+                ++candidates;
+                continue;
             }
             if (firstHidden < 0.0)
                 firstHidden = prevU;
@@ -669,23 +741,13 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     hidden *= ray.len;
     firstHidden *= ray.len;
 
-    // Binary refinement between the last sample in front of the scene and the first behind it.
+    // The shared loop already validated this full-size depth bracket.
     float lo = hitLo;
     float hi = hitHi;
-    [loop]
-    for (int j = 0; j < NUM_REFINE_STEPS; ++j)
-    {
-        float mid = (lo + hi) * 0.5;
-        float midZ = 1.0 / lerp(invZ0, invZ1, mid);
-        if (midZ - LinearDepth(lerp(uv0, uv1, mid)) > 0.0)
-            hi = mid;
-        else
-            lo = mid;
-    }
 
     float2 finalUV = lerp(uv0, uv1, hi);
     float hitZ = 1.0 / lerp(invZ0, invZ1, hi);
-    float surfZ = LinearDepth(finalUV);
+    float surfZ = acceptedSurfaceZ;
     // Behind the surface, as the refinement leaves a ray that crossed it, or in front of it: the
     // march's nearest of four pixels can show a crossing next to a pole's outline that the full
     // size depth does not have, and the ray there runs on in front of what lies beyond.
