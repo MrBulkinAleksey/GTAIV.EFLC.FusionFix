@@ -58,6 +58,16 @@ int main() {
     float alphaMean=8*borrowed/(1+8*borrowed);
     float alphaSpread=std::sqrt(alphaMean-alphaMean*alphaMean);
     check(alphaMean+1.5f*alphaSpread>0,"stochastic miss cannot retain history");
+    // A distance-only temporal rejection cannot identify the reflected object.
+    // Two distinct points on the same range sphere are indistinguishable.
+    float objectA=std::hypot(3.0f,4.0f), objectB=std::hypot(-3.0f,4.0f);
+    check(SSRHitDistanceWeight(dist(objectA),dist(objectB))==1,"equal ranges should be indistinguishable");
+    // Conversely, two stochastic rays can hit the same flat wall at different
+    // angles. The spatial threshold rejects them despite the shared surface.
+    const float pi=3.14159265358979323846f;
+    float wallA=5.0f/std::cos(60.0f*pi/180.0f);
+    float wallB=5.0f/std::cos(68.0f*pi/180.0f);
+    check(SSRHitDistanceWeight(dist(wallA),dist(wallB))==0,"wall example no longer separates");
     for (int i=0;i<100;++i) {
         float a=dist(.1f+i*.2f), b=dist(.1f+(99-i)*.2f);
         float w1=SSRHitDistanceWeight(a,b),w2=SSRHitDistanceWeight(b,a);
