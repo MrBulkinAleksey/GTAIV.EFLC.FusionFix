@@ -234,6 +234,7 @@ sampler2D SurfaceTex
 };
 
 uniform float2 vec2InvViewportSize;
+uniform float2 vec2InvHistorySize; // full-size history texel, independent of SSR resolution
 uniform float fNearPlane;
 uniform float fFarDivNear;
 uniform float4 vec4ProjInfo;
@@ -497,6 +498,9 @@ bool SetupReflectionRay(float3 C, float3 n, float3 microNormal, out ReflectionRa
     float3 V = normalize(C);
     float3 R = reflect(V, microNormal);
     gTraceRayZ = R.z;
+    // A microfacet can reflect below the geometric surface; it cannot see the scene.
+    if (dot(R, n) <= 0.0)
+        return false;
 
     // Rays reflected back towards the camera see the side of things the screen does not show:
     // a door with a ped crouching between it and the camera should show his front, the screen
@@ -667,16 +671,27 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
         float2 sampleUV = lerp(uv0, uv1, t);
         float rayZ = 1.0 / lerp(invZ0, invZ1, t);
 
-        // Only skip a segment wholly in one quarter-size cell and in front of its
-        // minimum depth. Keep this branch small: D3DX compiles the march at startup.
+        // Jump to the last original sample before this cell's exit. The minimum
+        // depth proves the whole segment clear; sampling the endpoint preserves the
+        // original crossing interpolation when the next sample enters another cell.
         [branch]
-        if (fUseHiZ > 0.0 && prevDelta <= 0.0 && i + 3 < NUM_STEPS && (float)(i + 3) < steps)
+        if (fUseHiZ > 0.0 && prevDelta <= 0.0 && tEnd > 1e-6)
         {
-            float endS = ((float)(i + 3) + jitter) / steps;
-            float endT = tEnd * endS * endS;
-            float2 endUV = lerp(uv0, uv1, endT);
-            if (all(floor(sampleUV * vec2HiZSize) == floor(endUV * vec2HiZSize)))
+            float2 cell = floor(sampleUV * vec2HiZSize);
+            float boundaryX = (cell.x + (dUV.x > 0.0 ? 1.0 : 0.0)) / vec2HiZSize.x;
+            float boundaryY = (cell.y + (dUV.y > 0.0 ? 1.0 : 0.0)) / vec2HiZSize.y;
+            float tx = abs(dUV.x) > 1e-6 ? (boundaryX - uv0.x) / dUV.x : tEnd;
+            float ty = abs(dUV.y) > 1e-6 ? (boundaryY - uv0.y) / dUV.y : tEnd;
+            float exitT = min(tEnd, min(tx, ty));
+            // Steps use t = tEnd * ((i + jitter) / steps)^2. Stay strictly
+            // before the boundary so a point-filtered read cannot enter the next cell.
+            float endIndex = min(steps - 1.0, min((float)(NUM_STEPS - 1),
+                floor(steps * sqrt(saturate(exitT / tEnd)) - jitter - 1e-3)));
+            if (endIndex >= (float)(i + 2))
             {
+                float endS = (endIndex + jitter) / steps;
+                float endT = tEnd * endS * endS;
+                float2 endUV = lerp(uv0, uv1, endT);
                 float nearest = tex2Dlod(HiZDepthTex, float4(sampleUV, 0, 0)).r;
                 float endZ = 1.0 / lerp(invZ0, invZ1, endT);
                 if (max(rayZ, endZ) < nearest)
@@ -684,7 +699,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
                     prevT = endT;
                     prevU = endT * invZ1 * endZ;
                     prevDelta = endZ - MarchDepth(endUV);
-                    marchIndex += 3;
+                    marchIndex = (int)endIndex + 1;
                     continue;
                 }
             }
@@ -801,7 +816,8 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     {
         float prevSurfZ = dot(float4(surfP, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
                                                          vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
-        float prevZ = PrevLinearDepth(histUV);
+        float2 depthUV = (floor(histUV / vec2InvHistorySize) + 0.5) * vec2InvHistorySize;
+        float prevZ = PrevLinearDepth(depthUV);
         float tolerance = 0.05 * prevSurfZ + 0.1;
         confidence *= 1.0 - smoothstep(tolerance * 0.5, tolerance, abs(prevZ - prevSurfZ));
     }
@@ -809,12 +825,50 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     return float4(histUV, confidence, saturate(rayLen / fMaxDistance));
 }
 
+// Explicit LOD keeps the extra point-centred reads inside the depth-edge branch
+// on ps_3_0; implicit derivatives would have to be evaluated outside it.
+float3 SampleHistoryPoint(float2 uv)
+{
+    return clamp(tex2Dlod(HistoryTex, float4(uv, 0, 0)).rgb, 0.0, HISTORY_CLAMP) * SSR_SCALE;
+}
+
+// Bilinear colour alone blends the bright background into an object's silhouette.
+// On a depth edge, discard colour taps from a different previous-frame surface. In
+// flat regions keep the hardware bilinear lookup. History and depth are full size
+// even when SSR itself is half size.
+float3 SampleHitHistory(float2 uv)
+{
+    if (fUsePrevDepth <= 0.0)
+        return SampleHistory(uv);
+    float2 pixel = uv / vec2InvHistorySize - 0.5;
+    float2 base = (floor(pixel) + 0.5) * vec2InvHistorySize;
+    float2 f = frac(pixel);
+    float2 dx = float2(vec2InvHistorySize.x, 0.0);
+    float2 dy = float2(0.0, vec2InvHistorySize.y);
+    float d00 = tex2Dlod(PrevDepthTex, float4(base, 0, 0)).r;
+    float d10 = tex2Dlod(PrevDepthTex, float4(base + dx, 0, 0)).r;
+    float d01 = tex2Dlod(PrevDepthTex, float4(base + dy, 0, 0)).r;
+    float d11 = tex2Dlod(PrevDepthTex, float4(base + dx + dy, 0, 0)).r;
+    float reference = f.x < 0.5 ? (f.y < 0.5 ? d00 : d01) : (f.y < 0.5 ? d10 : d11);
+    // Stored depth is logarithmic; 0.002 is about a 2% separation for a 10000:1 range.
+    float4 same = 1.0 - step(0.002, abs(float4(d00, d10, d01, d11) - reference));
+    if (all(same > 0.0))
+        return SampleHistory(uv);
+    float4 w = same * float4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y),
+                             (1.0 - f.x) * f.y, f.x * f.y);
+    float sum = dot(w, 1.0);
+    float3 colour = SampleHistoryPoint(base) * w.x + SampleHistoryPoint(base + dx) * w.y
+                  + SampleHistoryPoint(base + dy) * w.z + SampleHistoryPoint(base + dx + dy) * w.w;
+    return colour / max(sum, 1e-5);
+}
+
 // The colour of a hit from TraceHit, blurred by blurPixels at fMaxDistance, with its confidence.
 float4 HitColour(float4 hit, float blurPixels)
 {
     if (hit.z <= 0.0)
         return 0.0;
-    float3 colour = SampleHistoryBlurred(hit.xy, blurPixels * hit.w);
+    float radius = blurPixels * hit.w;
+    float3 colour = radius > 0.0 ? SampleHistoryBlurred(hit.xy, radius) : SampleHitHistory(hit.xy);
     if (any(colour != colour))
         return 0.0;
     return float4(colour, hit.z);
@@ -1054,25 +1108,37 @@ bool NoSurface(float4 trace)
     return trace.a < -0.5;
 }
 
-// Sample a GGX half-vector from the stored gloss. The G-buffer's gloss is an artistic
-// parameter rather than calibrated roughness; this mapping is deliberately conservative.
+// Sample the view-dependent GGX visible-normal distribution. The stored gloss is
+// artistic, so the roughness mapping is intentionally conservative. The game applies
+// its own Fresnel/environment scaling when it composites SSR.
+// Heitz, Sampling the GGX Distribution of Visible Normals, JCGT 7(4), 2018.
 float3 SSRMicroNormal(float2 uv, float2 vPos, float3 n, float3 C)
 {
     if (fStochasticSSR <= 0.0)
         return n;
     float gloss = saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).y);
     float roughness = 1.0 - gloss;
-    float alpha = max(roughness * roughness, 0.02);
+    float alpha = max(roughness * roughness, 0.002);
     float u = min(PixelJitter(vPos + float2(83.0, 47.0) + vec2NoiseOffset), 0.9999);
     float phi = 6.2831853 * PixelJitter(vPos.yx + float2(17.0, 59.0) + vec2NoiseOffset.yx);
-    float cosTheta = sqrt((1.0 - u) / (1.0 + (alpha * alpha - 1.0) * u));
-    float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
     float3 up = abs(n.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
     float3 tangent = normalize(cross(up, n));
     float3 bitangent = cross(n, tangent);
-    float3 m = normalize(n * cosTheta + (tangent * cos(phi) + bitangent * sin(phi)) * sinTheta);
-    // Invalid reflected directions cannot contribute; use the geometric reflection instead.
-    return dot(reflect(normalize(C), m), n) > 0.0 ? m : n;
+    float3 view = -normalize(C);
+    float3 localView = float3(dot(view, tangent), dot(view, bitangent), max(dot(view, n), 1e-4));
+    float3 stretchedView = normalize(float3(alpha * localView.xy, localView.z));
+    float lensq = dot(stretchedView.xy, stretchedView.xy);
+    float3 t1 = lensq > 1e-8 ? float3(-stretchedView.y, stretchedView.x, 0.0) * rsqrt(lensq)
+                              : float3(1.0, 0.0, 0.0);
+    float3 t2 = cross(stretchedView, t1);
+    float radius = sqrt(u);
+    float p1 = radius * cos(phi);
+    float p2 = radius * sin(phi);
+    float blend = 0.5 * (1.0 + stretchedView.z);
+    p2 = lerp(sqrt(max(1.0 - p1 * p1, 0.0)), p2, blend);
+    float3 visible = p1 * t1 + p2 * t2 + sqrt(max(1.0 - p1 * p1 - p2 * p2, 0.0)) * stretchedView;
+    float3 localNormal = normalize(float3(alpha * visible.xy, max(visible.z, 0.0)));
+    return normalize(localNormal.x * tangent + localNormal.y * bitangent + localNormal.z * n);
 }
 
 TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
@@ -1093,6 +1159,13 @@ TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
     float3 microNormal = SSRMicroNormal(uv, vPos, n, C);
     float4 hit = TraceHit(C, n, microNormal, jitter, fDistanceFade);
     o.distance = hit.z > 0.0 ? hit.w : 0.0;
+    // Debug 11: the previous-scene UV from which this hit reads colour, R=x, G=y.
+    // This makes a suspect reflected pixel traceable back to its source on screen.
+    if (fDebugMode > 10.5 && fDebugMode < 11.5)
+    {
+        o.colour = float4(hit.xy, hit.z, hit.z);
+        return o;
+    }
     // Debug view 3 (for now): what the ray hit in place of the hit, which SSR_PS passes on, see
     // SSRDebug_PS.
     if (fDebugMode > 2.5 && fDebugMode < 3.5)
@@ -1185,7 +1258,7 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float wetOnly;
     float surfaceWeight = SSRSurfaceWeight(uv, wetOnly);
 
-    if (fDebugMode > 2.5 && fDebugMode < 3.5)
+    if ((fDebugMode > 2.5 && fDebugMode < 3.5) || (fDebugMode > 10.5 && fDebugMode < 11.5))
         return hit;
     float4 r = hit;
     [branch]
@@ -1322,6 +1395,10 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         return float4(1.0, 1.0, 1.0, 1.0);
 
     float4 ssr = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+
+    // 11: raw history coordinates, not modulated by hit confidence.
+    if (fDebugMode > 10.5 && fDebugMode < 11.5)
+        return float4(ssr.rgb, 1.0);
 
     // 8: indirect light alone (SSRResultTex holds it in this mode)
     if (fDebugMode > 7.5)

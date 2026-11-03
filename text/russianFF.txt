@@ -214,6 +214,9 @@ Logitech LightSync RGB
 [SSRDbgGIHistory]
 История непрямого света
 
+[SSRDbgSourceUV]
+Координаты источника
+
 [GroundDebug]
 Отладка поверхностей земли
 

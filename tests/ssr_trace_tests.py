@@ -23,6 +23,7 @@ prefix = r'''
 #include <cstdlib>
 using std::abs;
 float max(float a, float b) { return std::max(a, b); }
+float min(float a, float b) { return std::min(a, b); }
 float saturate(float a) { return std::clamp(a, 0.0f, 1.0f); }
 float lerp(float a, float b, float t) { return a + (b-a)*t; }
 struct float2 { float x,y; };
@@ -50,9 +51,11 @@ float4 tex2Dlod(int,float4 p) {
     ++reads; return p;
 }
 struct Result { bool hit; float z; int reads; };
-Result trace(int which,float jitter,bool hiz,float pixels,float thickness) {
+Result trace(int which,float jitter,bool hiz,float pixels,float thickness,bool reverse=false,bool diagonal=false) {
     scene=which; reads=0;
-    float2 uv0{0,0.5f},uv1{1,0.5f},dUV{1,0};
+    float2 uv0{reverse ? 1.0f : 0.0f,diagonal ? 0.2f : 0.5f};
+    float2 uv1{reverse ? 0.0f : 1.0f,diagonal ? 0.8f : 0.5f};
+    float2 dUV{uv1.x-uv0.x,uv1.y-uv0.y};
     float2 vec2InvViewportSize{1/pixels,1/pixels},vec2HiZSize{8,8};
     float invZ0=1.0f,invZ1=0.1f,tEnd=1.0f,steps=NUM_STEPS;
     float fThickness=thickness,fUseHiZ=hiz ? 1.0f : 0.0f,fPassThinObjects=1;
@@ -81,6 +84,20 @@ int main() {
         require(std::abs(pole.z-wall)<thickness,"resumed ray hit the false silhouette");
         require(pole.reads<8*(NUM_STEPS+2*(NUM_REFINE_STEPS+1)),"ray exceeded bounded work");
         cases+=3;
+    }
+    // Enabling conservative Hi-Z must leave the first accepted hit unchanged,
+    // including negative directions and samples close to cell boundaries.
+    for (int i=1;i<=97;++i)
+    for (bool reverse : {false,true})
+    for (bool diagonal : {false,true})
+    for (int kind : {0,1,2}) {
+        float jitter=i/98.0f;
+        auto ordinary=trace(kind,jitter,false,1920.0f,0.1f,reverse,diagonal);
+        auto hierarchical=trace(kind,jitter,true,1920.0f,0.1f,reverse,diagonal);
+        require(ordinary.hit==hierarchical.hit,"Hi-Z changed hit validity");
+        if (ordinary.hit)
+            require(std::abs(ordinary.z-hierarchical.z)<1e-4f,"Hi-Z changed hit depth");
+        ++cases;
     }
     std::printf("%d synthetic traversal cases passed\n",cases);
 }

@@ -332,7 +332,7 @@ public:
         D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, fNeighbourFill, fFillMinDistance, fFillPixelScale, fSpreadRadius, fVehicleScale;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, fCSGrassGloss, techContactShadows;
         D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
-        D3DXHANDLE vec2InvViewportSize, fNearPlane, fFarDivNear, vec4ProjInfo;
+        D3DXHANDLE vec2InvViewportSize, vec2InvHistorySize, fNearPlane, fFarDivNear, vec4ProjInfo;
         D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff, fWetness, fWetGroundBoost;
         D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
@@ -1683,6 +1683,7 @@ public:
                 h.SpecularTex2D = SSREffect->GetParameterByName(nullptr, "SpecularTex2D");
                 h.SurfaceTex2D = SSREffect->GetParameterByName(nullptr, "SurfaceTex2D");
                 h.vec2InvViewportSize = SSREffect->GetParameterByName(nullptr, "vec2InvViewportSize");
+                h.vec2InvHistorySize = SSREffect->GetParameterByName(nullptr, "vec2InvHistorySize");
                 h.fNearPlane = SSREffect->GetParameterByName(nullptr, "fNearPlane");
                 h.fFarDivNear = SSREffect->GetParameterByName(nullptr, "fFarDivNear");
                 h.vec4ProjInfo = SSREffect->GetParameterByName(nullptr, "vec4ProjInfo");

@@ -214,6 +214,9 @@ Skin Scattering
 [SSRDbgGIHistory]
 Indirect Light History
 
+[SSRDbgSourceUV]
+Hit Source Coordinates
+
 [GroundDebug]
 Ground Surfaces Debug View
 
