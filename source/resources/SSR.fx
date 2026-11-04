@@ -654,11 +654,15 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     float acceptedSurfaceZ = 0.0;
     bool verifyCoarseDepth = false;
     float rayPixelsPerT = max(abs(dUV.x / vec2InvViewportSize.x), abs(dUV.y / vec2InvViewportSize.y));
-    // A jump only pays when a cell holds several steps. The finer level's cells are four pixels
-    // of the viewport wide, the coarser one's eight, so a ray whose average step is already wider
-    // than half a fine cell takes the coarse level; a shorter ray keeps the tighter depth. Both
-    // are minima of the same march depth, so either one is conservative.
-    float hiZLevel = (fUseHiZ > 1.0 && rayPixelsPerT > 2.0 * steps) ? 1.0 : 0.0;
+    // A jump only pays when a cell holds several steps. cellSteps is how many of the finer
+    // level's cells the ray crosses on its longer axis, so steps / cellSteps is what one cell
+    // holds; below two, the ray's steps are wider than half a cell and the coarser level, whose
+    // cells are twice as wide, is the one that can skip. Both levels are minima of the same
+    // march depth, so either is conservative and the hit does not move. Counting cells rather
+    // than pixels keeps this the same at either SSR size: the grid is the viewport's, while the
+    // steps are the pass's, and at half size a ray takes half as many of them.
+    float cellSteps = max(abs(dUV.x) * vec2HiZSize.x, abs(dUV.y) * vec2HiZSize.y);
+    float hiZLevel = (fUseHiZ > 1.0 && cellSteps * 2.0 > steps) ? 1.0 : 0.0;
     float2 hiZSize = hiZLevel > 0.0 ? vec2HiZSize1 : vec2HiZSize;
     [loop] [fastopt]
     for (int iteration = 0; iteration < NUM_STEPS + 2 * (NUM_REFINE_STEPS + 1); ++iteration)

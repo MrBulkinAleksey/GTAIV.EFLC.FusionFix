@@ -44,22 +44,23 @@ float MarchDepth(float2 uv) {
     return scene==0 ? 1000.0f : wall;
 }
 int HiZDepthTex, HiZDepthTex1;
+float hiZGrid=8.0f;
 float4 tex2Dlod(int which,float4 p) {
     // Conservative min over the cell of whichever level the ray chose, the coarse one's cells
     // twice as wide. The test covers both cells intersecting the silhouette and cells in empty
     // space, as a real reduction would.
-    float grid=which==HiZDepthTex1 ? 4.0f : 8.0f, cell=1.0f/grid;
+    float grid=which==HiZDepthTex1 ? hiZGrid*0.5f : hiZGrid, cell=1.0f/grid;
     float at=std::floor(p.uv.x*grid)/grid;
     p.r=(scene==2 && at<0.3f && at+cell>0.1f) ? 0.5f : (scene==0 ? 1000.0f : wall);
     ++reads; return p;
 }
 struct Result { bool hit; float z; int reads; float skips; };
-Result trace(int which,float jitter,bool hiz,float pixels,float thickness,bool reverse=false,bool diagonal=false,int levels=1) {
-    scene=which; reads=0; gTraceSkipShare=0.0f;
+Result trace(int which,float jitter,bool hiz,float pixels,float thickness,bool reverse=false,bool diagonal=false,int levels=1,float grid=8.0f) {
+    scene=which; reads=0; gTraceSkipShare=0.0f; hiZGrid=grid;
     float2 uv0{reverse ? 1.0f : 0.0f,diagonal ? 0.2f : 0.5f};
     float2 uv1{reverse ? 0.0f : 1.0f,diagonal ? 0.8f : 0.5f};
     float2 dUV{uv1.x-uv0.x,uv1.y-uv0.y};
-    float2 vec2InvViewportSize{1/pixels,1/pixels},vec2HiZSize{8,8},vec2HiZSize1{4,4};
+    float2 vec2InvViewportSize{1/pixels,1/pixels},vec2HiZSize{grid,grid},vec2HiZSize1{grid*0.5f,grid*0.5f};
     float invZ0=1.0f,invZ1=0.1f,tEnd=1.0f,steps=NUM_STEPS;
     float fThickness=thickness,fUseHiZ=hiz ? (float)levels : 0.0f,fPassThinObjects=1;
     struct { float len; } ray{9};
@@ -111,18 +112,20 @@ int main() {
         ++cases;
     }
     // The coarser level, which a long ray takes, is a minimum over the same depth, so it must
-    // find the same hits; over an empty ray its wider cells must also skip at least as much.
+    // find the same hits; over an empty ray its wider cells must also skip strictly more, or the
+    // ray never chose it and the comparison says nothing. Four cells per step is well past the
+    // threshold at either step count, and is what a long ray over a full size grid looks like.
+    const float grid=4.0f*NUM_STEPS;
     for (int i=1;i<=13;++i)
     for (int kind : {0,1,2}) {
         float jitter=i/14.0f;
-        auto fine=trace(kind,jitter,true,1920.0f,0.1f,false,false,1);
-        auto coarse=trace(kind,jitter,true,1920.0f,0.1f,false,false,2);
+        auto fine=trace(kind,jitter,true,1920.0f,0.1f,false,false,1,grid);
+        auto coarse=trace(kind,jitter,true,1920.0f,0.1f,false,false,2,grid);
         require(fine.hit==coarse.hit,"the coarse level changed hit validity");
         if (fine.hit)
             require(std::abs(fine.z-coarse.z)<1e-4f,"the coarse level changed hit depth");
         if (kind==0) {
-            require(coarse.skips>0.0f,"the coarse level skipped nothing on an empty ray");
-            require(coarse.skips>=fine.skips,"the coarse level skipped less than the fine one");
+            require(coarse.skips>fine.skips,"the coarse level skipped no more than the fine one");
             require(coarse.reads<=fine.reads,"the coarse level read more depth than the fine one");
         }
         ++cases;
