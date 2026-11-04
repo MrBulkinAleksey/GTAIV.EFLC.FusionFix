@@ -651,6 +651,12 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     float prevU = 0.0;
     // Steps a depth hierarchy jump took away, for gTraceSkipShare.
     float skipped = 0.0;
+    // Rough paint is not a mirror: its lobe sees the surface from a spread of directions, so a
+    // hit a little behind or in front of the depth the buffer holds is still a hit of the lobe,
+    // and the bracket that counts as one widens with roughness. Mirror paint keeps fThickness
+    // exactly, and without a specular target there is no gloss to widen it by.
+    float gloss = fGlossCutoff >= 0.0 ? tex2Dlod(SpecularTex, float4(uv0, 0, 0)).y : 1.0;
+    float hitSlab = fThickness * (1.0 + 1.5 * (1.0 - gloss));
 
     // March and refinement share one bounded loop. A conservative 2x2 depth can report
     // the silhouette of a neighbouring pixel; reject that candidate in full-size depth
@@ -688,7 +694,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
             // nearly along the view axis can cover metres inside a fraction of a pixel.
             bool narrow = (hitHi - hitLo) * rayPixelsPerT <= 0.125;
             if (narrow)
-                narrow = abs(1.0 / lerp(invZ0, invZ1, hitHi) - 1.0 / lerp(invZ0, invZ1, hitLo)) <= 0.25 * fThickness;
+                narrow = abs(1.0 / lerp(invZ0, invZ1, hitHi) - 1.0 / lerp(invZ0, invZ1, hitLo)) <= 0.25 * hitSlab;
             if (refineLeft > 0 && !narrow)
             {
                 float mid = (hitLo + hitHi) * 0.5;
@@ -702,7 +708,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
             }
             float candidateZ = 1.0 / lerp(invZ0, invZ1, hitHi);
             float surfaceZ = LinearDepth(lerp(uv0, uv1, hitHi));
-            float thickness = abs(candidateZ - 1.0 / lerp(invZ0, invZ1, hitLo)) + fThickness;
+            float thickness = abs(candidateZ - 1.0 / lerp(invZ0, invZ1, hitLo)) + hitSlab;
             if (abs(candidateZ - surfaceZ) < thickness)
             {
                 hit = 1.0;
@@ -805,7 +811,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
             float zc = 1.0 / lerp(invZ0, invZ1, tc);
             float2 crossUV = lerp(uv0, uv1, tc);
             float crossDelta = zc - (verifyCoarseDepth ? LinearDepth(crossUV) : MarchDepth(crossUV));
-            float crossThickness = abs(rayZ - 1.0 / lerp(invZ0, invZ1, prevT)) + fThickness;
+            float crossThickness = abs(rayZ - 1.0 / lerp(invZ0, invZ1, prevT)) + hitSlab;
             if (crossDelta <= crossThickness)
             {
                 hitLo = prevT;
@@ -847,7 +853,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // march's nearest of four pixels can show a crossing next to a pole's outline that the full
     // size depth does not have, and the ray there runs on in front of what lies beyond.
     float hitDelta = abs(hitZ - surfZ);
-    float hitThickness = abs(hitZ - 1.0 / lerp(invZ0, invZ1, lo)) + fThickness;
+    float hitThickness = abs(hitZ - 1.0 / lerp(invZ0, invZ1, lo)) + hitSlab;
     float3 hitP = ViewPosFromUVZ(finalUV, hitZ);
     gTraceHitZ = hitP.z;
 

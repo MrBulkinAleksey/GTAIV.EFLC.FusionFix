@@ -38,9 +38,11 @@ bool operator==(float2 a,float2 b) { return a.x==b.x && a.y==b.y; }
 float2 floor(float2 a) { return {std::floor(a.x),std::floor(a.y)}; }
 bool all(bool a) { return a; }
 float2 lerp(float2 a,float2 b,float t) { return {lerp(a.x,b.x,t),lerp(a.y,b.y,t)}; }
-struct float4 { float r; float2 uv; float4(float2 p,int,int):r(0),uv(p) {} };
+struct float4 { float r; float y=0; float2 uv; float4(float2 p,int,int):r(0),uv(p) {} };
 int scene, reads;
 float gTraceSkipShare = 0.0f, gTraceHiZLevel = 0.0f;
+float glossValue = 1.0f, fGlossCutoff = 0.5f;
+int SpecularTex=1;
 float wall = 5.0f;
 float LinearDepth(float2) { ++reads; return scene==0 ? 1000.0f : wall; }
 float MarchDepth(float2 uv) {
@@ -49,9 +51,11 @@ float MarchDepth(float2 uv) {
     if (scene==2 && uv.x>=0.1f && uv.x<0.3f) return 0.5f;
     return scene==0 ? 1000.0f : wall;
 }
-int HiZDepthTex, HiZDepthTex1;
+int HiZDepthTex=2, HiZDepthTex1=3;
 float hiZGrid=8.0f;
 float4 tex2Dlod(int which,float4 p) {
+    // The gloss the receiver's paint stores; the march widens its hit bracket by it.
+    if (which==SpecularTex) { p.y=glossValue; return p; }
     // Conservative min over the cell of whichever level the ray chose, the coarse one's cells
     // twice as wide. The test covers both cells intersecting the silhouette and cells in empty
     // space, as a real reduction would.
@@ -160,6 +164,16 @@ int main() {
         require(wide.level<0.5f,"a ray over wide cells took the coarse level");
         ++cases;
     }
+    // Widening the bracket for rough paint must not let a coarse silhouette through as a hit:
+    // the pole sits 4.5 m off the ray, which no roughness multiple of the test's thickness
+    // reaches, so the resumed ray still ends on the wall, at every gloss.
+    for (float g : {1.0f, 0.4f, 0.0f}) {
+        glossValue=g;
+        auto pole=trace(2,0.5f,false,1920.0f,0.1f);
+        require(pole.hit && std::abs(pole.z-wall)<0.1f,"rough thickness accepted a coarse silhouette");
+        ++cases;
+    }
+    glossValue=1.0f;
     std::printf("%d synthetic traversal cases passed\n",cases);
 }
 '''
