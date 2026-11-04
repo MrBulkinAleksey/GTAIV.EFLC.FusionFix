@@ -14,6 +14,7 @@ shader = (Path(__file__).resolve().parents[1] / 'source/resources/SSR.fx').read_
 start = shader.index('float3 SSRMicroNormal(')
 end = shader.index('\nTraceOutput SSRTrace_PS', start)
 body = shader[start:end].replace('vPos.yx', 'swap(vPos)').replace('vec2NoiseOffset.yx', 'swap(vec2NoiseOffset)')
+body = body.replace('seed.yx', 'swap(seed)')
 body = body.replace('float3(alpha * localView.xy, localView.z)', 'float3(alpha * localView.x, alpha * localView.y, localView.z)')
 body = body.replace('float3(alpha * visible.xy, max(visible.z, 0.0))', 'float3(alpha * visible.x, alpha * visible.y, max(visible.z, 0.0))')
 body = body.replace('dot(stretchedView.xy, stretchedView.xy)', '(stretchedView.x*stretchedView.x + stretchedView.y*stretchedView.y)')
@@ -30,6 +31,8 @@ float rsqrt(float a) { return 1.0f/std::sqrt(a); }
 float lerp(float a,float b,float t) { return a+(b-a)*t; }
 struct float2 { float x,y; float2(float a=0,float b=0):x(a),y(b){} };
 float2 operator+(float2 a,float2 b) { return {a.x+b.x,a.y+b.y}; }
+float2 operator*(float2 a,float b) { return {a.x*b,a.y*b}; }
+float2 floor(float2 a) { return {std::floor(a.x),std::floor(a.y)}; }
 float2 swap(float2 a) { return {a.y,a.x}; }
 struct float3 { float x,y,z; float3(float a=0,float b=0,float c=0):x(a),y(b),z(c){} };
 float3 operator+(float3 a,float3 b) { return {a.x+b.x,a.y+b.y,a.z+b.z}; }
@@ -41,7 +44,7 @@ float3 cross(float3 a,float3 b) { return {a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.
 float3 normalize(float3 a) { return rsqrt(dot(a,a))*a; }
 void sincos(float a,float& s,float& c) { s=std::sin(a); c=std::cos(a); }
 struct float4 { float y; float4(float2,int,int):y(0){} };
-float glossValue, fStochasticSSR=1;
+float glossValue, fStochasticSSR=1, fStochasticQuad=0;
 float2 vec2NoiseOffset;
 int SpecularTex;
 float4 tex2Dlod(int,float4 a) { a.y=glossValue; return a; }
@@ -82,6 +85,25 @@ int main() {
             near += dot(m,n)>0.9962f ? 1 : 0; // within five degrees
         }
         require(near*10>=samples*9,"the clamped lobe is not narrow around the geometric normal");
+    }
+    // One sample per 2x2 block: the block's pixels must share a direction, and without the
+    // switch they must not, or the experiment would compare a thing with itself.
+    {
+        float3 n=normalize(float3(0.2f,0.1f,0.97f));
+        float3 C=float3(0.3f,0.2f,-2.0f);
+        glossValue=0.8f;
+        fStochasticQuad=1;
+        float3 shared=SSRMicroNormal(float2(0,0),float2(5.0f,7.0f),n,C);
+        for (float2 at : {float2(4.0f,6.0f),float2(5.0f,6.0f),float2(4.0f,7.0f),float2(5.0f,7.0f)}) {
+            float3 m=SSRMicroNormal(float2(0,0),at,n,C);
+            require(dot(m,shared)>0.99999f,"pixels of one block sampled different directions");
+        }
+        float3 nextBlock=SSRMicroNormal(float2(0,0),float2(6.0f,6.0f),n,C);
+        require(dot(nextBlock,shared)<0.99999f,"every block sampled one and the same direction");
+        fStochasticQuad=0;
+        float3 own=SSRMicroNormal(float2(0,0),float2(4.0f,6.0f),n,C);
+        float3 neighbour=SSRMicroNormal(float2(0,0),float2(5.0f,7.0f),n,C);
+        require(dot(own,neighbour)<0.99999f,"per-pixel samples were already identical");
     }
     fStochasticSSR=0;
     float3 n{0,0,1};
