@@ -34,7 +34,7 @@ bool all(bool a) { return a; }
 float2 lerp(float2 a,float2 b,float t) { return {lerp(a.x,b.x,t),lerp(a.y,b.y,t)}; }
 struct float4 { float r; float2 uv; float4(float2 p,int,int):r(0),uv(p) {} };
 int scene, reads;
-float gTraceSkipShare = 0.0f;
+float gTraceSkipShare = 0.0f, gTraceHiZLevel = 0.0f;
 float wall = 5.0f;
 float LinearDepth(float2) { ++reads; return scene==0 ? 1000.0f : wall; }
 float MarchDepth(float2 uv) {
@@ -54,9 +54,9 @@ float4 tex2Dlod(int which,float4 p) {
     p.r=(scene==2 && at<0.3f && at+cell>0.1f) ? 0.5f : (scene==0 ? 1000.0f : wall);
     ++reads; return p;
 }
-struct Result { bool hit; float z; int reads; float skips; };
+struct Result { bool hit; float z; int reads; float skips; float level; };
 Result trace(int which,float jitter,bool hiz,float pixels,float thickness,bool reverse=false,bool diagonal=false,int levels=1,float grid=8.0f) {
-    scene=which; reads=0; gTraceSkipShare=0.0f; hiZGrid=grid;
+    scene=which; reads=0; gTraceSkipShare=0.0f; gTraceHiZLevel=0.0f; hiZGrid=grid;
     float2 uv0{reverse ? 1.0f : 0.0f,diagonal ? 0.2f : 0.5f};
     float2 uv1{reverse ? 0.0f : 1.0f,diagonal ? 0.8f : 0.5f};
     float2 dUV{uv1.x-uv0.x,uv1.y-uv0.y};
@@ -66,7 +66,7 @@ Result trace(int which,float jitter,bool hiz,float pixels,float thickness,bool r
     struct { float len; } ray{9};
 '''
 suffix = r'''
-    return {hit>0,hit>0 ? 1.0f/lerp(invZ0,invZ1,hitHi) : 0,reads,gTraceSkipShare};
+    return {hit>0,hit>0 ? 1.0f/lerp(invZ0,invZ1,hitHi) : 0,reads,gTraceSkipShare,gTraceHiZLevel};
 }
 void require(bool ok,const char* message) {
     if (!ok) { std::fprintf(stderr,"%s\n",message); std::exit(1); }
@@ -122,12 +122,21 @@ int main() {
         auto fine=trace(kind,jitter,true,1920.0f,0.1f,false,false,1,grid);
         auto coarse=trace(kind,jitter,true,1920.0f,0.1f,false,false,2,grid);
         require(fine.hit==coarse.hit,"the coarse level changed hit validity");
+        require(fine.level<0.5f,"the coarse level was taken with one level built");
+        require(coarse.level>0.5f,"a long ray with two levels built kept the fine one");
         if (fine.hit)
             require(std::abs(fine.z-coarse.z)<1e-4f,"the coarse level changed hit depth");
         if (kind==0) {
             require(coarse.skips>fine.skips,"the coarse level skipped no more than the fine one");
             require(coarse.reads<=fine.reads,"the coarse level read more depth than the fine one");
         }
+        ++cases;
+    }
+    // A ray that crosses few cells keeps the finer level: its cells already hold several steps,
+    // and the coarser one would only loosen the depth a jump proves clear.
+    for (int kind : {0,1,2}) {
+        auto wide=trace(kind,0.5f,true,1920.0f,0.1f,false,false,2,4.0f);
+        require(wide.level<0.5f,"a ray over wide cells took the coarse level");
         ++cases;
     }
     std::printf("%d synthetic traversal cases passed\n",cases);

@@ -500,6 +500,9 @@ static float gTraceHitMotion = 0.0; // reflected hit's own motion, in full-size 
 // Share of the last TraceHit's steps that a depth hierarchy jump took away, for debug view 12:
 // whether the hierarchy pays for its pass and its boundary arithmetic in this scene.
 static float gTraceSkipShare = 0.0;
+// Which of its levels the last TraceHit walked, for the same view: a level nothing chose would
+// cost its pass and change nothing, which the skipped steps alone would not show.
+static float gTraceHiZLevel = 0.0;
 // The screen path of the last SetupReflectionRay's ray, for ScreenFallback: from gTraceUV0 to
 // gTraceUVEnd, where it leaves the screen; gTracePath is 0 when the ray was not marched.
 static float2 gTraceUV0 = 0.0;
@@ -598,6 +601,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
 {
     gTraceHitMotion = 0.0;
     gTraceSkipShare = 0.0;
+    gTraceHiZLevel = 0.0;
     ReflectionRay ray;
     if (!SetupReflectionRay(C, n, microNormal, ray))
         return 0.0;
@@ -664,6 +668,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     float cellSteps = max(abs(dUV.x) * vec2HiZSize.x, abs(dUV.y) * vec2HiZSize.y);
     float hiZLevel = (fUseHiZ > 1.0 && cellSteps * 2.0 > steps) ? 1.0 : 0.0;
     float2 hiZSize = hiZLevel > 0.0 ? vec2HiZSize1 : vec2HiZSize;
+    gTraceHiZLevel = hiZLevel;
     [loop] [fastopt]
     for (int iteration = 0; iteration < NUM_STEPS + 2 * (NUM_REFINE_STEPS + 1); ++iteration)
     {
@@ -1237,9 +1242,10 @@ TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
     float3 microNormal = SSRMicroNormal(uv, vPos, n, C);
     float4 hit = TraceHit(C, n, microNormal, jitter, fDistanceFade);
     float distance = hit.z > 0.0 ? hit.w : 0.0;
-    // .b carries the share of this ray's steps the depth hierarchy skipped, for debug view 12;
-    // the passes that read this target use .r and .g only.
-    o.distance = float4(distance, hit.z > 0.0 ? gTraceHitMotion : 0.0, gTraceSkipShare, distance);
+    // .b carries the share of this ray's steps the depth hierarchy skipped and .a which of its
+    // levels the ray walked, both for debug view 12. The passes that read this target take .r
+    // and .g, and .a only through NoSurface, which the kNoSurface above still marks.
+    o.distance = float4(distance, hit.z > 0.0 ? gTraceHitMotion : 0.0, gTraceSkipShare, gTraceHiZLevel);
     // Debug 11: the previous-scene UV from which this hit reads colour, R=x, G=y.
     // This makes a suspect reflected pixel traceable back to its source on screen.
     if (fDebugMode > 10.5 && fDebugMode < 11.5)
@@ -1492,15 +1498,15 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float4 ssr = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
 
     // 12: what the depth hierarchy did, straight from the trace's second target: red the share
-    // of this ray's steps its jumps took away, green where the ray hit something, blue where
-    // SSR traced nothing at all. Needs the distance target, so temporal, the fill or the
-    // smoothing has to be on for it to be written.
+    // of this ray's steps its jumps took away, green where the ray hit something, blue where it
+    // walked the coarser level, dark grey a pixel SSR did not trace, as in view 3. Needs the
+    // distance target, so temporal, the fill or the smoothing has to be on for it to be written.
     if (fDebugMode > 11.5 && fDebugMode < 12.5)
     {
         float4 info = tex2Dlod(SSRHitDistTex, float4(uv, 0, 0));
         if (info.a < -0.5)
-            return float4(0.0, 0.0, 1.0, 1.0);
-        return float4(saturate(info.b), info.r > 0.0 ? 0.8 : 0.0, 0.0, 1.0);
+            return float4(0.12, 0.12, 0.12, 1.0);
+        return float4(saturate(info.b), info.r > 0.0 ? 0.8 : 0.0, info.a > 0.5 ? 0.8 : 0.0, 1.0);
     }
 
     // 11: raw history coordinates, not modulated by hit confidence.
