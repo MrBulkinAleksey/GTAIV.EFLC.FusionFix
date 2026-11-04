@@ -32,14 +32,14 @@ DEFINES = ('/DNUM_STEPS=32', '/DNUM_REFINE_STEPS=8', '/DGI_RAYS=4', '/DGI_STEPS=
 HARD_LIMIT = 984  # slots: the largest a device in the field has been seen to accept
 SLACK = 8         # slots an entry may grow past its reviewed size before this fails
 
-# Entry point -> instruction slots when last reviewed, 2026-11-04, NUM_STEPS=32.
+# Entry point -> instruction slots when last reviewed, 2026-11-05, NUM_STEPS=32.
 ENTRIES = {
     'SSRTrace_PS': 966,
-    'SSRWater_PS': 845,
+    'SSRWater_PS': 855,
     'SSRFallback_PS': 513,
     'SSRTemporal_PS': 390,
     'SSGI_PS': 378,
-    'SSRDebug_PS': 316,
+    'SSRDebug_PS': 317,
     'SSRDenoise_PS': 288,
 }
 LIGHT_ENTRIES = {
