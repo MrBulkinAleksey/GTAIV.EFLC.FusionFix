@@ -905,8 +905,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     {
         float prevSurfZ = dot(float4(surfP, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
                                                          vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
-        float2 depthUV = (floor(histUV / vec2InvHistorySize) + 0.5) * vec2InvHistorySize;
-        float prevZ = PrevLinearDepth(depthUV);
+        float prevZ = PrevLinearDepth(histUV);
         float tolerance = 0.05 * prevSurfZ + 0.1;
         confidence *= 1.0 - smoothstep(tolerance * 0.5, tolerance, abs(prevZ - prevSurfZ));
     }
