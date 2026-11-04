@@ -43,9 +43,18 @@ sampler2D NormalTex
     Texture = <NormalTex2D>;
 };
 
+// The smoothing writes this at half size even when SSR runs full, so the passes that read it
+// afterwards - the accumulation, the debug view, deferred_lighting - want it bilinear: at the
+// same size a bilinear read of pixel centres is the point read they had, and across sizes it is
+// the upsample a blurred signal survives.
 sampler2D SSRResultTex
 {
     Texture = <SSRResultTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = NONE;
 };
 
 // Contact shadows beside indirect light in the passes that take both (GIContact*_PS): this frame's, read as
