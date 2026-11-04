@@ -49,7 +49,9 @@ float MarchDepth(float2 uv) {
     if (scene==2 && uv.x>=0.1f && uv.x<0.3f) return 0.5f;
     return scene==0 ? 1000.0f : wall;
 }
-int HiZDepthTex, HiZDepthTex1;
+// Distinct ids: the stub tells the levels apart by them, and zero is the specular sampler's
+// absence in the other harnesses, so none of them may sit at zero here.
+int HiZDepthTex=2, HiZDepthTex1=3;
 float hiZGrid=8.0f;
 float4 tex2Dlod(int which,float4 p) {
     // Conservative min over the cell of whichever level the ray chose, the coarse one's cells
