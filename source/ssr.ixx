@@ -486,6 +486,9 @@ export void RenderScreenSpaceReflections()
         SSRTrace::Line("ssr: done, half %d denoised %d temporal %d result %s, history this frame %d",
             int(half), int(R.bSSRDenoised), int(temporal), SSRTrace::TextureName(ssrResult).c_str(), int(R.bSSRHistoryThisFrame));
         SSRTrace::Contents(pDevice, "trace", R.SSRTraceTex[half] ? R.SSRTraceTex[half]->mD3DTexture : nullptr);
+        // What the march counted for the depth hierarchy, as numbers to compare two settings by.
+        if (writeHitDistances)
+            SSRTrace::HiZSummary(pDevice, "hit distances", R.SSRHitDistTex[half] ? R.SSRHitDistTex[half]->mD3DTexture : nullptr);
         SSRTrace::Contents(pDevice, "resolve", ssrTex);
         SSRTrace::Contents(pDevice, "result", ssrResult);
         SSRTrace::readbacksLeft.fetch_sub(1);

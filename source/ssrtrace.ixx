@@ -164,6 +164,75 @@ namespace SSRTrace
              desc.Width * desc.Height ? sumAlpha / (double(desc.Width) * desc.Height) : 0.0, isHalf || isFixed ? "" : " (format not read)");
     }
 
+    // What the march's distance target says about the depth hierarchy, read back from the card:
+    // how many pixels were traced, how much of their steps its jumps took away and how many rays
+    // walked the coarser level. Debug view 12 is the picture of the same; this is the number to
+    // compare two settings by, and it is what says whether a level is built and never chosen.
+    export void HiZSummary(IDirect3DDevice9* pDevice, const char* name, IDirect3DTexture9* texture)
+    {
+        if (!Active() || readbacksLeft.load(std::memory_order_relaxed) <= 0)
+            return;
+        if (!texture)
+        {
+            Line("  %s: none", name);
+            return;
+        }
+        IDirect3DSurface9* surface = nullptr;
+        if (FAILED(texture->GetSurfaceLevel(0, &surface)) || !surface)
+        {
+            Line("  %s: no surface", name);
+            return;
+        }
+        D3DSURFACE_DESC desc = {};
+        surface->GetDesc(&desc);
+        IDirect3DSurface9* copy = nullptr;
+        HRESULT hr = desc.Format == D3DFMT_A16B16G16R16F
+            ? pDevice->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &copy, nullptr) : E_FAIL;
+        if (SUCCEEDED(hr))
+            hr = pDevice->GetRenderTargetData(surface, copy);
+        D3DLOCKED_RECT locked = {};
+        if (SUCCEEDED(hr))
+            hr = copy->LockRect(&locked, nullptr, D3DLOCK_READONLY);
+        if (FAILED(hr))
+        {
+            Line("  %s: %ux%u format %u, read back failed %08x", name, desc.Width, desc.Height, unsigned(desc.Format), unsigned(hr));
+            SAFE_RELEASE(copy);
+            surface->Release();
+            return;
+        }
+        uint32_t traced = 0, hits = 0, coarse = 0;
+        double sumSkip = 0.0, sumDistance = 0.0;
+        float maxSkip = 0.0f;
+        for (UINT y = 0; y < desc.Height; ++y)
+        {
+            auto row = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(locked.pBits) + y * locked.Pitch);
+            for (UINT x = 0; x < desc.Width; ++x)
+            {
+                const float distance = Half(row[x * 4 + 0]), skip = Half(row[x * 4 + 2]), level = Half(row[x * 4 + 3]);
+                if (level < -0.5f) // kNoSurface: SSR.fx traced no ray here
+                    continue;
+                ++traced;
+                sumSkip += skip;
+                maxSkip = (std::max)(maxSkip, skip);
+                if (level > 0.5f)
+                    ++coarse;
+                if (distance > 0.0f)
+                {
+                    ++hits;
+                    sumDistance += distance;
+                }
+            }
+        }
+        copy->UnlockRect();
+        copy->Release();
+        surface->Release();
+        const uint32_t pixels = desc.Width * desc.Height;
+        Line("  %s: %ux%u traced %u (%.1f%%), hits %u, mean hit distance %.3f of max, skipped mean %.4f max %.3f, coarse level %u (%.1f%% of traced)",
+             name, desc.Width, desc.Height, traced, pixels ? 100.0 * traced / pixels : 0.0, hits,
+             hits ? sumDistance / hits : 0.0, traced ? sumSkip / traced : 0.0, maxSkip, coarse,
+             traced ? 100.0 * coarse / traced : 0.0);
+    }
+
     // The first channel of a texture at five points (the centre and halfway to each corner), as stored and as metres
     // through near and far the way SSR.fx decodes the log depth, to compare this frame's depth with last frame's copy.
     export void DepthProbe(IDirect3DDevice9* pDevice, const char* name, IDirect3DTexture9* texture, float nearClip, float farClip)
@@ -404,10 +473,11 @@ namespace SSRTrace
             }
             framesLeft = kFrames;
             readbacksLeft = 2;
-            Line("=== trace: menu SSR %d debug %d AO %d SSGI %d contact %d skin %d; ini intensity %.2f max distance %.1f fallback %.2f "
-                 "temporal %.2f denoise %.1f; active %ux%u",
-                 pref("PREF_SSR"), pref("PREF_SSR_DEBUG"), pref("PREF_SAO"), pref("PREF_SSGI"), pref("PREF_CONTACTSHADOWS"),
-                 pref("PREF_SKIN_SSS"), R.fSSRIntensity, R.fSSRMaxDistance, R.fSSRFallback, R.fSSRTemporalBlend, R.fSSRDenoiseRadius,
+            Line("=== trace: menu SSR %d hiz %d stochastic %d debug %d AO %d SSGI %d contact %d skin %d; ini intensity %.2f max distance %.1f fallback %.2f "
+                 "temporal %.2f denoise %.1f quad %d; active %ux%u",
+                 pref("PREF_SSR"), pref("PREF_SSR_HIZ"), pref("PREF_SSR_STOCHASTIC"), pref("PREF_SSR_DEBUG"), pref("PREF_SAO"), pref("PREF_SSGI"),
+                 pref("PREF_CONTACTSHADOWS"), pref("PREF_SKIN_SSS"), R.fSSRIntensity, R.fSSRMaxDistance, R.fSSRFallback, R.fSSRTemporalBlend,
+                 R.fSSRDenoiseRadius, int(R.bSSRStochasticQuad),
                  unsigned(rage::grcDevice::ms_nActiveWidth ? *rage::grcDevice::ms_nActiveWidth : 0),
                  unsigned(rage::grcDevice::ms_nActiveHeight ? *rage::grcDevice::ms_nActiveHeight : 0));
             Line("targets: trace %p/%p fallback %p/%p spread %p/%p ssr %p half %p effect %p history %p depth %p",
