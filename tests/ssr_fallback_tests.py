@@ -47,6 +47,8 @@ int main() {
     require(surfaces==0 && normalSamples==0 && rays==0 && screens==0 && depthSamples==1,"neighbour-only work not skipped");
     fFallback=1; fNeighbourFill=0; screenWeight=.7f; reset(); result=SSRFallback_PS(uv,uv);
     require(result.a==.7f && screens==1 && fills==0 && surfaces==1 && depthSamples==0,"screen-only result changed");
+    require(normalSamples==0,"the fill sampled the reflection lobe again, which the mirror direction it walks makes unnecessary");
+    require(rays==1,"the fill did not work out the ray it follows on the screen");
     screenWeight=0; reset(); result=SSRFallback_PS(uv,uv);
     require(result.a==0 && fills==0,"disabled neighbour fill still ran");
     fNeighbourFill=1; reset(); result=SSRFallback_PS(uv,uv);
