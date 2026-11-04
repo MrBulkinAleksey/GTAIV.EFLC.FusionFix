@@ -1321,10 +1321,13 @@ float4 SSRSpread_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float4 trace = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
     if (own.a >= max(fFallback, fNeighbourFill) * 0.99 || NoSurface(trace) || trace.a >= kFallbackBelow)
         return own;
-    static const float2 taps[8] =
+    // A cross, not a ring of eight: FillTurn spins it by a different angle at every pixel and
+    // every frame, so the diagonals the cross leaves out are covered by the neighbours and by
+    // the accumulation, while each step of the cascade pays four depth, gloss and normal reads
+    // instead of eight. The alpha keeps the eight taps' scale: half of them, undivided.
+    static const float2 taps[4] =
     {
-        float2( 1.0,  0.0), float2(-1.0,  0.0), float2( 0.0,  1.0), float2( 0.0, -1.0),
-        float2( 0.7,  0.7), float2(-0.7,  0.7), float2( 0.7, -0.7), float2(-0.7, -0.7)
+        float2( 1.0,  0.0), float2(-1.0,  0.0), float2( 0.0,  1.0), float2( 0.0, -1.0)
     };
     float z = LinearDepth(uv);
     float fillGloss = fGlossCutoff >= 0.0 ? tex2Dlod(SpecularTex, float4(uv, 0, 0)).y : 0.0;
@@ -1334,7 +1337,7 @@ float4 SSRSpread_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 sum = 0.0;
     float sumW = 0.0, top = 0.0;
     [loop] [fastopt]
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 4; ++i)
     {
         float2 tapUV = uv + mul(turn, taps[i]) * fSpreadRadius * fFillPixelScale * vec2InvViewportSize;
         float4 tap = tex2Dlod(SSRFallbackTex, float4(tapUV, 0, 0));
@@ -1347,7 +1350,7 @@ float4 SSRSpread_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         sumW += w;
         top = max(top, w);
     }
-    float a = max(own.a, 0.8 * min(top, saturate(sumW / 2.0)));
+    float a = max(own.a, 0.8 * min(top, saturate(sumW)));
     if (sumW <= 1e-3 || a <= own.a)
         return own;
     // own keeps its share, the spread fills up the rest.
