@@ -39,6 +39,7 @@ float3 operator*(float3 b,float a) { return a*b; }
 float dot(float3 a,float3 b) { return a.x*b.x+a.y*b.y+a.z*b.z; }
 float3 cross(float3 a,float3 b) { return {a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x}; }
 float3 normalize(float3 a) { return rsqrt(dot(a,a))*a; }
+void sincos(float a,float& s,float& c) { s=std::sin(a); c=std::cos(a); }
 struct float4 { float y; float4(float2,int,int):y(0){} };
 float glossValue, fStochasticSSR=1;
 float2 vec2NoiseOffset;
@@ -68,6 +69,19 @@ int main() {
             require(dot(m,view)>=-1e-4f,"micro-normal invisible from view");
             ++count;
         }
+    }
+    // At the roughness clamp the lobe is narrow: almost every sample stays within a few degrees
+    // of the geometric normal. An early out for mirror-like paint would be sound, but its branch
+    // costs the march ps_3_0 slots it does not have to spare, so this only records how narrow it is.
+    glossValue=1.0f;
+    {
+        float3 n=normalize(float3(0.3f,0.2f,0.93f));
+        int near=0, samples=200;
+        for (int i=0;i<samples;++i) {
+            float3 m=SSRMicroNormal(float2(0,0),float2(i*13.13f,i*4.1f),n,float3(0.2f,0.1f,-2.0f));
+            near += dot(m,n)>0.9962f ? 1 : 0; // within five degrees
+        }
+        require(near*10>=samples*9,"the clamped lobe is not narrow around the geometric normal");
     }
     fStochasticSSR=0;
     float3 n{0,0,1};

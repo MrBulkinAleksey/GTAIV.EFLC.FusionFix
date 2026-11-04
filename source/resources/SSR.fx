@@ -810,7 +810,8 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
         prevDelta = delta;
     }
 
-    gTraceSkipShare = saturate(skipped / steps);
+    // skipped cannot pass steps: the jumps only move marchIndex forward, and it stays under it.
+    gTraceSkipShare = skipped / steps;
     if (hit <= 0.0)
         return 0.0;
     hidden *= ray.len;
@@ -1182,6 +1183,9 @@ float3 SSRMicroNormal(float2 uv, float2 vPos, float3 n, float3 C)
     float gloss = saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).y);
     float roughness = 1.0 - gloss;
     float alpha = max(roughness * roughness, 0.002);
+    // No early out for a mirror-like surface, though at the clamp its lobe is the normal: the
+    // branch itself costs the march six ps_3_0 slots, which it does not have to spare, and paint
+    // glossier than 0.955 is rare enough that the samples it would skip are too.
     float u = min(PixelJitter(vPos + float2(83.0, 47.0) + vec2NoiseOffset), 0.9999);
     float phi = 6.2831853 * PixelJitter(vPos.yx + float2(17.0, 59.0) + vec2NoiseOffset.yx);
     float3 up = abs(n.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
@@ -1195,8 +1199,10 @@ float3 SSRMicroNormal(float2 uv, float2 vPos, float3 n, float3 C)
                               : float3(1.0, 0.0, 0.0);
     float3 t2 = cross(stretchedView, t1);
     float radius = sqrt(u);
-    float p1 = radius * cos(phi);
-    float p2 = radius * sin(phi);
+    float sine, cosine;
+    sincos(phi, sine, cosine);
+    float p1 = radius * cosine;
+    float p2 = radius * sine;
     float blend = 0.5 * (1.0 + stretchedView.z);
     p2 = lerp(sqrt(max(1.0 - p1 * p1, 0.0)), p2, blend);
     float3 visible = p1 * t1 + p2 * t2 + sqrt(max(1.0 - p1 * p1 - p2 * p2, 0.0)) * stretchedView;
@@ -1251,7 +1257,10 @@ static const float kFallbackBelow = 0.1;
 
 // What fills in where SSRTrace_PS's ray in SSRResultTex found next to nothing, ScreenFallback or
 // NeighbourFill, and its weight; 0 where neither applies. It follows the ray's path on the screen, which
-// SetupReflectionRay works out again.
+// SetupReflectionRay works out again, for the mirror direction rather than the trace's sample: a
+// stochastic ray is one noisy estimate of a lobe, while the guess for its miss stands for the
+// whole lobe, whose mean direction the mirror ray is. Sampling again here also cost a second
+// VNDF for every pixel the trace found nothing on, which tracing stochastically makes many.
 float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     float4 trace = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
@@ -1267,9 +1276,8 @@ float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         float3 C = SSRSurface(uv, vPos, n);
         z = C.z;
         ReflectionRay ray;
-        float3 microNormal = SSRMicroNormal(uv, vPos, n, C);
-        SetupReflectionRay(C, n, microNormal, ray);
-        fallback = ScreenFallback(C, reflect(normalize(C), microNormal), weight);
+        SetupReflectionRay(C, n, n, ray);
+        fallback = ScreenFallback(C, reflect(normalize(C), n), weight);
     }
     [branch]
     if (weight <= 0.0 && fNeighbourFill > 0.0)
