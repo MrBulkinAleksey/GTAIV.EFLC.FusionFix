@@ -289,7 +289,6 @@ uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object
 uniform float fStepsPerPixel;     // march steps per pixel of a ray on this pass's target, 1 / SSRStepPixels
 uniform float fUseHiZ;            // depth hierarchy levels built this frame, 0 without them
 uniform float fStochasticSSR;
-uniform float fStochasticQuad;    // 1 samples one reflection direction per 2x2 pixels (SSRStochasticQuad, an experiment)
 uniform float2 vec2HiZSize;       // cells across the viewport of the finer level, the grid TraceHit walks
 uniform float2 vec2HiZSize1;      // the coarser level's, half as many each way
 uniform float fMarchFullDepth;    // 1 marches through the full size depth instead of MarchDepthTex (SSRMarchFullDepth, temporary, to compare)
@@ -1192,16 +1191,12 @@ float3 SSRMicroNormal(float2 uv, float2 vPos, float3 n, float3 C)
         return n;
     float gloss = saturate(tex2Dlod(SpecularTex, float4(uv, 0, 0)).y);
     float roughness = 1.0 - gloss;
-    // No early out at the clamp, where the lobe is the geometric normal and the sample could be
-    // skipped: the branch costs the march six ps_3_0 slots it does not have to spare, and paint
-    // glossier than 0.955 is rare enough that the samples it would skip are too.
     float alpha = max(roughness * roughness, 0.002);
-    // SSRStochasticQuad: one sample per 2x2 pixels, so a block's rays leave the surface in step
-    // and their depth reads fall together. An experiment in what tracing stochastically costs the
-    // march; the noise it leaves comes in blocks the smoothing averages less well.
-    float2 seed = fStochasticQuad > 0.0 ? floor(vPos * 0.5) * 2.0 : vPos;
-    float u = min(PixelJitter(seed + float2(83.0, 47.0) + vec2NoiseOffset), 0.9999);
-    float phi = 6.2831853 * PixelJitter(seed.yx + float2(17.0, 59.0) + vec2NoiseOffset.yx);
+    // No early out for a mirror-like surface, though at the clamp its lobe is the normal: the
+    // branch itself costs the march six ps_3_0 slots, which it does not have to spare, and paint
+    // glossier than 0.955 is rare enough that the samples it would skip are too.
+    float u = min(PixelJitter(vPos + float2(83.0, 47.0) + vec2NoiseOffset), 0.9999);
+    float phi = 6.2831853 * PixelJitter(vPos.yx + float2(17.0, 59.0) + vec2NoiseOffset.yx);
     float3 up = abs(n.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
     float3 tangent = normalize(cross(up, n));
     float3 bitangent = cross(n, tangent);

@@ -340,7 +340,7 @@ public:
         D3DXHANDLE techSSR, techSSRWater;
         D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, SSRFallbackTex2D, SSRHitDistTex2D;
         // HiZDepthTex2D and vec2HiZSize hold one entry per kSSRHiZLevels, which is declared below.
-        D3DXHANDLE MarchDepthTex2D, HiZDepthTex2D[2], fUseHiZ, vec2HiZSize[2], fStochasticSSR, fStochasticQuad, fStepsPerPixel, fMarchFullDepth;
+        D3DXHANDLE MarchDepthTex2D, HiZDepthTex2D[2], fUseHiZ, vec2HiZSize[2], fStochasticSSR, fStepsPerPixel, fMarchFullDepth;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
         D3DXHANDLE fTemporalAnySurface, fGIRayLength, fGIThickness, fGIMaxViewDistance, fGIIntensity, techSSGI;
         D3DXHANDLE fGIMaxBrightness, techGIUpsample, AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D, fGIFeedback, fGIOcclusion, fGIRespectAO;
@@ -1060,12 +1060,6 @@ public:
     // SSRTemporalJitter: while SSR accumulates, the step offsets move on every
     // frame (vec2NoiseOffset in SSR.fx), so the accumulation averages them.
     bool bSSRTemporalJitter = true;
-    // SSRStochasticQuad: one visible-normal sample per 2x2 pixels instead of one per pixel, an
-    // experiment in what tracing stochastically costs the march. Neighbouring rays then leave the
-    // surface in step, so their depth reads fall together: if the march's extra time goes with
-    // the scatter, the sampling itself was not what it cost. Its noise comes in blocks that the
-    // smoothing and the accumulation average less well, so it stays off.
-    bool bSSRStochasticQuad = false;
     float fSSRTowardCamera = 0.0f;
     float fSSRReflectionBlur = 0.0f;
     // SSRStepPixels: pixels of a ray on the march's target per step, 2 by default.
@@ -1768,7 +1762,6 @@ public:
                 h.HiZDepthTex2D[1] = SSREffect->GetParameterByName(nullptr, "HiZDepthTex2D1");
                 h.fUseHiZ = SSREffect->GetParameterByName(nullptr, "fUseHiZ");
                 h.fStochasticSSR = SSREffect->GetParameterByName(nullptr, "fStochasticSSR");
-                h.fStochasticQuad = SSREffect->GetParameterByName(nullptr, "fStochasticQuad");
                 h.vec2HiZSize[0] = SSREffect->GetParameterByName(nullptr, "vec2HiZSize");
                 h.vec2HiZSize[1] = SSREffect->GetParameterByName(nullptr, "vec2HiZSize1");
                 h.fStepsPerPixel = SSREffect->GetParameterByName(nullptr, "fStepsPerPixel");
@@ -2128,7 +2121,6 @@ public:
             IniFlag("REFLECTIONS", "SSRPastThinObjects", &PostFxResource::bSSRPassThinObjects, 1),
             IniFlag("REFLECTIONS", "SSRStepJitter", &PostFxResource::bSSRStepJitter, 1),
             IniFlag("REFLECTIONS", "SSRTemporalJitter", &PostFxResource::bSSRTemporalJitter, 1),
-            IniFlag("REFLECTIONS", "SSRStochasticQuad", &PostFxResource::bSSRStochasticQuad, 0),
             IniFloat("REFLECTIONS", "SSRTemporal", &PostFxResource::fSSRTemporalBlend, 0.85f, 0.0f, 0.97f),
             IniFloat("REFLECTIONS", "SSRFallback", &PostFxResource::fSSRFallback, 0.8f, 0.0f, 1.0f),
             IniFloat("REFLECTIONS", "SSRNeighbourFill", &PostFxResource::fSSRNeighbourFill, 0.8f, 0.0f, 1.0f),

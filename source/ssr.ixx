@@ -207,7 +207,6 @@ export void RenderScreenSpaceReflections()
         R.nSSRAccumFrame = 0;
     previousStochastic = stochastic;
     effect->SetFloat(h.fStochasticSSR, stochastic ? 1.0f : 0.0f);
-    effect->SetFloat(h.fStochasticQuad, stochastic && R.bSSRStochasticQuad ? 1.0f : 0.0f);
     SetNoiseOffset(effect, temporal && (R.bSSRTemporalJitter || stochastic));
     effect->SetFloat(h.fTowardCamera, R.fSSRTowardCamera);
     effect->SetFloat(h.fReflectionBlur, R.fSSRReflectionBlur);

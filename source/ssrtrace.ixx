@@ -474,10 +474,10 @@ namespace SSRTrace
             framesLeft = kFrames;
             readbacksLeft = 2;
             Line("=== trace: menu SSR %d hiz %d stochastic %d debug %d AO %d SSGI %d contact %d skin %d; ini intensity %.2f max distance %.1f fallback %.2f "
-                 "temporal %.2f denoise %.1f quad %d; active %ux%u",
+                 "temporal %.2f denoise %.1f; active %ux%u",
                  pref("PREF_SSR"), pref("PREF_SSR_HIZ"), pref("PREF_SSR_STOCHASTIC"), pref("PREF_SSR_DEBUG"), pref("PREF_SAO"), pref("PREF_SSGI"),
                  pref("PREF_CONTACTSHADOWS"), pref("PREF_SKIN_SSS"), R.fSSRIntensity, R.fSSRMaxDistance, R.fSSRFallback, R.fSSRTemporalBlend,
-                 R.fSSRDenoiseRadius, int(R.bSSRStochasticQuad),
+                 R.fSSRDenoiseRadius,
                  unsigned(rage::grcDevice::ms_nActiveWidth ? *rage::grcDevice::ms_nActiveWidth : 0),
                  unsigned(rage::grcDevice::ms_nActiveHeight ? *rage::grcDevice::ms_nActiveHeight : 0));
             Line("targets: trace %p/%p fallback %p/%p spread %p/%p ssr %p half %p effect %p history %p depth %p",
