@@ -2119,7 +2119,12 @@ public:
             { 0, "PREF_STUNTJUMPCAM",           "MISC",       "StuntJumpCamera",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_ACTIONCAM",              "MISC",       "ActionCamera",                       "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSR",                    "REFLECTIONS", "SSR",                               "MENU_DISPLAY_SSR_QUALITY",   0, nullptr, 0, 2 },
-            { 0, "PREF_SSR_HIZ",                "REFLECTIONS", "SSRHiZ",                           "MENU_DISPLAY_SSR_HIZ",       1, nullptr, 0, 2 },
+            // Measured in the game (2026-11-04, the street view, stochastic on): the hierarchy cost
+            // the march 0.01 ms with one level and 0.05 with two, at full and at half SSR size, and
+            // debug view 12 showed why - the coarse level is chosen on car bodies, whose rays cross
+            // behind geometry within a step or two, so the jumps never fire. Off until a scene is
+            // found where it pays; the menu keeps 0/1/2.
+            { 0, "PREF_SSR_HIZ",                "REFLECTIONS", "SSRHiZ",                           "MENU_DISPLAY_SSR_HIZ",       0, nullptr, 0, 2 },
             { 0, "PREF_SSR_STOCHASTIC",         "REFLECTIONS", "SSRStochastic",                    "",                           0, nullptr, 0, 1 },
             { 0, "PREF_SSR_DEBUG",              "DEBUG",      "SSRDebug",                           "MENU_DISPLAY_SSR_DEBUG",     0, nullptr, 0, 12 },
             { 0, "PREF_GROUND_DEBUG",           "DEBUG",      "GroundSurfacesDebug",                "",                           0, nullptr, 0, 1 },
