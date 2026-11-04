@@ -175,6 +175,12 @@ SSR Debug View
 [SSRHiZ]
 Hierarchical SSR
 
+[SSRHiZOne]
+One Level
+
+[SSRHiZTwo]
+Two Levels
+
 [SSRStochastic]
 Stochastic Reflections
 

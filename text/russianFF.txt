@@ -175,6 +175,12 @@ Logitech LightSync RGB
 [SSRHiZ]
 Иерархия глубины SSR
 
+[SSRHiZOne]
+Один уровень
+
+[SSRHiZTwo]
+Два уровня
+
 [SSRStochastic]
 Стохастические отражения
 

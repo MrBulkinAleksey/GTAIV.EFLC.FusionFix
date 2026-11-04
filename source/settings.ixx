@@ -2119,7 +2119,7 @@ public:
             { 0, "PREF_STUNTJUMPCAM",           "MISC",       "StuntJumpCamera",                    "",                           1, nullptr, 0, 1 },
             { 0, "PREF_ACTIONCAM",              "MISC",       "ActionCamera",                       "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SSR",                    "REFLECTIONS", "SSR",                               "MENU_DISPLAY_SSR_QUALITY",   0, nullptr, 0, 2 },
-            { 0, "PREF_SSR_HIZ",                "REFLECTIONS", "SSRHiZ",                           "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_SSR_HIZ",                "REFLECTIONS", "SSRHiZ",                           "MENU_DISPLAY_SSR_HIZ",       1, nullptr, 0, 2 },
             { 0, "PREF_SSR_STOCHASTIC",         "REFLECTIONS", "SSRStochastic",                    "",                           0, nullptr, 0, 1 },
             { 0, "PREF_SSR_DEBUG",              "DEBUG",      "SSRDebug",                           "MENU_DISPLAY_SSR_DEBUG",     0, nullptr, 0, 12 },
             { 0, "PREF_GROUND_DEBUG",           "DEBUG",      "GroundSurfacesDebug",                "",                           0, nullptr, 0, 1 },
@@ -2214,6 +2214,7 @@ public:
         DefineDisplay("MENU_DISPLAY_SHARPENING", { "MO_OFF", "MO_LOW", "MO_MED", "MO_HIGH" });
         DefineDisplay("MENU_DISPLAY_TEXTURE_LOD_BIAS", { "MO_OFF", "LodBias1", "LodBias2", "LodBias3", "LodBias4" });
         DefineDisplay("MENU_DISPLAY_SSR_QUALITY", { "MO_OFF", "SSRHalf", "SSRFull" });
+        DefineDisplay("MENU_DISPLAY_SSR_HIZ", { "MO_OFF", "SSRHiZOne", "SSRHiZTwo" });
         DefineDisplay("MENU_DISPLAY_AO", { "MO_OFF", "SAO", "GTAO" });
         DefineDisplay("MENU_DISPLAY_AERIAL", { "MO_OFF", "MO_LOW", "MO_MED", "MO_HIGH" });
         DefineDisplay("MENU_DISPLAY_SSR_DEBUG", { "MO_OFF", "SSRDbgColour", "SSRDbgHits", "SSRDbgNormals", "SSRDbgHorizon", "SSRDbgSpecular", "SSRDbgGlass", "SSRDbgContact", "SSRDbgGI", "SSRDbgSkin", "SSRDbgGIHistory", "SSRDbgSourceUV", "SSRDbgHiZSkips" });
@@ -2412,7 +2413,7 @@ public:
             if (category == MenuScreen::Invalid)
                 continue;
             AddRow(category, "SSR", "PREF_SSR", 3, "MENU_DISPLAY_SSR_QUALITY");
-            AddRow(category, "SSRHiZ", "PREF_SSR_HIZ", 2, toggle);
+            AddRow(category, "SSRHiZ", "PREF_SSR_HIZ", 3, "MENU_DISPLAY_SSR_HIZ");
             AddRow(category, "SSRStochastic", "PREF_SSR_STOCHASTIC", 2, toggle);
             AddRow(category, "SSGI", "PREF_SSGI", 2, toggle);
             AddRow(category, "Contact Shadows", "PREF_CONTACTSHADOWS", 2, toggle);

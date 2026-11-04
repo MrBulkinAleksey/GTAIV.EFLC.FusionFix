@@ -318,10 +318,13 @@ export void RenderScreenSpaceReflections()
         D3DSURFACE_DESC marchDesc = {};
         const bool marchSizeMatches = SUCCEEDED(R.SSRMarchDepthSurf->GetDesc(&marchDesc)) &&
             marchDesc.Width == DWORD(width) / 2 && marchDesc.Height == DWORD(height) / 2;
-        if (R.SSRHiZ() && !R.SSRMarchFullDepth() && marchSizeMatches)
+        // What the menu asks for, capped at what was allocated: a viewport not divisible by eight
+        // only has the finer level. Live, so one level and two can be compared in one session.
+        const int hiZWanted = (std::min)(R.SSRHiZLevels(), PostFxResource::kSSRHiZLevels);
+        if (hiZWanted > 0 && !R.SSRMarchFullDepth() && marchSizeMatches)
         {
             ProfilerScope timedHiZ(pDevice, kProfSSRHiZ);
-            for (int i = 0; i < PostFxResource::kSSRHiZLevels; ++i)
+            for (int i = 0; i < hiZWanted; ++i)
             {
                 // A level the effect has no parameter for would be drawn and then read through a
                 // sampler nothing is bound to, so the traversal must not be told it is there.

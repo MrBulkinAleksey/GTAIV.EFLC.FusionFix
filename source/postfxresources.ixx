@@ -353,7 +353,10 @@ public:
     static bool SSREnabled() { static auto p = FusionFixSettings.GetRef("PREF_SSR"); return p && p->get() != 0; }
     static bool SSRHalfRes() { static auto p = FusionFixSettings.GetRef("PREF_SSR"); return p && p->get() == 1; }
     static bool SSRStochastic() { static auto p = FusionFixSettings.GetRef("PREF_SSR_STOCHASTIC"); return p && p->get() != 0; }
-    static bool SSRHiZ() { static auto p = FusionFixSettings.GetRef("PREF_SSR_HIZ"); return p && p->get() != 0; }
+    // PREF_SSR_HIZ: 0 off, 1 the minimum-depth level at a quarter of the viewport, 2 also the one
+    // at an eighth, whose wider cells are what let a long ray jump any distance. Live, so the two
+    // can be compared in one session; ssr.ixx caps it at the levels allocated.
+    static int SSRHiZLevels() { static auto p = FusionFixSettings.GetRef("PREF_SSR_HIZ"); return p ? p->get() : 0; }
     // SSR debug view from the graphics menu (PREF_SSR_DEBUG), see SSRDebug_PS in SSR.fx.
     // Built after the SSR pass and shown over the finished frame.
     // Contact shadows (ContactShadows_PS in SSR.fx), bound to s9 for deferred_lighting
