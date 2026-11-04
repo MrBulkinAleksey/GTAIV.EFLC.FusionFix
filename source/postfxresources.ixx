@@ -338,7 +338,7 @@ public:
         D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY, vec4WaterRings;
         D3DXHANDLE techSSR, techSSRWater;
-        D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, SSRFallbackTex2D, SSRHitDistTex2D;
+        D3DXHANDLE SSRAccumTex2D, fTemporalBlend, techSSRTemporal, techSSRUpsample, SSRFallbackTex2D, SSRHitDistTex2D;
         // HiZDepthTex2D and vec2HiZSize hold one entry per kSSRHiZLevels, which is declared below.
         D3DXHANDLE MarchDepthTex2D, HiZDepthTex2D[2], fUseHiZ, vec2HiZSize[2], fStochasticSSR, fStepsPerPixel, fMarchFullDepth;
         D3DXHANDLE MotionTex2D, fUseMotion, vec2MotionJitter;
@@ -1768,6 +1768,7 @@ public:
                 h.fMarchFullDepth = SSREffect->GetParameterByName(nullptr, "fMarchFullDepth");
                 h.fTemporalBlend = SSREffect->GetParameterByName(nullptr, "fTemporalBlend");
                 h.techSSRTemporal = SSREffect->GetTechniqueByName("SSRTemporal");
+                h.techSSRUpsample = SSREffect->GetTechniqueByName("SSRUpsample");
                 h.MotionTex2D = SSREffect->GetParameterByName(nullptr, "MotionTex2D");
                 h.fUseMotion = SSREffect->GetParameterByName(nullptr, "fUseMotion");
                 h.vec2MotionJitter = SSREffect->GetParameterByName(nullptr, "vec2MotionJitter");
