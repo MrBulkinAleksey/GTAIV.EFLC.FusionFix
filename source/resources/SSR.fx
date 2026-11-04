@@ -591,6 +591,16 @@ float MarchDepth(float2 uv)
     return fMarchFullDepth > 0.0 ? LinearDepth(uv) : tex2Dlod(MarchDepthTex, float4(uv, 0, 0)).r;
 }
 
+// Steps a ray of this many pixels of the pass's target gets: about one per fStepsPerPixel, capped
+// at NUM_STEPS, and floored at four rather than at the ray's own length only below that. A ray of
+// a far car spans a handful of pixels; twelve steps there sampled the same two pixels six times
+// over and paid for six iterations that could not find anything one sample would not. Four keeps
+// a sub-pixel ray able to hit the pixel it lives in at all, which is what the old floor was for.
+float SSRStepCount(float rayPixels)
+{
+    return clamp(ceil(rayPixels * fStepsPerPixel), min(max(rayPixels, 4.0), 12.0), (float) NUM_STEPS);
+}
+
 // Marches the reflected ray of the surface at C with normal n. The hit is (where to read it in
 // HistoryTex, confidence 0..1, the ray's length over fMaxDistance), 0 for a miss; HitColour
 // turns it into a colour.
@@ -618,7 +628,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // of the ray (fStepsPerPixel 0.5) keeps the last and longest step, twice the average, within
     // a few pixels; with the steps moving every frame the accumulation makes up for fewer.
     float rayPixels = length(dUV * tEnd / vec2InvViewportSize);
-    float steps = clamp(ceil(rayPixels * fStepsPerPixel), 12.0, (float) NUM_STEPS);
+    float steps = SSRStepCount(rayPixels);
 
     // Steps grow with the square of their index: a few centimetres next to the surface, where
     // a ped standing by a car is, about twice the even spacing at the far end. Even steps a

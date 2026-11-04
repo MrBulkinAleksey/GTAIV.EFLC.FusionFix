@@ -15,7 +15,8 @@ shader = (Path(__file__).resolve().parents[1] / 'source/resources/SSR.fx').read_
 start = shader.index('    float hit = 0.0;', shader.index('float4 TraceHit('))
 end = shader.index('    if (hit <= 0.0)', start)
 body = re.sub(r'\[(?:branch|loop|fastopt)\]', '', shader[start:end])
-
+steps_start = shader.index('float SSRStepCount(')
+steps_fn = shader[steps_start:shader.index('// Marches the reflected ray', steps_start)]
 prefix = r'''
 #include <algorithm>
 #include <cmath>
@@ -24,10 +25,15 @@ prefix = r'''
 using std::abs;
 float max(float a, float b) { return std::max(a, b); }
 float min(float a, float b) { return std::min(a, b); }
+float clamp(float a, float lo, float hi) { return std::clamp(a, lo, hi); }
+using std::ceil;
 float saturate(float a) { return std::clamp(a, 0.0f, 1.0f); }
 float lerp(float a, float b, float t) { return a + (b-a)*t; }
 struct float2 { float x,y; };
 float2 operator*(float2 a,float2 b) { return {a.x*b.x,a.y*b.y}; }
+float2 operator/(float2 a,float2 b) { return {a.x/b.x,a.y/b.y}; }
+float length(float2 a) { return std::sqrt(a.x*a.x+a.y*a.y); }
+float fStepsPerPixel=0.5f;
 bool operator==(float2 a,float2 b) { return a.x==b.x && a.y==b.y; }
 float2 floor(float2 a) { return {std::floor(a.x),std::floor(a.y)}; }
 bool all(bool a) { return a; }
@@ -61,7 +67,7 @@ Result trace(int which,float jitter,bool hiz,float pixels,float thickness,bool r
     float2 uv1{reverse ? 0.0f : 1.0f,diagonal ? 0.8f : 0.5f};
     float2 dUV{uv1.x-uv0.x,uv1.y-uv0.y};
     float2 vec2InvViewportSize{1/pixels,1/pixels},vec2HiZSize{grid,grid},vec2HiZSize1{grid*0.5f,grid*0.5f};
-    float invZ0=1.0f,invZ1=0.1f,tEnd=1.0f,steps=NUM_STEPS;
+    float invZ0=1.0f,invZ1=0.1f,tEnd=1.0f,steps=NUM_STEPS; // the march's own budget is tested below in SSRStepCount
     float fThickness=thickness,fUseHiZ=hiz ? (float)levels : 0.0f,fPassThinObjects=1;
     struct { float len; } ray{9};
 '''
@@ -73,6 +79,21 @@ void require(bool ok,const char* message) {
 }
 int main() {
     int cases=0;
+    // The step budget: four samples for a ray shorter than a pixel, the ray's own half while that
+    // is under twelve, the cap beyond, and never fewer steps for a longer ray.
+    require(SSRStepCount(0.01f)==4.0f,"a sub-pixel ray lost its four samples");
+    require(SSRStepCount(8.0f)==8.0f,"an eight pixel ray did not get eight steps");
+    require(SSRStepCount(24.0f)==12.0f,"a 24 pixel ray did not get the floor of twelve");
+    require(SSRStepCount(64.0f)==min(32.0f,(float)NUM_STEPS),"a 64 pixel ray did not get one step per two pixels");
+    require(SSRStepCount(4.0f*NUM_STEPS)==(float)NUM_STEPS,"a ray long enough did not reach the cap");
+    for (float px=0.5f,prev=0.0f; px<=4096.0f; px*=1.5f) {
+        float s=SSRStepCount(px);
+        require(s>=prev,"a longer ray got fewer steps");
+        require(s<=(float)NUM_STEPS,"steps exceeded the cap");
+        require(s<=max(px,4.0f),"more steps than the ray has pixels, past the floor");
+        prev=s;
+    }
+    cases+=8;
     for (float jitter : {0.1f,0.5f,1.0f})
     for (float pixels : {0.01f,64.0f,1920.0f})
     for (float thickness : {0.02f,0.1f,0.5f})
@@ -145,7 +166,8 @@ int main() {
 with tempfile.TemporaryDirectory(prefix='ssr-trace-test-') as directory:
     directory = Path(directory)
     source = directory / 'test.cpp'
-    source.write_text(prefix + body + suffix)
+    # SSRStepCount is a free function: it goes before trace(), not into it.
+    source.write_text(prefix.replace('struct Result {', steps_fn + 'struct Result {', 1) + body + suffix)
     compiler = shlex.split(os.environ.get('CXX', 'c++'))
     for steps, refine in ((32, 8), (128, 16)):
         exe = directory / f'test-{steps}-{refine}'
