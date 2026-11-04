@@ -4,7 +4,7 @@ texture PrevDepthTex2D;
 texture SSRAccumTex2D;
 texture SSRFallbackTex2D;
 texture SSRHitDistTex2D;
-texture MarchDepthTex2D, HiZDepthTex2D;
+texture MarchDepthTex2D, HiZDepthTex2D, HiZDepthTex2D1;
 texture MotionTex2D;
 texture AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D;
 texture SceneTex2D, SkinIDTex2D, SkinLightTex2D;
@@ -104,6 +104,19 @@ sampler2D MarchDepthTex
 sampler2D HiZDepthTex
 {
     Texture = <HiZDepthTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
+};
+
+// The next level of the same pyramid, its cells twice as wide. A ray whose steps are already
+// wider than a level's cells cannot skip anything with it, so long rays take this one; see
+// TraceHit. Both are exact 2x2 minima of the level before, so either stays conservative.
+sampler2D HiZDepthTex1
+{
+    Texture = <HiZDepthTex2D1>;
     AddressU = Clamp;
     AddressV = Clamp;
     MinFilter = POINT;
@@ -274,9 +287,10 @@ uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing co
 uniform float fDenoiseHitDistance; // hit-distance MRT is valid for SSR's spatial filter
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
 uniform float fStepsPerPixel;     // march steps per pixel of a ray on this pass's target, 1 / SSRStepPixels
-uniform float fUseHiZ;
+uniform float fUseHiZ;            // depth hierarchy levels built this frame, 0 without them
 uniform float fStochasticSSR;
-uniform float2 vec2HiZSize;
+uniform float2 vec2HiZSize;       // cells across the viewport of the finer level, the grid TraceHit walks
+uniform float2 vec2HiZSize1;      // the coarser level's, half as many each way
 uniform float fMarchFullDepth;    // 1 marches through the full size depth instead of MarchDepthTex (SSRMarchFullDepth, temporary, to compare)
 uniform float fStepJitter;        // 1 shifts each pixel's steps by up to one step (set per pass: SSR and contact shadows each have their own switch)
 uniform float2 vec2NoiseOffset;   // pixels, moves where PixelJitter is read every frame while the passes accumulate (FrameHistory::NoiseOffset), 0 otherwise
@@ -639,6 +653,12 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     float acceptedSurfaceZ = 0.0;
     bool verifyCoarseDepth = false;
     float rayPixelsPerT = max(abs(dUV.x / vec2InvViewportSize.x), abs(dUV.y / vec2InvViewportSize.y));
+    // A jump only pays when a cell holds several steps. The finer level's cells are four pixels
+    // of the viewport wide, the coarser one's eight, so a ray whose average step is already wider
+    // than half a fine cell takes the coarse level; a shorter ray keeps the tighter depth. Both
+    // are minima of the same march depth, so either one is conservative.
+    float hiZLevel = (fUseHiZ > 1.0 && rayPixelsPerT > 2.0 * steps) ? 1.0 : 0.0;
+    float2 hiZSize = hiZLevel > 0.0 ? vec2HiZSize1 : vec2HiZSize;
     [loop] [fastopt]
     for (int iteration = 0; iteration < NUM_STEPS + 2 * (NUM_REFINE_STEPS + 1); ++iteration)
     {
@@ -708,9 +728,9 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
         [branch]
         if (fUseHiZ > 0.0 && prevDelta <= 0.0 && tEnd > 1e-6)
         {
-            float2 cell = floor(sampleUV * vec2HiZSize);
-            float boundaryX = (cell.x + (dUV.x > 0.0 ? 1.0 : 0.0)) / vec2HiZSize.x;
-            float boundaryY = (cell.y + (dUV.y > 0.0 ? 1.0 : 0.0)) / vec2HiZSize.y;
+            float2 cell = floor(sampleUV * hiZSize);
+            float boundaryX = (cell.x + (dUV.x > 0.0 ? 1.0 : 0.0)) / hiZSize.x;
+            float boundaryY = (cell.y + (dUV.y > 0.0 ? 1.0 : 0.0)) / hiZSize.y;
             float tx = abs(dUV.x) > 1e-6 ? (boundaryX - uv0.x) / dUV.x : tEnd;
             float ty = abs(dUV.y) > 1e-6 ? (boundaryY - uv0.y) / dUV.y : tEnd;
             float exitT = min(tEnd, min(tx, ty));
@@ -723,7 +743,14 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
                 float endS = (endIndex + jitter) / steps;
                 float endT = tEnd * endS * endS;
                 float2 endUV = lerp(uv0, uv1, endT);
-                float nearest = tex2Dlod(HiZDepthTex, float4(sampleUV, 0, 0)).r;
+                // ps_3_0 has no dynamic sampler index, so the level this ray chose is a branch;
+                // every iteration of the ray takes the same side.
+                float nearest;
+                [branch]
+                if (hiZLevel > 0.0)
+                    nearest = tex2Dlod(HiZDepthTex1, float4(sampleUV, 0, 0)).r;
+                else
+                    nearest = tex2Dlod(HiZDepthTex, float4(sampleUV, 0, 0)).r;
                 float endZ = 1.0 / lerp(invZ0, invZ1, endT);
                 if (max(rayZ, endZ) < nearest)
                 {

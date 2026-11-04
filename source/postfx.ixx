@@ -597,7 +597,7 @@ private:
                 auto marchDesc = rage::OwnRenderTargetDesc(rage::GRCFMT_R32F);
                 PostFxResources.SSRMarchDepthTex = rage::CreateEmptyRenderTarget("SSRMarchDepthTex", width / 2, height / 2, 32, marchDesc,
                     PostFxResources.SSRMarchDepthSurf);
-                static const char* hiZNames[] = { "SSRHiZDepth0" };
+                static const char* hiZNames[] = { "SSRHiZDepth0", "SSRHiZDepth1" };
                 for (int i = 0; i < PostFxResource::kSSRHiZLevels; ++i)
                 {
                     const int divisor = 4 << i;

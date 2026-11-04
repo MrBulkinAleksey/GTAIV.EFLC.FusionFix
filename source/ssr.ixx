@@ -339,8 +339,13 @@ export void RenderScreenSpaceReflections()
             }
         }
         effect->SetTexture(h.MarchDepthTex2D, R.SSRMarchDepthTex->mD3DTexture);
-        D3DXVECTOR2 hiZSize(float(DWORD(width) / 4), float(DWORD(height) / 4));
-        effect->SetFloatArray(h.vec2HiZSize, &hiZSize.x, 2);
+        // Level i covers the viewport divided by 4 << i, the grid the traversal walks.
+        for (int i = 0; i < PostFxResource::kSSRHiZLevels; ++i)
+        {
+            const DWORD divisor = 4u << i;
+            const D3DXVECTOR2 hiZSize(float(DWORD(width) / divisor), float(DWORD(height) / divisor));
+            effect->SetFloatArray(h.vec2HiZSize[i], &hiZSize.x, 2);
+        }
         effect->SetFloat(h.fUseHiZ, float(hiZLevels));
         SSRTrace::Line("ssr: Hi-Z levels %d, stochastic %d, march size matches %d",
                        hiZLevels, int(stochastic), int(marchSizeMatches));
