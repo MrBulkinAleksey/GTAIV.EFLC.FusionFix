@@ -76,8 +76,9 @@ sampler2D SSRFallbackTex
     MipFilter = NONE;
 };
 
-// How far SSRTrace_PS's ray went to its hit, over fMaxDistance, 0 for a miss; the same size as
-// SSRResultTex. SSRTemporal_PS takes the history where the reflected image was by it.
+// R: how far SSRTrace_PS's ray went to its hit, over fMaxDistance (0 for a miss).
+// G: the reflected hit's own screen-space motion, in full-size pixels. A is
+// negative for an untraced surface. Same size as SSRResultTex.
 sampler2D SSRHitDistTex
 {
     Texture = <SSRHitDistTex2D>;
@@ -400,20 +401,28 @@ float2 HistoryUV(float3 P)
 // temporal AA's motion vectors, peds, vehicles and objects that moved themselves are followed too. Last frame's depth
 // can only confirm surfaces that moved with the camera (checkDepth), a moving one was elsewhere and its neighbourhood
 // clamp has to do.
-float2 TemporalHistoryUV(float2 uv, float3 C, out bool checkDepth)
+float2 TemporalHistoryUVWithMotion(float2 uv, float3 C, out bool checkDepth, out float2 objectMotion)
 {
     float2 prevUV = HistoryUV(C);
     checkDepth = true;
+    objectMotion = 0.0;
     [branch]
     if (fUseMotion > 0.0)
     {
         float2 moved = uv + tex2Dlod(MotionTex, float4(uv, 0, 0)).xy + vec2MotionJitter;
+        objectMotion = moved - prevUV;
         // More than a pixel and a half from where the camera alone takes it
         if (any(abs(moved - prevUV) > 1.5 * vec2InvViewportSize))
             checkDepth = false;
         prevUV = moved;
     }
     return prevUV;
+}
+
+float2 TemporalHistoryUV(float2 uv, float3 C, out bool checkDepth)
+{
+    float2 unusedMotion;
+    return TemporalHistoryUVWithMotion(uv, C, checkDepth, unusedMotion);
 }
 
 float3 ViewPosFromUVZ(float2 uv, float z)
@@ -472,6 +481,7 @@ float PixelJitter(float2 pixel)
 // depth direction (negative towards the camera).
 static float gTraceHitZ = 0.0;
 static float gTraceRayZ = 0.0;
+static float gTraceHitMotion = 0.0; // reflected hit's own motion, in full-size pixels
 // The screen path of the last SetupReflectionRay's ray, for ScreenFallback: from gTraceUV0 to
 // gTraceUVEnd, where it leaves the screen; gTracePath is 0 when the ray was not marched.
 static float2 gTraceUV0 = 0.0;
@@ -568,6 +578,7 @@ float MarchDepth(float2 uv)
 // distanceFade: reflections fade out towards this distance from the surface, 0 disables.
 float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float distanceFade)
 {
+    gTraceHitMotion = 0.0;
     ReflectionRay ray;
     if (!SetupReflectionRay(C, n, microNormal, ray))
         return 0.0;
@@ -790,7 +801,10 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // Motion vectors carry the hit to its previous pixel, but do not carry its previous Z.
     // Use the same camera-only depth validation policy as the accumulation passes.
     bool checkHitDepth;
-    float2 histUV = TemporalHistoryUV(finalUV, surfP, checkHitDepth);
+    float2 hitMotion;
+    float2 histUV = TemporalHistoryUVWithMotion(finalUV, surfP, checkHitDepth, hitMotion);
+    float2 hitMotionPixels = abs(hitMotion / vec2InvHistorySize);
+    gTraceHitMotion = min(max(hitMotionPixels.x, hitMotionPixels.y), 255.0);
 
     float2 edge = saturate(min(min(finalUV, histUV), 1.0 - max(finalUV, histUV)) / max(fEdgeFade, 1e-4));
     float e = min(edge.x, edge.y);
@@ -1172,7 +1186,8 @@ TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
     float jitter = fStepJitter > 0.0 ? PixelJitter(vPos + vec2NoiseOffset) : 1.0;
     float3 microNormal = SSRMicroNormal(uv, vPos, n, C);
     float4 hit = TraceHit(C, n, microNormal, jitter, fDistanceFade);
-    o.distance = hit.z > 0.0 ? hit.w : 0.0;
+    float distance = hit.z > 0.0 ? hit.w : 0.0;
+    o.distance = float4(distance, hit.z > 0.0 ? gTraceHitMotion : 0.0, 0.0, distance);
     // Debug 11: the previous-scene UV from which this hit reads colour, R=x, G=y.
     // This makes a suspect reflected pixel traceable back to its source on screen.
     if (fDebugMode > 10.5 && fDebugMode < 11.5)
@@ -1205,15 +1220,27 @@ float4 SSRFallback_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float4 trace = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
     if (NoSurface(trace) || trace.a >= kFallbackBelow)
         return 0.0;
-    float3 n;
-    float3 C = SSRSurface(uv, vPos, n);
-    ReflectionRay ray;
-    float3 microNormal = SSRMicroNormal(uv, vPos, n, C);
-    SetupReflectionRay(C, n, microNormal, ray);
-    float weight;
-    float3 fallback = ScreenFallback(C, reflect(normalize(C), microNormal), weight);
-    if (weight <= 0.0)
-        fallback = NeighbourFill(uv, vPos, C.z, weight);
+    float z = 0.0;
+    float weight = 0.0;
+    float3 fallback = 0.0;
+    [branch]
+    if (fFallback > 0.0)
+    {
+        float3 n;
+        float3 C = SSRSurface(uv, vPos, n);
+        z = C.z;
+        ReflectionRay ray;
+        float3 microNormal = SSRMicroNormal(uv, vPos, n, C);
+        SetupReflectionRay(C, n, microNormal, ray);
+        fallback = ScreenFallback(C, reflect(normalize(C), microNormal), weight);
+    }
+    [branch]
+    if (weight <= 0.0 && fNeighbourFill > 0.0)
+    {
+        if (fFallback <= 0.0)
+            z = LinearDepth(uv);
+        fallback = NeighbourFill(uv, vPos, z, weight);
+    }
     return float4(fallback, weight);
 }
 
@@ -1493,6 +1520,24 @@ float SSRTemporalHitWeight(float centre, float tap, float stochastic)
     return SSRHitDistanceWeight(centre, tap);
 }
 
+// Previous accumulated colour may depict a different position of a moving hit.
+// Preserve history for static geometry and progressively favour this frame as
+// the hit's own screen-space motion grows. A miss has no motion measurement.
+float SSRMovingHitHistoryWeight(float motionPixels)
+{
+    return 1.0 - smoothstep(1.5, 8.0, motionPixels);
+}
+
+float SSRTemporalMotionWeight(float hitDistance, float hitMotion, bool stochasticMiss,
+                              float neighbourMotion, float neighbourMotionWeight)
+{
+    if (hitDistance > 0.0)
+        return SSRMovingHitHistoryWeight(hitMotion);
+    if (stochasticMiss && neighbourMotionWeight > 0.0)
+        return SSRMovingHitHistoryWeight(neighbourMotion / neighbourMotionWeight);
+    return 1.0;
+}
+
 // Each pixel decides on its own whether its ray hit and where, so neighbours on a car panel
 // pick slightly different points and the reflection looks grainy. A small depth aware blur,
 // in premultiplied form so misses (alpha 0) neither darken the colour nor bleed a halo, and
@@ -1531,7 +1576,11 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
     for (int i = 0; i < 12; ++i)
     {
         float4 tap = tex2Dlod(SSRResultTex, float4(uv + taps[i] * radius, 0, 0));
-        same = same && all(tap == centre);
+        if (!all(tap == centre))
+        {
+            same = false;
+            break;
+        }
     }
     [branch]
     if (same)
@@ -1785,8 +1834,9 @@ bool GIHistoryDebug()
 float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 {
     // SSR's march marked the pixels it skipped in SSRHitDistTex as well (kNoSurface).
+    float4 hitInfo = fTemporalAnySurface <= 0.0 ? tex2Dlod(SSRHitDistTex, float4(uv, 0, 0)) : 0.0;
     if (fTemporalAnySurface > 0.0 ? tex2Dlod(DepthTex, float4(uv, 0, 0)).r >= 0.9999
-                                  : NoSurface(tex2Dlod(SSRHitDistTex, float4(uv, 0, 0))))
+                                  : NoSurface(hitInfo))
         return 0.0;
 
     float4 current = TemporalPremultiply(tex2Dlod(SSRResultTex, float4(uv, 0, 0)));
@@ -1795,7 +1845,8 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 
     float4 m1 = current, m2 = current * current;
     float sampleWeight = 1.0;
-    float centreHitDistance = fTemporalAnySurface <= 0.0 ? tex2Dlod(SSRHitDistTex, float4(uv, 0, 0)).r : 0.0;
+    float neighbourMotion = 0.0, neighbourMotionWeight = 0.0;
+    float centreHitDistance = hitInfo.r;
     bool stochasticMiss = fTemporalAnySurface <= 0.0 && fStochasticSSR > 0.0 && centreHitDistance == 0.0;
     float centreDepth = stochasticMiss ? LinearDepth(uv) : 0.0;
     [loop] [fastopt]
@@ -1811,12 +1862,17 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
             float w = 1.0;
             if (fTemporalAnySurface <= 0.0)
             {
-                float tapHitDistance = tex2Dlod(SSRHitDistTex, float4(tapUV, 0, 0)).r;
+                float4 tapHit = tex2Dlod(SSRHitDistTex, float4(tapUV, 0, 0));
+                float tapHitDistance = tapHit.r;
                 w = SSRTemporalHitWeight(centreHitDistance, tapHitDistance, fStochasticSSR);
                 // A hit across the receiver's silhouette is not evidence of a
                 // stochastic miss on this surface.
                 if (stochasticMiss && tapHitDistance > 0.0)
+                {
                     w *= saturate(1.0 - abs(LinearDepth(tapUV) - centreDepth) / (0.02 * centreDepth + 0.01));
+                    neighbourMotion += w * tapHit.g;
+                    neighbourMotionWeight += w;
+                }
             }
             m1 += w * s;
             m2 += w * s * s;
@@ -1850,13 +1906,15 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     [branch]
     if (fTemporalAnySurface <= 0.0 && checkDepth)
     {
-        float hitDist = tex2Dlod(SSRHitDistTex, float4(uv, 0, 0)).r * fMaxDistance;
+        float hitDist = hitInfo.r * fMaxDistance;
         // Last frame's depth there is the reflecting surface's again, which the test below
         // compares with this one's: off the surface, as past a car's outline, the history goes.
         if (hitDist > 0.0)
             prevUV = HistoryUV(C + normalize(C) * hitDist);
     }
     float keep = fTemporalBlend;
+    if (fTemporalAnySurface <= 0.0)
+        keep *= SSRTemporalMotionWeight(hitInfo.r, hitInfo.g, stochasticMiss, neighbourMotion, neighbourMotionWeight);
     bool offScreen = any(prevUV <= 0.0) || any(prevUV >= 1.0);
     if (offScreen)
         keep = 0.0;

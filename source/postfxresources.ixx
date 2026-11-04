@@ -1096,9 +1096,8 @@ public:
     // The other target of the fill's cascade (SSRSpread_PS), which takes turns with SSRFallbackTex.
     rage::grcRenderTargetPC* SSRSpreadTex[2] = {};
     IDirect3DSurface9* SSRSpreadSurf[2] = {};
-    // How far the march's rays went (SSRTrace_PS's second target), for the accumulation to take
-    // the history where the reflected image was; only while accumulating. 64 bits like the trace
-    // target it is drawn with.
+    // Ray distance and reflected-hit motion (SSRTrace_PS's second target), for
+    // accumulation and distance-aware filtering. 64 bits like the trace target.
     rage::grcRenderTargetPC* SSRHitDistTex[2] = {};
     IDirect3DSurface9* SSRHitDistSurf[2] = {};
     // View depth at half the full size, the nearest of each 2x2 pixels (MarchDepth_PS), which the
