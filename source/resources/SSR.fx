@@ -2610,6 +2610,60 @@ technique GIUpsample
     }
 }
 
+// The half size SSR result brought up to the full size along the depth, the way GIUpsample_PS
+// brings the indirect light: the four half size texels around each pixel, weighed by their
+// bilinear share and by how close their depth is to the pixel's own, so a reflection's edge
+// follows the geometry's edge instead of bleeding a car into the road behind it. The colour
+// travels premultiplied by its confidence, so a miss next to a hit does not darken it, which is
+// the same reason the smoothing premultiplies.
+float4 SSRUpsample_PS(float2 uv : TEXCOORD0) : COLOR0
+{
+    float rawDepth = tex2Dlod(DepthTex, float4(uv, 0, 0)).r;
+    if (rawDepth >= 0.9999)
+        return 0.0;
+    float z = pow(fFarDivNear, rawDepth) * fNearPlane;
+
+    float2 halfTexel = vec2InvViewportSize * 2.0;
+    float2 pos = uv / halfTexel - 0.5;
+    float2 base = floor(pos);
+    float2 f = pos - base;
+    float4 sum = 0.0;
+    float weightSum = 0.0;
+    float4 nearest = 0.0;
+    float nearestDiff = 1e30;
+    static const float2 corners[4] = { float2(0.0, 0.0), float2(1.0, 0.0), float2(0.0, 1.0), float2(1.0, 1.0) };
+    [unroll]
+    for (int i = 0; i < 4; ++i)
+    {
+        float2 o = corners[i];
+        float2 tuv = (base + o + 0.5) * halfTexel;
+        float4 ssr = tex2Dlod(SSRResultTex, float4(tuv, 0, 0));
+        float diff = abs(LinearDepth(tuv) - z);
+        float2 b = lerp(1.0 - f, f, o);
+        float w = b.x * b.y / (1.0 + diff / (0.02 * z + 0.02));
+        sum += float4(ssr.rgb * ssr.a, ssr.a) * w;
+        weightSum += w;
+        if (diff < nearestDiff)
+        {
+            nearestDiff = diff;
+            nearest = ssr;
+        }
+    }
+    if (weightSum <= 1e-3)
+        return nearest;
+    float a = sum.a / weightSum;
+    return float4(a > 1e-4 ? sum.rgb / sum.a : 0.0, a);
+}
+
+technique SSRUpsample
+{
+    pass P0
+    {
+        VertexShader = compile vs_3_0 FullscreenQuadVS();
+        PixelShader = compile ps_3_0 SSRUpsample_PS();
+    }
+}
+
 technique ContactShadows
 {
     pass P0

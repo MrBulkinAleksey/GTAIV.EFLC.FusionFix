@@ -479,6 +479,17 @@ export void RenderScreenSpaceReflections()
     }
     else
         R.nSSRAccumFrame = 0;
+    // At half res the result reaches the full size along the depth (SSRUpsample_PS) instead of by
+    // the bilinear stretch deferred_lighting gives it, so a reflection's edge follows the
+    // geometry's edge. The full size smoothed target is free here, the smoothing having run at
+    // the half size one.
+    if (half && h.techSSRUpsample && R.SSRDenoisedSurf && hasTexture(R.SSRDenoisedTex))
+    {
+        effect->SetTexture(h.SSRResultTex2D, ssrResult);
+        setPassSize(width, height);
+        if (DrawEffectPass(pDevice, effect, h.techSSRUpsample, R.SSRDenoisedSurf, width, height, kProfSSRUpsample))
+            ssrResult = R.SSRDenoisedTex->mD3DTexture;
+    }
     R.SSRResult = ssrResult;
     if (SSRTrace::Active())
     {

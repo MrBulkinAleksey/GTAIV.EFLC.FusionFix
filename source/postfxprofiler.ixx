@@ -69,7 +69,7 @@ namespace PostFxProfiler
     {
         kProfLighting,
             kProfAO, kProfAODepth, kProfAOMain, kProfAOTemporal, kProfAOBlur, kProfAOApply,
-            kProfSSR, kProfSSRDepth, kProfSSRHiZ, kProfSSRTrace, kProfSSRFill, kProfSSRResolve, kProfSSRDenoise, kProfSSRTemporal, kProfSSRDebug,
+            kProfSSR, kProfSSRDepth, kProfSSRHiZ, kProfSSRTrace, kProfSSRFill, kProfSSRResolve, kProfSSRDenoise, kProfSSRTemporal, kProfSSRUpsample, kProfSSRDebug,
             kProfContact, kProfContactMarch, kProfContactUpsample, kProfContactDenoise, kProfContactTemporal,
             kProfGI, kProfGIMarch, kProfGIDenoise, kProfGITemporal, kProfGIUpsample,
             kProfLightSun, kProfLightLocal, kProfLightShafts, kProfGlints,
@@ -101,7 +101,7 @@ namespace PostFxProfiler
             { "ambient occlusion", kProfLighting }, { "depth and its mips", kProfAO }, { "occlusion", kProfAO },
             { "accumulation", kProfAO }, { "blur", kProfAO }, { "into the G-buffer", kProfAO },
             { "SSR", kProfLighting }, { "march depth", kProfSSR }, { "Hi-Z depth", kProfSSR }, { "march", kProfSSR }, { "fill of misses", kProfSSR }, { "resolve", kProfSSR },
-            { "smoothing", kProfSSR }, { "accumulation", kProfSSR }, { "debug view", kProfSSR },
+            { "smoothing", kProfSSR }, { "accumulation", kProfSSR }, { "upsample", kProfSSR }, { "debug view", kProfSSR },
             { "contact shadows", kProfLighting }, { "march", kProfContact }, { "upsample", kProfContact },
             { "smoothing", kProfContact }, { "accumulation", kProfContact },
             { "indirect light", kProfLighting }, { "march", kProfGI }, { "smoothing", kProfGI },

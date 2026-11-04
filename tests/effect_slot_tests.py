@@ -53,6 +53,7 @@ LIGHT_ENTRIES = {
     'GIContactUpsample_PS': 130,
     'GIContactDenoise_PS': 120,
     'GIUpsample_PS': 97,
+    'SSRUpsample_PS': 109,
     'ContactUpsample_PS': 84,
     'SkinDebug_PS': 28,
     'SkinLight_PS': 27,
