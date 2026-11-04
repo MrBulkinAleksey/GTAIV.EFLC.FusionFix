@@ -226,6 +226,9 @@ Coordinate sorgente
 [SSRDbgHiZSkips]
 Salti Hi-Z
 
+[SSRDbgRejected]
+Raggi scartati
+
 [GroundDebug]
 Ground Surfaces Debug View
 

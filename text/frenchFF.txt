@@ -226,6 +226,9 @@ Coordonnées de la source
 [SSRDbgHiZSkips]
 Sauts Hi-Z
 
+[SSRDbgRejected]
+Rayons rejetés
+
 [GroundDebug]
 Ground Surfaces Debug View
 

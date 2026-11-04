@@ -226,6 +226,9 @@ Quellkoordinaten
 [SSRDbgHiZSkips]
 Hi-Z-Sprünge
 
+[SSRDbgRejected]
+Verworfene Strahlen
+
 [GroundDebug]
 Ground Surfaces Debug View
 

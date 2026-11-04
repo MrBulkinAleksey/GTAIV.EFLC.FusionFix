@@ -226,6 +226,9 @@ Hit Source Coordinates
 [SSRDbgHiZSkips]
 Depth Hierarchy Skips
 
+[SSRDbgRejected]
+Rejected Rays
+
 [GroundDebug]
 Ground Surfaces Debug View
 

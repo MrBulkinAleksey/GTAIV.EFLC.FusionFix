@@ -502,6 +502,9 @@ static float gTraceSkipShare = 0.0;
 // Which of its levels the last TraceHit walked, for the same view: a level nothing chose would
 // cost its pass and change nothing, which the skipped steps alone would not show.
 static float gTraceHiZLevel = 0.0;
+// For debug view 13, what each test left of the last TraceHit's confidence: last frame's depth,
+// the distance to the surface the ray hit, and the rest (screen edge, facing, length, hidden stretch).
+static float3 gTraceKept = 1.0;
 // The screen path of the last SetupReflectionRay's ray, for ScreenFallback: from gTraceUV0 to
 // gTraceUVEnd, where it leaves the screen; gTracePath is 0 when the ray was not marched.
 static float2 gTraceUV0 = 0.0;
@@ -879,7 +882,8 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // metres away, such as a ped between the camera and a door at night.
     if (distanceFade > 0.0)
         confidence *= 1.0 - smoothstep(distanceFade * 0.5, distanceFade, rayLen);
-    confidence *= 1.0 - smoothstep(hitThickness * 0.75, hitThickness, hitDelta);
+    gTraceKept = float3(1.0, 1.0 - smoothstep(hitThickness * 0.75, hitThickness, hitDelta), confidence);
+    confidence *= gTraceKept.g;
     // Behind an object the screen holds nothing, so a ray passing there may have run into
     // something it does not show. Behind a trunk that is a few dozen centimetres; behind a ped
     // standing metres in front of a door, with the camera turned so the door shows next to his
@@ -890,7 +894,10 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // the player to the road beyond hit the same road as the rays beside his figure, and
     // fading it left the figure darker on the car.
     if (firstHidden >= 0.0 && firstHidden < 0.5)
+    {
+        gTraceKept.b *= 1.0 - smoothstep(0.4, 0.8, hidden);
         confidence *= 1.0 - smoothstep(0.4, 0.8, hidden);
+    }
 
     // The colour comes from the history, the hit from this frame's depth. Next to an outline
     // the history pixel can belong to what is in front or behind: a white roof behind a ped's
@@ -907,7 +914,8 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
                                                          vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
         float prevZ = PrevLinearDepth(histUV);
         float tolerance = 0.05 * prevSurfZ + 0.1;
-        confidence *= 1.0 - smoothstep(tolerance * 0.5, tolerance, abs(prevZ - prevSurfZ));
+        gTraceKept.r = 1.0 - smoothstep(tolerance * 0.5, tolerance, abs(prevZ - prevSurfZ));
+        confidence *= gTraceKept.r;
     }
 
     return float4(histUV, confidence, saturate(rayLen / fMaxDistance));
@@ -1267,6 +1275,13 @@ TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
         o.colour = float4(hit.xy, hit.z, hit.z);
         return o;
     }
+    // Debug 13: why a ray that found something counts for little. White keeps all of it; a missing
+    // red is last frame's depth, green the distance to the surface hit, blue the rest. Black found nothing.
+    if (fDebugMode > 12.5 && fDebugMode < 13.5)
+    {
+        o.colour = float4(hit.x > 0.0 ? gTraceKept : 0.0, 1.0);
+        return o;
+    }
     // Debug view 3 (for now): what the ray hit in place of the hit, which SSR_PS passes on, see
     // SSRDebug_PS.
     if (fDebugMode > 2.5 && fDebugMode < 3.5)
@@ -1382,7 +1397,7 @@ float4 SSR_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float wetOnly;
     float surfaceWeight = SSRSurfaceWeight(uv, wetOnly);
 
-    if ((fDebugMode > 2.5 && fDebugMode < 3.5) || (fDebugMode > 10.5 && fDebugMode < 11.5))
+    if ((fDebugMode > 2.5 && fDebugMode < 3.5) || (fDebugMode > 10.5 && fDebugMode < 11.5) || (fDebugMode > 12.5 && fDebugMode < 13.5))
         return hit;
     float4 r = hit;
     [branch]

@@ -2126,7 +2126,7 @@ public:
             // found where it pays; the menu keeps 0/1/2.
             { 0, "PREF_SSR_HIZ",                "REFLECTIONS", "SSRHiZ",                           "MENU_DISPLAY_SSR_HIZ",       0, nullptr, 0, 2 },
             { 0, "PREF_SSR_STOCHASTIC",         "REFLECTIONS", "SSRStochastic",                    "",                           0, nullptr, 0, 1 },
-            { 0, "PREF_SSR_DEBUG",              "DEBUG",      "SSRDebug",                           "MENU_DISPLAY_SSR_DEBUG",     0, nullptr, 0, 12 },
+            { 0, "PREF_SSR_DEBUG",              "DEBUG",      "SSRDebug",                           "MENU_DISPLAY_SSR_DEBUG",     0, nullptr, 0, 13 },
             { 0, "PREF_GROUND_DEBUG",           "DEBUG",      "GroundSurfacesDebug",                "",                           0, nullptr, 0, 1 },
             { 0, "PREF_WET_GROUND_DEBUG",       "DEBUG",      "WetGroundDebug",                     "MENU_DISPLAY_WET_DEBUG",     0, nullptr, 0, 2 },
             { 0, "PREF_CLOUD_SHADOWS_DEBUG",    "DEBUG",      "CloudShadowsDebug",                  "MENU_DISPLAY_CLOUD_SH_DEBUG", 0, nullptr, 0, 2 },
@@ -2222,7 +2222,7 @@ public:
         DefineDisplay("MENU_DISPLAY_SSR_HIZ", { "MO_OFF", "SSRHiZOne", "SSRHiZTwo" });
         DefineDisplay("MENU_DISPLAY_AO", { "MO_OFF", "SAO", "GTAO" });
         DefineDisplay("MENU_DISPLAY_AERIAL", { "MO_OFF", "MO_LOW", "MO_MED", "MO_HIGH" });
-        DefineDisplay("MENU_DISPLAY_SSR_DEBUG", { "MO_OFF", "SSRDbgColour", "SSRDbgHits", "SSRDbgNormals", "SSRDbgHorizon", "SSRDbgSpecular", "SSRDbgGlass", "SSRDbgContact", "SSRDbgGI", "SSRDbgSkin", "SSRDbgGIHistory", "SSRDbgSourceUV", "SSRDbgHiZSkips" });
+        DefineDisplay("MENU_DISPLAY_SSR_DEBUG", { "MO_OFF", "SSRDbgColour", "SSRDbgHits", "SSRDbgNormals", "SSRDbgHorizon", "SSRDbgSpecular", "SSRDbgGlass", "SSRDbgContact", "SSRDbgGI", "SSRDbgSkin", "SSRDbgGIHistory", "SSRDbgSourceUV", "SSRDbgHiZSkips", "SSRDbgRejected" });
         DefineDisplay("MENU_DISPLAY_FG_DEBUG", { "MO_OFF", "FGDbgMarker", "FGDbgGenerated", "FGDbgBoth" });
         DefineDisplay("MENU_DISPLAY_WET_DEBUG", { "MO_OFF", "WetDbgMaterial", "WetDbgWetness" });
         DefineDisplay("MENU_DISPLAY_CLOUD_SH_DEBUG", { "MO_OFF", "CloudShDbgAll", "CloudShDbgNoise" });
@@ -2469,7 +2469,7 @@ public:
             auto category = AddCategory(screen, "FF_DEBUG", "MO_ANALYZER");
             if (category == MenuScreen::Invalid)
                 continue;
-            AddRow(category, "SSR Debug", "PREF_SSR_DEBUG", 13, "MENU_DISPLAY_SSR_DEBUG");
+            AddRow(category, "SSR Debug", "PREF_SSR_DEBUG", 14, "MENU_DISPLAY_SSR_DEBUG");
             AddRow(category, "SSRFullDepth", "PREF_SSR_FULL_DEPTH", 2, toggle);
             AddEmptyLine(category);
             AddRow(category, "GroundDebug", "PREF_GROUND_DEBUG", 2, toggle);

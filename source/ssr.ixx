@@ -505,13 +505,13 @@ export void RenderScreenSpaceReflections()
     }
 
     const int debugMode = R.SSRDebugMode();
-    if (debugMode && (debugMode < R.kGlassDebugMode || debugMode == 11 || debugMode == 12) && R.SSRDebugSurf && h.techSSRDebug && hasNormals)
+    if (debugMode && (debugMode < R.kGlassDebugMode || debugMode >= 11) && R.SSRDebugSurf && h.techSSRDebug && hasNormals)
     {
         if (half)
             setPassSize(width, height);
         // View 3 reads where the rays hit straight from the march: smoothing and accumulation
         // would average the positions of neighbouring hits into places no ray went.
-        effect->SetTexture(h.SSRResultTex2D, (debugMode == 3 || debugMode == 11) ? ssrTex : ssrResult);
+        effect->SetTexture(h.SSRResultTex2D, (debugMode == 3 || debugMode == 11 || debugMode == 13) ? ssrTex : ssrResult);
         // View 12 reads how many steps the depth hierarchy skipped from the march's second
         // target, which the passes above left bound only when something asked for it.
         if (distanceAvailable)

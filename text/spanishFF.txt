@@ -226,6 +226,9 @@ Coordenadas de origen
 [SSRDbgHiZSkips]
 Saltos Hi-Z
 
+[SSRDbgRejected]
+Rayos descartados
+
 [GroundDebug]
 Ground Surfaces Debug View
 

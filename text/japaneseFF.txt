@@ -226,6 +226,9 @@ Indirect Light History
 [SSRDbgHiZSkips]
 Hi-Zスキップ
 
+[SSRDbgRejected]
+棄却されたレイ
+
 [GroundDebug]
 Ground Surfaces Debug View
 

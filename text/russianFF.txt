@@ -226,6 +226,9 @@ Logitech LightSync RGB
 [SSRDbgHiZSkips]
 Пропуски Hi-Z
 
+[SSRDbgRejected]
+Отброшенные лучи
+
 [GroundDebug]
 Отладка поверхностей земли
 
