@@ -23,6 +23,8 @@ prefix = r'''
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+float min(float a,float b) { return std::min(a,b); }
+float max(float a,float b) { return std::max(a,b); }
 struct float2 { float x,y; float2(float a=0,float b=0):x(a),y(b){} };
 float2 operator+(float2 a,float2 b) { return {a.x+b.x,a.y+b.y}; }
 float2 operator-(float2 a,float2 b) { return {a.x-b.x,a.y-b.y}; }
@@ -62,6 +64,20 @@ int main() {
     close(SSRTemporalMotionWeight(0,0,true,20,2),0,"moving stochastic miss retained stale history");
     close(SSRTemporalMotionWeight(0,0,true,0,0),1,"miss without evidence lost history");
     close(SSRTemporalMotionWeight(.1f,10,false,0,0),0,"moving hit retained stale history");
+    close(SSRStochasticMissKeep(.85f,.85f,true,0,1),.95f,"stochastic miss erased confidence too fast");
+    close(SSRStochasticMissKeep(0,.85f,true,0,1),0,"invalid history revived");
+    close(SSRStochasticMissKeep(.425f,.85f,true,0,1),.48875f,"motion rejection not preserved");
+    close(SSRStochasticMissKeep(.85f,.85f,true,0,0),.85f,"miss without neighbours changed");
+    close(SSRStochasticMissKeep(.85f,.85f,true,.2f,1),.85f,"valid fallback was ignored");
+    close(SSRStochasticMissKeep(.85f,.85f,false,0,1),.85f,"non-stochastic accumulation changed");
+    close(SSRStochasticMissKeep(.001f,.001f,true,0,1),.001999f,"low temporal setting ignored");
+    close(SSRStochasticMissKeep(.97f,.97f,true,0,1),.97f,"high temporal setting increased or decreased");
+    // One miss surrounded by eight solid hits: the 3x3 variance window admits
+    // history alpha 1. The new blend should preserve its coverage more closely.
+    float mean=8.0f/9.0f, spread=std::sqrt(mean-mean*mean);
+    require(mean+1.5f*spread>=1,"test neighbourhood clips solid history");
+    float oldAlpha=.85f, newAlpha=SSRStochasticMissKeep(.85f,.85f,true,0,8);
+    require(newAlpha>oldAlpha && newAlpha<1,"stochastic confidence not stabilized");
     fUseMotion=0; prev=TemporalHistoryUVWithMotion(uv,C,check,object);
     close(prev.x,.25f,"no-vector camera fallback"); close(object.x,0,"missing vector rejected history"); require(check,"no-vector depth test disabled");
     std::puts("reflected hit motion passed camera, object and missing-vector checks");

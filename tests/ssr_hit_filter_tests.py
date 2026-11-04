@@ -21,6 +21,7 @@ prefix = r'''
 #include <cstdlib>
 float fMaxDistance=24.0f;
 float min(float a,float b) { return std::min(a,b); }
+float max(float a,float b) { return std::max(a,b); }
 using std::abs;
 float smoothstep(float lo,float hi,float x) {
     float t=std::clamp((x-lo)/(hi-lo),0.0f,1.0f); return t*t*(3-2*t);

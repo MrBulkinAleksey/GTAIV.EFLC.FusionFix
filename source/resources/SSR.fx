@@ -1538,6 +1538,20 @@ float SSRTemporalMotionWeight(float hitDistance, float hitMotion, bool stochasti
     return 1.0;
 }
 
+// A single stochastic miss is an uncertain observation when nearby rays on
+// the same receiver still hit. Slow the loss of its history so the lighter
+// game reflection map does not form a ring around an otherwise solid hit.
+// The caller still rejects invalid/offscreen history and applies the normal
+// neighbourhood clamp; a moving hit still reduces the weight. Cap the boost
+// so a long run of misses cannot retain stale detail almost indefinitely.
+float SSRStochasticMissKeep(float keep, float blend, bool stochasticMiss,
+                            float currentAlpha, float nearbyHitWeight)
+{
+    if (stochasticMiss && currentAlpha <= 1e-4 && nearbyHitWeight > 0.0)
+        return max(keep, min(keep * (2.0 - blend), 0.95));
+    return keep;
+}
+
 // Each pixel decides on its own whether its ray hit and where, so neighbours on a car panel
 // pick slightly different points and the reflection looks grainy. A small depth aware blur,
 // in premultiplied form so misses (alpha 0) neither darken the colour nor bleed a halo, and
@@ -1927,6 +1941,8 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         if (abs(prevZ - clip.w) > 0.05 * clip.w + 0.1)
             keep = 0.0;
     }
+
+    keep = SSRStochasticMissKeep(keep, fTemporalBlend, stochasticMiss, current.a, neighbourMotionWeight);
 
     [branch]
     if (GIHistoryDebug())
