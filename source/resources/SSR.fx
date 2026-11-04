@@ -493,6 +493,18 @@ struct ReflectionRay
     float len; // from P0 to the far end, uv1, in view space
 };
 
+// Fraction of a projected segment that remains on screen. A nearly stationary
+// axis must not acquire a positive denominator when it actually points left/up.
+float SSRScreenRayEnd(float2 uv, float2 direction)
+{
+    float tx = 1.0, ty = 1.0;
+    if (abs(direction.x) > 1e-8)
+        tx = ((direction.x > 0.0 ? 1.0 : 0.0) - uv.x) / direction.x;
+    if (abs(direction.y) > 1e-8)
+        ty = ((direction.y > 0.0 ? 1.0 : 0.0) - uv.y) / direction.y;
+    return clamp(min(tx, ty), 0.0, 1.0);
+}
+
 bool SetupReflectionRay(float3 C, float3 n, float3 microNormal, out ReflectionRay ray)
 {
     ray = (ReflectionRay) 0;
@@ -536,8 +548,7 @@ bool SetupReflectionRay(float3 C, float3 n, float3 microNormal, out ReflectionRa
     ray.invZ1 = 1.0 / P1.z;
 
     float2 dUV = ray.uv1 - ray.uv0;
-    float2 tEdge = (step(0.0, dUV) - ray.uv0) / (abs(dUV) < 1e-5 ? 1e-5 : dUV);
-    ray.tEnd = clamp(min(tEdge.x, tEdge.y), 0.0, 1.0);
+    ray.tEnd = SSRScreenRayEnd(ray.uv0, dUV);
     gTraceUV0 = ray.uv0;
     gTraceUVEnd = lerp(ray.uv0, ray.uv1, ray.tEnd);
     gTracePath = 1.0;
@@ -1739,6 +1750,27 @@ float4 TemporalResult(float4 c)
     return fTemporalAnySurface > 0.0 ? c : float4(c.a > 1e-4 ? c.rgb / c.a : 0.0, c.a);
 }
 
+// SSRAccumTex stores straight RGB and confidence. Premultiply each texel before
+// bilinear interpolation; filtering straight RGB first mixes miss colours into
+// valid hits and gives the wrong radiance at a confidence edge. GI stores plain
+// values and must keep its existing hardware-filtered lookup.
+float4 SSRTemporalHistory(float2 uv)
+{
+    if (fTemporalAnySurface > 0.0)
+        return tex2Dlod(SSRAccumTex, float4(uv, 0, 0));
+
+    float2 pixel = uv / vec2InvViewportSize - 0.5;
+    float2 base = (floor(pixel) + 0.5) * vec2InvViewportSize;
+    float2 f = frac(pixel);
+    float2 dx = float2(vec2InvViewportSize.x, 0.0);
+    float2 dy = float2(0.0, vec2InvViewportSize.y);
+    float4 a = TemporalPremultiply(tex2Dlod(SSRAccumTex, float4(base, 0, 0)));
+    float4 b = TemporalPremultiply(tex2Dlod(SSRAccumTex, float4(base + dx, 0, 0)));
+    float4 c = TemporalPremultiply(tex2Dlod(SSRAccumTex, float4(base + dy, 0, 0)));
+    float4 d = TemporalPremultiply(tex2Dlod(SSRAccumTex, float4(base + dx + dy, 0, 0)));
+    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+}
+
 // Debug view 10 (fDebugMode 10, indirect light only): what the accumulation does with each pixel,
 // drawn by a second run of SSRTemporal_PS that leaves the real one alone. Red: last frame's light
 // dropped because last frame's depth there shows another surface, white: it was off screen; green: kept, darker as the clamp to this frame's
@@ -1861,7 +1893,7 @@ float4 SSRTemporal_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         return float4(keep > 0.0 ? 0.0 : 1.0, keep > 0.0 ? 1.0 - clamped : 0.0, noise, 1.0);
     }
 
-    float4 history = clamp(TemporalPremultiply(tex2Dlod(SSRAccumTex, float4(prevUV, 0, 0))), lo, hi);
+    float4 history = clamp(SSRTemporalHistory(prevUV), lo, hi);
     return TemporalResult(lerp(current, history, keep));
 }
 
