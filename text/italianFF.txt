@@ -217,6 +217,9 @@ Indirect Light History
 [SSRDbgSourceUV]
 Coordinate sorgente
 
+[SSRDbgHiZSkips]
+Salti Hi-Z
+
 [GroundDebug]
 Ground Surfaces Debug View
 

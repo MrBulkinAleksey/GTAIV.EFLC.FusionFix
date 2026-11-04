@@ -217,6 +217,9 @@ Indirect Light History
 [SSRDbgSourceUV]
 Coordenadas de origen
 
+[SSRDbgHiZSkips]
+Saltos Hi-Z
+
 [GroundDebug]
 Ground Surfaces Debug View
 

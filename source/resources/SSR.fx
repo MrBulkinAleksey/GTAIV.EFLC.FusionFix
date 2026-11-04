@@ -482,6 +482,9 @@ float PixelJitter(float2 pixel)
 static float gTraceHitZ = 0.0;
 static float gTraceRayZ = 0.0;
 static float gTraceHitMotion = 0.0; // reflected hit's own motion, in full-size pixels
+// Share of the last TraceHit's steps that a depth hierarchy jump took away, for debug view 12:
+// whether the hierarchy pays for its pass and its boundary arithmetic in this scene.
+static float gTraceSkipShare = 0.0;
 // The screen path of the last SetupReflectionRay's ray, for ScreenFallback: from gTraceUV0 to
 // gTraceUVEnd, where it leaves the screen; gTracePath is 0 when the ray was not marched.
 static float2 gTraceUV0 = 0.0;
@@ -579,6 +582,7 @@ float MarchDepth(float2 uv)
 float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float distanceFade)
 {
     gTraceHitMotion = 0.0;
+    gTraceSkipShare = 0.0;
     ReflectionRay ray;
     if (!SetupReflectionRay(C, n, microNormal, ray))
         return 0.0;
@@ -617,6 +621,8 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     float hidden = 0.0;
     float firstHidden = -1.0;
     float prevU = 0.0;
+    // Steps a depth hierarchy jump took away, for gTraceSkipShare.
+    float skipped = 0.0;
 
     // March and refinement share one bounded loop. A conservative 2x2 depth can report
     // the silhouette of a neighbouring pixel; reject that candidate in full-size depth
@@ -724,6 +730,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
                     prevT = endT;
                     prevU = endT * invZ1 * endZ;
                     prevDelta = endZ - MarchDepth(endUV);
+                    skipped += endIndex - (float)i;
                     marchIndex = (int)endIndex + 1;
                     continue;
                 }
@@ -776,6 +783,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
         prevDelta = delta;
     }
 
+    gTraceSkipShare = saturate(skipped / steps);
     if (hit <= 0.0)
         return 0.0;
     hidden *= ray.len;
@@ -1187,7 +1195,9 @@ TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
     float3 microNormal = SSRMicroNormal(uv, vPos, n, C);
     float4 hit = TraceHit(C, n, microNormal, jitter, fDistanceFade);
     float distance = hit.z > 0.0 ? hit.w : 0.0;
-    o.distance = float4(distance, hit.z > 0.0 ? gTraceHitMotion : 0.0, 0.0, distance);
+    // .b carries the share of this ray's steps the depth hierarchy skipped, for debug view 12;
+    // the passes that read this target use .r and .g only.
+    o.distance = float4(distance, hit.z > 0.0 ? gTraceHitMotion : 0.0, gTraceSkipShare, distance);
     // Debug 11: the previous-scene UV from which this hit reads colour, R=x, G=y.
     // This makes a suspect reflected pixel traceable back to its source on screen.
     if (fDebugMode > 10.5 && fDebugMode < 11.5)
@@ -1436,6 +1446,18 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
         return float4(1.0, 1.0, 1.0, 1.0);
 
     float4 ssr = tex2Dlod(SSRResultTex, float4(uv, 0, 0));
+
+    // 12: what the depth hierarchy did, straight from the trace's second target: red the share
+    // of this ray's steps its jumps took away, green where the ray hit something, blue where
+    // SSR traced nothing at all. Needs the distance target, so temporal, the fill or the
+    // smoothing has to be on for it to be written.
+    if (fDebugMode > 11.5 && fDebugMode < 12.5)
+    {
+        float4 info = tex2Dlod(SSRHitDistTex, float4(uv, 0, 0));
+        if (info.a < -0.5)
+            return float4(0.0, 0.0, 1.0, 1.0);
+        return float4(saturate(info.b), info.r > 0.0 ? 0.8 : 0.0, 0.0, 1.0);
+    }
 
     // 11: raw history coordinates, not modulated by hit confidence.
     if (fDebugMode > 10.5 && fDebugMode < 11.5)

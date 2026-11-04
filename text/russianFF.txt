@@ -217,6 +217,9 @@ Logitech LightSync RGB
 [SSRDbgSourceUV]
 Координаты источника
 
+[SSRDbgHiZSkips]
+Пропуски Hi-Z
+
 [GroundDebug]
 Отладка поверхностей земли
 

@@ -217,6 +217,9 @@ Indirect Light History
 [SSRDbgSourceUV]
 Hit Source Coordinates
 
+[SSRDbgHiZSkips]
+Depth Hierarchy Skips
+
 [GroundDebug]
 Ground Surfaces Debug View
 

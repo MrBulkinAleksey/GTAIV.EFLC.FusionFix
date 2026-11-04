@@ -217,6 +217,9 @@ Indirect Light History
 [SSRDbgSourceUV]
 反射元の座標
 
+[SSRDbgHiZSkips]
+Hi-Zスキップ
+
 [GroundDebug]
 Ground Surfaces Debug View
 

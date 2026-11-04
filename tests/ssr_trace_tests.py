@@ -34,6 +34,7 @@ bool all(bool a) { return a; }
 float2 lerp(float2 a,float2 b,float t) { return {lerp(a.x,b.x,t),lerp(a.y,b.y,t)}; }
 struct float4 { float r; float2 uv; float4(float2 p,int,int):r(0),uv(p) {} };
 int scene, reads;
+float gTraceSkipShare = 0.0f;
 float wall = 5.0f;
 float LinearDepth(float2) { ++reads; return scene==0 ? 1000.0f : wall; }
 float MarchDepth(float2 uv) {
@@ -50,9 +51,9 @@ float4 tex2Dlod(int,float4 p) {
     p.r=(scene==2 && cell<0.3f && cell+0.125f>0.1f) ? 0.5f : (scene==0 ? 1000.0f : wall);
     ++reads; return p;
 }
-struct Result { bool hit; float z; int reads; };
+struct Result { bool hit; float z; int reads; float skips; };
 Result trace(int which,float jitter,bool hiz,float pixels,float thickness,bool reverse=false,bool diagonal=false) {
-    scene=which; reads=0;
+    scene=which; reads=0; gTraceSkipShare=0.0f;
     float2 uv0{reverse ? 1.0f : 0.0f,diagonal ? 0.2f : 0.5f};
     float2 uv1{reverse ? 0.0f : 1.0f,diagonal ? 0.8f : 0.5f};
     float2 dUV{uv1.x-uv0.x,uv1.y-uv0.y};
@@ -62,7 +63,7 @@ Result trace(int which,float jitter,bool hiz,float pixels,float thickness,bool r
     struct { float len; } ray{9};
 '''
 suffix = r'''
-    return {hit>0,hit>0 ? 1.0f/lerp(invZ0,invZ1,hitHi) : 0,reads};
+    return {hit>0,hit>0 ? 1.0f/lerp(invZ0,invZ1,hitHi) : 0,reads,gTraceSkipShare};
 }
 void require(bool ok,const char* message) {
     if (!ok) { std::fprintf(stderr,"%s\n",message); std::exit(1); }
@@ -85,6 +86,14 @@ int main() {
         require(pole.reads<8*(NUM_STEPS+2*(NUM_REFINE_STEPS+1)),"ray exceeded bounded work");
         cases+=3;
     }
+    // The hierarchy's own bookkeeping: it reports the share of steps it took away, and in
+    // an empty scene that share is above zero and the depth reads do fall.
+    auto plain=trace(0,0.5f,false,1920.0f,0.1f);
+    require(plain.skips==0.0f,"steps counted as skipped without the hierarchy");
+    auto hierarchical=trace(0,0.5f,true,1920.0f,0.1f);
+    require(hierarchical.skips>0.0f && hierarchical.skips<=1.0f,"skip share is not a share of the steps");
+    require(hierarchical.reads<plain.reads,"hierarchy did not reduce depth reads");
+    cases+=3;
     // Enabling conservative Hi-Z must leave the first accepted hit unchanged,
     // including negative directions and samples close to cell boundaries.
     for (int i=1;i<=97;++i)
