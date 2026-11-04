@@ -67,7 +67,7 @@ float4 tex2Dlod(int which,float4 p) {
     ++reads; return p;
 }
 struct Result { bool hit; float z; int reads; float skips; float level; };
-Result trace(int which,float jitter,bool hiz,float pixels,float thickness,bool reverse=false,bool diagonal=false,int levels=1,float grid=8.0f) {
+Result trace(int which,float jitter,bool hiz,float pixels,float thickness,bool reverse=false,bool diagonal=false,int levels=1,float grid=8.0f,float gloss=glossValue) {
     scene=which; reads=0; gTraceSkipShare=0.0f; gTraceHiZLevel=0.0f; hiZGrid=grid;
     float2 uv0{reverse ? 1.0f : 0.0f,diagonal ? 0.2f : 0.5f};
     float2 uv1{reverse ? 0.0f : 1.0f,diagonal ? 0.8f : 0.5f};

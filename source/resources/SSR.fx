@@ -615,7 +615,8 @@ float SSRStepCount(float rayPixels)
 // turns it into a colour.
 // jitter in (0, 1] shifts every step of this pixel's ray by up to one step.
 // distanceFade: reflections fade out towards this distance from the surface, 0 disables.
-float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float distanceFade)
+// gloss: the receiver's paint, read once by the caller; 1 where there is no specular target.
+float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float distanceFade, float gloss)
 {
     gTraceHitMotion = 0.0;
     gTraceSkipShare = 0.0;
@@ -663,8 +664,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // Rough paint is not a mirror: its lobe sees the surface from a spread of directions, so a
     // hit a little behind or in front of the depth the buffer holds is still a hit of the lobe,
     // and the bracket that counts as one widens with roughness. Mirror paint keeps fThickness
-    // exactly, and without a specular target there is no gloss to widen it by.
-    float gloss = fGlossCutoff >= 0.0 ? tex2Dlod(SpecularTex, float4(uv0, 0, 0)).y : 1.0;
+    // exactly, and without a specular target the caller passes gloss 1.
     float hitSlab = fThickness * (1.0 + 1.5 * (1.0 - gloss));
 
     // March and refinement share one bounded loop. A conservative 2x2 depth can report
@@ -1260,7 +1260,11 @@ TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
     // accumulation averages the steps out and fewer of them do.
     float jitter = fStepJitter > 0.0 ? PixelJitter(vPos + vec2NoiseOffset) : 1.0;
     float3 microNormal = SSRMicroNormal(uv, vPos, n, C);
-    float4 hit = TraceHit(C, n, microNormal, jitter, fDistanceFade);
+    // One gloss read serves both the hit bracket in the march and the blur radius below: the
+    // paint the ray leaves from is the paint whose lobe spreads, and the march sits a handful of
+    // slots under the largest shader this device was seen to accept.
+    float gloss = fGlossCutoff >= 0.0 ? tex2Dlod(SpecularTex, float4(uv, 0, 0)).y : 1.0;
+    float4 hit = TraceHit(C, n, microNormal, jitter, fDistanceFade, gloss);
     float distance = hit.z > 0.0 ? hit.w : 0.0;
     // .b carries the share of this ray's steps the depth hierarchy skipped and .a which of its
     // levels the ray walked, both for debug view 12. The passes that read this target take .r
@@ -1284,8 +1288,8 @@ TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
     // Rough paint reflects a spread of directions even where the ray hit, so its hit wants
     // blurring by the lobe's width as well as by the ray's length; a mirror wants neither.
     // fReflectionBlur scales both terms, so at its default of 0 the shipped picture does not
-    // move at all, and the water's reflection keeps asking for its own blur alone.
-    float gloss = fGlossCutoff >= 0.0 ? tex2Dlod(SpecularTex, float4(uv, 0, 0)).y : 1.0;
+    // move at all, and the water's reflection keeps asking for its own blur alone. The gloss is
+    // the one the march read for its hit bracket.
     float rough = 1.0 - gloss;
     o.colour = HitColour(hit, fReflectionBlur * (1.0 + 2.0 * rough * rough));
     return o;
@@ -1488,7 +1492,7 @@ float4 SSRWater_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
     float3 n = WaterNormal(worldXY, dot(C, C));
     n = (dot(n, C) > 0.0) ? -n : n;
 
-    float4 r = HitColour(TraceHit(C, n, n, 1.0, 0.0), fWaterBlur);
+    float4 r = HitColour(TraceHit(C, n, n, 1.0, 0.0, 1.0), fWaterBlur);
 
     return float4(r.rgb, saturate(r.a * fWaterIntensity));
 }
