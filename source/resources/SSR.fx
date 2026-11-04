@@ -1266,7 +1266,13 @@ TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
         o.colour = float4(nearer, 1.0 - nearer, gTraceRayZ < 0.0 ? 1.0 : 0.0, hit.z);
         return o;
     }
-    o.colour = HitColour(hit, fReflectionBlur);
+    // Rough paint reflects a spread of directions even where the ray hit, so its hit wants
+    // blurring by the lobe's width as well as by the ray's length; a mirror wants neither.
+    // fReflectionBlur scales both terms, so at its default of 0 the shipped picture does not
+    // move at all, and the water's reflection keeps asking for its own blur alone.
+    float gloss = fGlossCutoff >= 0.0 ? tex2Dlod(SpecularTex, float4(uv, 0, 0)).y : 1.0;
+    float rough = 1.0 - gloss;
+    o.colour = HitColour(hit, fReflectionBlur * (1.0 + 2.0 * rough * rough));
     return o;
 }
 
