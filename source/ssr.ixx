@@ -323,7 +323,9 @@ export void RenderScreenSpaceReflections()
             ProfilerScope timedHiZ(pDevice, kProfSSRHiZ);
             for (int i = 0; i < PostFxResource::kSSRHiZLevels; ++i)
             {
-                if (!R.SSRHiZDepthTex[i] || !R.SSRHiZDepthTex[i]->mD3DTexture || !R.SSRHiZDepthSurf[i])
+                // A level the effect has no parameter for would be drawn and then read through a
+                // sampler nothing is bound to, so the traversal must not be told it is there.
+                if (!h.HiZDepthTex2D[i] || !R.SSRHiZDepthTex[i] || !R.SSRHiZDepthTex[i]->mD3DTexture || !R.SSRHiZDepthSurf[i])
                     break;
                 const DWORD divisor = 4u << i;
                 D3DSURFACE_DESC levelDesc = {};
