@@ -127,9 +127,9 @@ export void RenderScreenSpaceReflections()
         R.SSRTraceSurf[1] && hasTexture(R.SSRTraceTex[1]) && R.SSRFallbackSurf[1] && hasTexture(R.SSRFallbackTex[1]);
     IDirect3DSurface9* ssrSurf = half ? R.SSRHalfSurf : R.SSRSurf;
     IDirect3DTexture9* ssrTex = half ? R.SSRHalfTex->mD3DTexture : R.SSRTex->mD3DTexture;
-    // The smoothing's target is the half size one at either SSR size; see the denoise pass.
-    IDirect3DSurface9* denoisedSurf = R.SSRHalfDenoisedSurf;
-    IDirect3DTexture9* denoisedTex = hasTexture(R.SSRHalfDenoisedTex) ? R.SSRHalfDenoisedTex->mD3DTexture : nullptr;
+    IDirect3DSurface9* denoisedSurf = half ? R.SSRHalfDenoisedSurf : R.SSRDenoisedSurf;
+    IDirect3DTexture9* denoisedTex = half ? (hasTexture(R.SSRHalfDenoisedTex) ? R.SSRHalfDenoisedTex->mD3DTexture : nullptr)
+                                          : (hasTexture(R.SSRDenoisedTex) ? R.SSRDenoisedTex->mD3DTexture : nullptr);
 
     auto& h = R.SSREffectHandles;
     ID3DXEffect* effect = R.SSREffect;
@@ -428,22 +428,17 @@ export void RenderScreenSpaceReflections()
     effect->End();
 
     // Debug view, while the G-buffer still holds this frame. Changes nothing the game sees.
-    // Smooth the result into the texture deferred_lighting reads. The smoothing always runs at
-    // half size, at either SSR size: its taps are a blur, and a blur costs a quarter at half
-    // size while covering the same part of the screen; the accumulation and the lighting read
-    // the result through a bilinear sampler, an upsample a blurred signal survives. What that
-    // does to the accumulation's neighbourhood clamp, which now sees a smoother window than the
-    // full size one gave it, is what this branch is here to judge by eye.
+    // Smooth the result into the texture deferred_lighting reads.
     R.bSSRDenoised = false;
     if (denoise)
     {
         effect->SetTexture(h.SSRResultTex2D, ssrTex);
         // The radius is in full size pixels, so the blur covers the same part of the screen.
-        effect->SetFloat(h.fDenoiseRadius, R.fSSRDenoiseRadius * 0.5f);
+        effect->SetFloat(h.fDenoiseRadius, half ? R.fSSRDenoiseRadius * 0.5f : R.fSSRDenoiseRadius);
         effect->SetFloat(h.fDenoiseSSROnly, 1.0f);
         SSRTrace::Contents(pDevice, "denoise input", ssrTex);
         R.bSSRDenoised = DrawEffectPass(pDevice, effect, h.techSSRDenoise, denoisedSurf,
-            float(DWORD(width) / 2), float(DWORD(height) / 2), kProfSSRDenoise);
+            half ? float(DWORD(width) / 2) : width, half ? float(DWORD(height) / 2) : height, kProfSSRDenoise);
         if (R.bSSRDenoised)
             SSRTrace::Contents(pDevice, "denoise output", denoisedTex);
     }
