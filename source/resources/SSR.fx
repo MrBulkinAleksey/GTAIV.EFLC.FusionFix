@@ -286,6 +286,7 @@ uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDeno
 uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing contact shadows
 uniform float fDenoiseHitDistance; // hit-distance MRT is valid for SSR's spatial filter
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
+uniform float fRayTries = 3.0;    // surfaces a ray may turn down before it gives up, SSRRayTries
 uniform float fStepsPerPixel;     // march steps per pixel of a ray on this pass's target, 1 / SSRStepPixels
 uniform float fUseHiZ;            // depth hierarchy levels built this frame, 0 without them
 uniform float fStochasticSSR;
@@ -736,7 +737,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
             }
             // Up to three: a ray with a small step offset can spend two on its own surface and an
             // outline, and came out as a dot with no reflection among neighbours that all hit.
-            if (candidates >= 3)
+            if ((float) candidates >= fRayTries)
                 break;
 
             // Resume after the rejected interval. Full-size depth, not the dilated
