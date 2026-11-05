@@ -77,6 +77,7 @@ class TextureQuality
     static inline float fParallaxMinSteps = 8.0f;
     static inline float fParallaxMaxSteps = 32.0f;
     static inline float fParallaxDepth = 1.0f;
+    static inline bool bParallaxDepthWrite = true;
     // GroundSurfacesDebug (graphics menu, Debug): the ground shaders in colours, and how often each is bound.
     static int GroundDebug()
     {
@@ -613,6 +614,7 @@ private:
         fParallaxMinSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMinSteps", 8.0f), 2.0f, 32.0f);
         fParallaxMaxSteps = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionMaxSteps", 32.0f), fParallaxMinSteps, 32.0f);
         fParallaxDepth = std::clamp(iniReader.ReadFloat("TEXTURES", "ParallaxOcclusionDepth", 1.0f), 0.0f, 4.0f);
+        bParallaxDepthWrite = iniReader.ReadInteger("TEXTURES", "ParallaxDepthWrite", 1) != 0;
     }
 
     // Kind 0 for any other shader, 1 for the terrain, 2 for gta_parallax*, 3 for the generic world
@@ -870,8 +872,9 @@ private:
                 // c167: per metre, the colour patches' and the anti-tiling's noise; a mip bias that leaves out its grain;
                 // the colour noise's contrast: blurred, it strays only about 0.1 from its mean, so it is stretched to -1 to 1
                 1.0f / (kBlobsPerRepeat * fGroundColorVariationSize), 1.0f / (kBlobsPerRepeat * fGroundAntiTilingSize), 1.0f, 3.0f,
-                // c168: how much the colour patches lighten and darken each channel, a little warmer where lighter
-                fGroundColorVariation, 0.9f * fGroundColorVariation, 0.75f * fGroundColorVariation, 0.0f,
+                // c168: how much the colour patches lighten and darken each channel, a little warmer where lighter;
+                // w: 1 the parallax writes its depth at the hit (zz_zz_zz_pom.py), 0 on the flat polygon
+                fGroundColorVariation, 0.9f * fGroundColorVariation, 0.75f * fGroundColorVariation, bParallaxDepthWrite ? 1.0f : 0.0f,
                 // c169: bump height in metres, its fade with the distance as a * depth + b, the detail grain's height
                 fGroundBumps, -1.0f / fadeRange, fGroundBumpsFadeEnd / fadeRange, fGroundDetailBumps,
                 // c170: parallax steps looking straight down, the more added flat along the surface, depth

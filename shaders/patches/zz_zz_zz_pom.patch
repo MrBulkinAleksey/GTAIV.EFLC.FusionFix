@@ -1,0 +1,846 @@
+diff --git a/win32_30_nv8/gta_default/gta_defaultPS3.asm b/win32_30_nv8/gta_default/gta_defaultPS3.asm
+index d27ac672..4566d523 100644
+--- a/win32_30_nv8/gta_default/gta_defaultPS3.asm
++++ b/win32_30_nv8/gta_default/gta_defaultPS3.asm
+@@ -43,6 +43,8 @@
+     def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
+     def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
+     def c189, 0.252199411, 0, 0, 0 // FusionFix: world_no_specular_mark.patch
++    def c150, 0.5, 0.100000001, 0, 0 // FusionFix POM: the relief's metres or share of them, the most depth in a share of the view depth
++    defi i2, 2, 0, 0, 0 // FusionFix POM: the refining reads
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
+@@ -55,6 +57,7 @@
+     // --- with no normal map, the texture's brightness against its average as the height: the view ray is marched
+     // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
+     // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
++    mov r19.w, c187.y // FusionFix POM: no depth to add
+     mov r23.xy, v0
+     mov r16.w, c187.y
+     if b15
+@@ -139,11 +142,44 @@
+           add r28.y, r29.x, -r29.w // how far above it the ray still is
+           break_le r28.y, c187.x
+         endrep
++      // --- FusionFix POM: two more reads between the last two steps
++      if_le r28.y, c187.x
++        rep i2
++          add r29.x, r28.w, -r28.y
++          rcp r29.x, r29.x
++          mul r29.x, r28.w, r29.x
++          add r29.y, r28.x, -r28.z
++          mad r19.z, r29.x, r29.y, r28.z
++          mov_sat r19.z, r19.z
++              mad r27.xy, r19.z, -r21, r21.zwzw
++              texldd r29, r27, s0, r30, r31
++              dp3 r29.x, r29, c188
++              add r29.x, r29.x, -r8.y
++              mul r29.x, r29.x, c174.x
++              add_sat r29.w, r29.x, c187.z // the height there
++              add r29.x, c187.y, -r19.z
++              add r29.z, r29.x, -r29.w // how far above it the ray still is
++          cmp r28.z, r29.z, r19.z, r28.z
++          cmp r28.w, r29.z, r29.z, r28.w
++          cmp r28.x, r29.z, r28.x, r19.z
++          cmp r28.y, r29.z, r28.y, r29.z
++        endrep
++      endif
+         add r29.x, r28.w, -r28.y
+         rcp r29.x, r29.x
+         mul r29.x, r28.w, r29.x
+         add r29.y, r28.x, -r28.z
+         mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
++        // --- FusionFix POM: the hit's depth, as a share of the view depth
++        dp3 r19.w, r11, r11
++        rsq r19.w, r19.w
++        mul r19.w, r19.w, r29.y
++        mul r19.w, r19.w, r8.w
++        mul r19.w, r19.w, r12.y
++        mul r19.w, r19.w, c150.x
++        mul r19.w, r19.w, c168.w
++        min r19.w, r19.w, c150.y
++        add r19.w, r19.w, c187.y
+         mad r23.xy, r29.y, -r21, r21.zwzw
+         // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
+         dp3 r11.x, c173, r4
+@@ -501,6 +537,7 @@
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
++    mul r19.x, r19.x, r19.w // FusionFix POM
+     log r19.x, r19.x
+     mul r19.x, r19.x, c209.y
+     rcp r19.y, v9.w
+diff --git a/win32_30_nv8/gta_default/gta_defaultPS4.asm b/win32_30_nv8/gta_default/gta_defaultPS4.asm
+index b59b7615..cec3829a 100644
+--- a/win32_30_nv8/gta_default/gta_defaultPS4.asm
++++ b/win32_30_nv8/gta_default/gta_defaultPS4.asm
+@@ -40,6 +40,8 @@
+     def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
+     def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
+     def c189, 0.252199411, 0, 0, 0 // FusionFix: world_no_specular_mark.patch
++    def c150, 0.5, 0.100000001, 0, 0 // FusionFix POM: the relief's metres or share of them, the most depth in a share of the view depth
++    defi i2, 2, 0, 0, 0 // FusionFix POM: the refining reads
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
+@@ -53,6 +55,7 @@
+     // --- with no normal map, the texture's brightness against its average as the height: the view ray is marched
+     // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
+     // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
++    mov r20.w, c187.y // FusionFix POM: no depth to add
+     mov r23.xy, v0
+     mov r16.w, c187.y
+     if b15
+@@ -137,11 +140,44 @@
+           add r28.y, r29.x, -r29.w // how far above it the ray still is
+           break_le r28.y, c187.x
+         endrep
++      // --- FusionFix POM: two more reads between the last two steps
++      if_le r28.y, c187.x
++        rep i2
++          add r29.x, r28.w, -r28.y
++          rcp r29.x, r29.x
++          mul r29.x, r28.w, r29.x
++          add r29.y, r28.x, -r28.z
++          mad r20.z, r29.x, r29.y, r28.z
++          mov_sat r20.z, r20.z
++              mad r27.xy, r20.z, -r21, r21.zwzw
++              texldd r29, r27, s0, r30, r31
++              dp3 r29.x, r29, c188
++              add r29.x, r29.x, -r8.y
++              mul r29.x, r29.x, c174.x
++              add_sat r29.w, r29.x, c187.z // the height there
++              add r29.x, c187.y, -r20.z
++              add r29.z, r29.x, -r29.w // how far above it the ray still is
++          cmp r28.z, r29.z, r20.z, r28.z
++          cmp r28.w, r29.z, r29.z, r28.w
++          cmp r28.x, r29.z, r28.x, r20.z
++          cmp r28.y, r29.z, r28.y, r29.z
++        endrep
++      endif
+         add r29.x, r28.w, -r28.y
+         rcp r29.x, r29.x
+         mul r29.x, r28.w, r29.x
+         add r29.y, r28.x, -r28.z
+         mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
++        // --- FusionFix POM: the hit's depth, as a share of the view depth
++        dp3 r20.w, r11, r11
++        rsq r20.w, r20.w
++        mul r20.w, r20.w, r29.y
++        mul r20.w, r20.w, r8.w
++        mul r20.w, r20.w, r12.y
++        mul r20.w, r20.w, c150.x
++        mul r20.w, r20.w, c168.w
++        min r20.w, r20.w, c150.y
++        add r20.w, r20.w, c187.y
+         mad r23.xy, r29.y, -r21, r21.zwzw
+         // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
+         dp3 r11.x, c173, r4
+@@ -482,6 +518,7 @@
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
++    mul r19.x, r19.x, r20.w // FusionFix POM
+     log r19.x, r19.x
+     mul r19.x, r19.x, c209.y
+     rcp r19.y, v9.w
+diff --git a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm b/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
+index 048402da..0508e8d7 100644
+--- a/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
++++ b/win32_30_nv8/gta_parallax/gta_parallaxPS3.asm
+@@ -43,6 +43,8 @@
+     def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
+     def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
+     def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
++    def c150, 0.04, 0.100000001, 0, 0 // FusionFix POM: the relief's metres or share of them, the most depth in a share of the view depth
++    defi i2, 2, 0, 0, 0 // FusionFix POM: the refining reads
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord4 v2.xyz
+@@ -54,6 +56,7 @@
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s12 // FusionFix detail texture
++    mov r19.w, c187.y // FusionFix POM: no depth to add
+     texld r0, v0, s1
+     add r0.xyz, c0.x, v5
+     dp3 r0.z, r0, r0
+@@ -91,11 +94,37 @@
+         add r28.y, r29.x, -r29.w // how far above the height map the ray still is
+         break_le r28.y, c187.x
+       endrep
++      // --- FusionFix POM: two more reads between the last two steps
++      if_le r28.y, c187.x
++        rep i2
++          add r29.x, r28.w, -r28.y
++          rcp r29.x, r29.x
++          mul r29.x, r28.w, r29.x
++          add r29.y, r28.x, -r28.z
++          mad r19.z, r29.x, r29.y, r28.z
++          mov_sat r19.z, r19.z
++            mad r23.xy, r19.z, -r21, r21.zwzw
++            texldd r29, r23, s1, r26, r22
++            add r29.x, c187.y, -r19.z
++            add r29.z, r29.x, -r29.w // how far above the height map the ray still is
++          cmp r28.z, r29.z, r19.z, r28.z
++          cmp r28.w, r29.z, r29.z, r28.w
++          cmp r28.x, r29.z, r28.x, r19.z
++          cmp r28.y, r29.z, r28.y, r29.z
++        endrep
++      endif
+       add r29.x, r28.w, -r28.y
+       rcp r29.x, r29.x
+       mul r29.x, r28.w, r29.x
+       add r29.y, r28.x, -r28.z
+       mad r29.y, r29.x, r29.y, r28.z
++      // --- FusionFix POM: the hit's depth, as a share of the view depth
++      rcp r19.w, v5_abs.z
++      mul r19.w, r19.w, r29.y
++      mul r19.w, r19.w, c150.x
++      mul r19.w, r19.w, c168.w
++      min r19.w, r19.w, c150.y
++      add r19.w, r19.w, c187.y
+       mad r0.xy, r29.y, -r21, r21.zwzw
+     endif
+     texld r2, r0, s0
+@@ -253,6 +282,7 @@
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
++    mul r19.x, r19.x, r19.w // FusionFix POM
+     log r19.x, r19.x
+     mul r19.x, r19.x, c209.y
+     rcp r19.y, v9.w
+diff --git a/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm b/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
+index b747bbc0..e9bfc311 100644
+--- a/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
++++ b/win32_30_nv8/gta_parallax/gta_parallaxPS4.asm
+@@ -42,6 +42,8 @@
+     def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
+     def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
+     def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
++    def c150, 0.04, 0.100000001, 0, 0 // FusionFix POM: the relief's metres or share of them, the most depth in a share of the view depth
++    defi i2, 2, 0, 0, 0 // FusionFix POM: the refining reads
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord4 v2.xyz
+@@ -54,6 +56,7 @@
+     dcl_2d s1
+     dcl_2d s10
+     dcl_2d s12 // FusionFix detail texture
++    mov r20.w, c187.y // FusionFix POM: no depth to add
+     texld r0, v0, s1
+     add r0.xyz, c1.w, v5
+     dp3 r0.z, r0, r0
+@@ -91,11 +94,37 @@
+         add r28.y, r29.x, -r29.w // how far above the height map the ray still is
+         break_le r28.y, c187.x
+       endrep
++      // --- FusionFix POM: two more reads between the last two steps
++      if_le r28.y, c187.x
++        rep i2
++          add r29.x, r28.w, -r28.y
++          rcp r29.x, r29.x
++          mul r29.x, r28.w, r29.x
++          add r29.y, r28.x, -r28.z
++          mad r20.z, r29.x, r29.y, r28.z
++          mov_sat r20.z, r20.z
++            mad r23.xy, r20.z, -r21, r21.zwzw
++            texldd r29, r23, s1, r26, r22
++            add r29.x, c187.y, -r20.z
++            add r29.z, r29.x, -r29.w // how far above the height map the ray still is
++          cmp r28.z, r29.z, r20.z, r28.z
++          cmp r28.w, r29.z, r29.z, r28.w
++          cmp r28.x, r29.z, r28.x, r20.z
++          cmp r28.y, r29.z, r28.y, r29.z
++        endrep
++      endif
+       add r29.x, r28.w, -r28.y
+       rcp r29.x, r29.x
+       mul r29.x, r28.w, r29.x
+       add r29.y, r28.x, -r28.z
+       mad r29.y, r29.x, r29.y, r28.z
++      // --- FusionFix POM: the hit's depth, as a share of the view depth
++      rcp r20.w, v5_abs.z
++      mul r20.w, r20.w, r29.y
++      mul r20.w, r20.w, c150.x
++      mul r20.w, r20.w, c168.w
++      min r20.w, r20.w, c150.y
++      add r20.w, r20.w, c187.y
+       mad r0.xy, r29.y, -r21, r21.zwzw
+     endif
+     texld r2, r0, s1
+@@ -241,6 +270,7 @@
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
++    mul r19.x, r19.x, r20.w // FusionFix POM
+     log r19.x, r19.x
+     mul r19.x, r19.x, c209.y
+     rcp r19.y, v9.w
+diff --git a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
+index 8a7294ff..10d3e4a5 100644
+--- a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
++++ b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS3.asm
+@@ -47,6 +47,8 @@
+     def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
+     def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
+     def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
++    def c150, 0.04, 0.100000001, 0, 0 // FusionFix POM: the relief's metres or share of them, the most depth in a share of the view depth
++    defi i2, 2, 0, 0, 0 // FusionFix POM: the refining reads
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord4 v2.xyz
+@@ -59,6 +61,7 @@
+     dcl_2d s1
+     dcl_2d s2
+     dcl_2d s12 // FusionFix detail texture
++    mov r19.w, c187.y // FusionFix POM: no depth to add
+     texld r0, v0, s1
+     add r0.xyz, c0.x, v5
+     dp3 r0.z, r0, r0
+@@ -96,11 +99,37 @@
+         add r28.y, r29.x, -r29.w // how far above the height map the ray still is
+         break_le r28.y, c187.x
+       endrep
++      // --- FusionFix POM: two more reads between the last two steps
++      if_le r28.y, c187.x
++        rep i2
++          add r29.x, r28.w, -r28.y
++          rcp r29.x, r29.x
++          mul r29.x, r28.w, r29.x
++          add r29.y, r28.x, -r28.z
++          mad r19.z, r29.x, r29.y, r28.z
++          mov_sat r19.z, r19.z
++            mad r23.xy, r19.z, -r21, r21.zwzw
++            texldd r29, r23, s1, r26, r22
++            add r29.x, c187.y, -r19.z
++            add r29.z, r29.x, -r29.w // how far above the height map the ray still is
++          cmp r28.z, r29.z, r19.z, r28.z
++          cmp r28.w, r29.z, r29.z, r28.w
++          cmp r28.x, r29.z, r28.x, r19.z
++          cmp r28.y, r29.z, r28.y, r29.z
++        endrep
++      endif
+       add r29.x, r28.w, -r28.y
+       rcp r29.x, r29.x
+       mul r29.x, r28.w, r29.x
+       add r29.y, r28.x, -r28.z
+       mad r29.y, r29.x, r29.y, r28.z
++      // --- FusionFix POM: the hit's depth, as a share of the view depth
++      rcp r19.w, v5_abs.z
++      mul r19.w, r19.w, r29.y
++      mul r19.w, r19.w, c150.x
++      mul r19.w, r19.w, c168.w
++      min r19.w, r19.w, c150.y
++      add r19.w, r19.w, c187.y
+       mad r0.xy, r29.y, -r21, r21.zwzw
+     endif
+     texld r2, r0, s0
+@@ -261,6 +290,7 @@
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
++    mul r19.x, r19.x, r19.w // FusionFix POM
+     log r19.x, r19.x
+     mul r19.x, r19.x, c209.y
+     rcp r19.y, v9.w
+diff --git a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
+index 22e66d48..fd28b421 100644
+--- a/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
++++ b/win32_30_nv8/gta_parallax_specmap/gta_parallax_specmapPS4.asm
+@@ -46,6 +46,8 @@
+     def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
+     def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
+     def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
++    def c150, 0.04, 0.100000001, 0, 0 // FusionFix POM: the relief's metres or share of them, the most depth in a share of the view depth
++    defi i2, 2, 0, 0, 0 // FusionFix POM: the refining reads
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord4 v2.xyz
+@@ -59,6 +61,7 @@
+     dcl_2d s2
+     dcl_2d s10
+     dcl_2d s12 // FusionFix detail texture
++    mov r20.w, c187.y // FusionFix POM: no depth to add
+     texld r0, v0, s1
+     add r0.xyz, c1.w, v5
+     dp3 r0.z, r0, r0
+@@ -96,11 +99,37 @@
+         add r28.y, r29.x, -r29.w // how far above the height map the ray still is
+         break_le r28.y, c187.x
+       endrep
++      // --- FusionFix POM: two more reads between the last two steps
++      if_le r28.y, c187.x
++        rep i2
++          add r29.x, r28.w, -r28.y
++          rcp r29.x, r29.x
++          mul r29.x, r28.w, r29.x
++          add r29.y, r28.x, -r28.z
++          mad r20.z, r29.x, r29.y, r28.z
++          mov_sat r20.z, r20.z
++            mad r23.xy, r20.z, -r21, r21.zwzw
++            texldd r29, r23, s1, r26, r22
++            add r29.x, c187.y, -r20.z
++            add r29.z, r29.x, -r29.w // how far above the height map the ray still is
++          cmp r28.z, r29.z, r20.z, r28.z
++          cmp r28.w, r29.z, r29.z, r28.w
++          cmp r28.x, r29.z, r28.x, r20.z
++          cmp r28.y, r29.z, r28.y, r29.z
++        endrep
++      endif
+       add r29.x, r28.w, -r28.y
+       rcp r29.x, r29.x
+       mul r29.x, r28.w, r29.x
+       add r29.y, r28.x, -r28.z
+       mad r29.y, r29.x, r29.y, r28.z
++      // --- FusionFix POM: the hit's depth, as a share of the view depth
++      rcp r20.w, v5_abs.z
++      mul r20.w, r20.w, r29.y
++      mul r20.w, r20.w, c150.x
++      mul r20.w, r20.w, c168.w
++      min r20.w, r20.w, c150.y
++      add r20.w, r20.w, c187.y
+       mad r0.xy, r29.y, -r21, r21.zwzw
+     endif
+     texld r1, r0, s1
+@@ -250,6 +279,7 @@
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
++    mul r19.x, r19.x, r20.w // FusionFix POM
+     log r19.x, r19.x
+     mul r19.x, r19.x, c209.y
+     rcp r19.y, v9.w
+diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
+index d666ce75..15562160 100644
+--- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
++++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS3.asm
+@@ -44,6 +44,8 @@
+     def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
+     def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
+     def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
++    def c150, 0.04, 0.100000001, 0, 0 // FusionFix POM: the relief's metres or share of them, the most depth in a share of the view depth
++    defi i2, 2, 0, 0, 0 // FusionFix POM: the refining reads
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord4 v2.xyz
+@@ -55,6 +57,7 @@
+     dcl_2d s0
+     dcl_2d s1
+     dcl_2d s12 // FusionFix detail texture
++    mov r19.w, c187.y // FusionFix POM: no depth to add
+     texld r0, v0, s1
+     add r1.xyz, c0.x, v5
+     dp3 r0.z, r1, r1
+@@ -100,11 +103,37 @@
+         add r28.y, r29.x, -r29.w // how far above the height map the ray still is
+         break_le r28.y, c187.x
+       endrep
++      // --- FusionFix POM: two more reads between the last two steps
++      if_le r28.y, c187.x
++        rep i2
++          add r29.x, r28.w, -r28.y
++          rcp r29.x, r29.x
++          mul r29.x, r28.w, r29.x
++          add r29.y, r28.x, -r28.z
++          mad r19.z, r29.x, r29.y, r28.z
++          mov_sat r19.z, r19.z
++            mad r23.xy, r19.z, -r21, r21.zwzw
++            texldd r29, r23, s1, r26, r22
++            add r29.x, c187.y, -r19.z
++            add r29.z, r29.x, -r29.w // how far above the height map the ray still is
++          cmp r28.z, r29.z, r19.z, r28.z
++          cmp r28.w, r29.z, r29.z, r28.w
++          cmp r28.x, r29.z, r28.x, r19.z
++          cmp r28.y, r29.z, r28.y, r29.z
++        endrep
++      endif
+       add r29.x, r28.w, -r28.y
+       rcp r29.x, r29.x
+       mul r29.x, r28.w, r29.x
+       add r29.y, r28.x, -r28.z
+       mad r29.y, r29.x, r29.y, r28.z
++      // --- FusionFix POM: the hit's depth, as a share of the view depth
++      rcp r19.w, v5_abs.z
++      mul r19.w, r19.w, r29.y
++      mul r19.w, r19.w, c150.x
++      mul r19.w, r19.w, c168.w
++      min r19.w, r19.w, c150.y
++      add r19.w, r19.w, c187.y
+       mad r1.zw, r29.y, -r21, r21.zwzw
+       texld r29, r1.zwzw, s1
+       mov r2.yzw, r29.xxyw
+@@ -262,6 +291,7 @@
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
++    mul r19.x, r19.x, r19.w // FusionFix POM
+     log r19.x, r19.x
+     mul r19.x, r19.x, c209.y
+     rcp r19.y, v9.w
+diff --git a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
+index 22ff6272..45443ef2 100644
+--- a/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
++++ b/win32_30_nv8/gta_parallax_steep/gta_parallax_steepPS4.asm
+@@ -44,6 +44,8 @@
+     def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
+     def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
+     def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
++    def c150, 0.04, 0.100000001, 0, 0 // FusionFix POM: the relief's metres or share of them, the most depth in a share of the view depth
++    defi i2, 2, 0, 0, 0 // FusionFix POM: the refining reads
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_texcoord4 v2.xyz
+@@ -56,6 +58,7 @@
+     dcl_2d s1
+     dcl_2d s10
+     dcl_2d s12 // FusionFix detail texture
++    mov r20.w, c187.y // FusionFix POM: no depth to add
+     texld r0, v0, s1
+     add r1.xyz, c0.x, v5
+     dp3 r0.z, r1, r1
+@@ -101,11 +104,37 @@
+         add r28.y, r29.x, -r29.w // how far above the height map the ray still is
+         break_le r28.y, c187.x
+       endrep
++      // --- FusionFix POM: two more reads between the last two steps
++      if_le r28.y, c187.x
++        rep i2
++          add r29.x, r28.w, -r28.y
++          rcp r29.x, r29.x
++          mul r29.x, r28.w, r29.x
++          add r29.y, r28.x, -r28.z
++          mad r20.z, r29.x, r29.y, r28.z
++          mov_sat r20.z, r20.z
++            mad r23.xy, r20.z, -r21, r21.zwzw
++            texldd r29, r23, s1, r26, r22
++            add r29.x, c187.y, -r20.z
++            add r29.z, r29.x, -r29.w // how far above the height map the ray still is
++          cmp r28.z, r29.z, r20.z, r28.z
++          cmp r28.w, r29.z, r29.z, r28.w
++          cmp r28.x, r29.z, r28.x, r20.z
++          cmp r28.y, r29.z, r28.y, r29.z
++        endrep
++      endif
+       add r29.x, r28.w, -r28.y
+       rcp r29.x, r29.x
+       mul r29.x, r28.w, r29.x
+       add r29.y, r28.x, -r28.z
+       mad r29.y, r29.x, r29.y, r28.z
++      // --- FusionFix POM: the hit's depth, as a share of the view depth
++      rcp r20.w, v5_abs.z
++      mul r20.w, r20.w, r29.y
++      mul r20.w, r20.w, c150.x
++      mul r20.w, r20.w, c168.w
++      min r20.w, r20.w, c150.y
++      add r20.w, r20.w, c187.y
+       mad r1.zw, r29.y, -r21, r21.zwzw
+       texld r29, r1.zwzw, s1
+       mov r2.yzw, r29.xxyw
+@@ -253,6 +282,7 @@
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
++    mul r19.x, r19.x, r20.w // FusionFix POM
+     log r19.x, r19.x
+     mul r19.x, r19.x, c209.y
+     rcp r19.y, v9.w
+diff --git a/win32_30_nv8/gta_spec/gta_specPS3.asm b/win32_30_nv8/gta_spec/gta_specPS3.asm
+index 1631df9e..5aa7a439 100644
+--- a/win32_30_nv8/gta_spec/gta_specPS3.asm
++++ b/win32_30_nv8/gta_spec/gta_specPS3.asm
+@@ -47,6 +47,8 @@
+     def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
+     def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
+     def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
++    def c150, 0.5, 0.100000001, 0, 0 // FusionFix POM: the relief's metres or share of them, the most depth in a share of the view depth
++    defi i2, 2, 0, 0, 0 // FusionFix POM: the refining reads
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
+@@ -60,6 +62,7 @@
+     // --- with no normal map, the texture's brightness against its average as the height: the view ray is marched
+     // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
+     // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
++    mov r19.w, c187.y // FusionFix POM: no depth to add
+     mov r23.xy, v0
+     mov r16.w, c187.y
+     if b15
+@@ -144,11 +147,44 @@
+           add r28.y, r29.x, -r29.w // how far above it the ray still is
+           break_le r28.y, c187.x
+         endrep
++      // --- FusionFix POM: two more reads between the last two steps
++      if_le r28.y, c187.x
++        rep i2
++          add r29.x, r28.w, -r28.y
++          rcp r29.x, r29.x
++          mul r29.x, r28.w, r29.x
++          add r29.y, r28.x, -r28.z
++          mad r19.z, r29.x, r29.y, r28.z
++          mov_sat r19.z, r19.z
++              mad r27.xy, r19.z, -r21, r21.zwzw
++              texldd r29, r27, s0, r30, r31
++              dp3 r29.x, r29, c188
++              add r29.x, r29.x, -r8.y
++              mul r29.x, r29.x, c174.x
++              add_sat r29.w, r29.x, c187.z // the height there
++              add r29.x, c187.y, -r19.z
++              add r29.z, r29.x, -r29.w // how far above it the ray still is
++          cmp r28.z, r29.z, r19.z, r28.z
++          cmp r28.w, r29.z, r29.z, r28.w
++          cmp r28.x, r29.z, r28.x, r19.z
++          cmp r28.y, r29.z, r28.y, r29.z
++        endrep
++      endif
+         add r29.x, r28.w, -r28.y
+         rcp r29.x, r29.x
+         mul r29.x, r28.w, r29.x
+         add r29.y, r28.x, -r28.z
+         mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
++        // --- FusionFix POM: the hit's depth, as a share of the view depth
++        dp3 r19.w, r11, r11
++        rsq r19.w, r19.w
++        mul r19.w, r19.w, r29.y
++        mul r19.w, r19.w, r8.w
++        mul r19.w, r19.w, r12.y
++        mul r19.w, r19.w, c150.x
++        mul r19.w, r19.w, c168.w
++        min r19.w, r19.w, c150.y
++        add r19.w, r19.w, c187.y
+         mad r23.xy, r29.y, -r21, r21.zwzw
+         // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
+         dp3 r11.x, c173, r4
+@@ -505,6 +541,7 @@
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
++    mul r19.x, r19.x, r19.w // FusionFix POM
+     log r19.x, r19.x
+     mul r19.x, r19.x, c209.y
+     rcp r19.y, v9.w
+diff --git a/win32_30_nv8/gta_spec/gta_specPS4.asm b/win32_30_nv8/gta_spec/gta_specPS4.asm
+index 4017ebb9..c61a92cc 100644
+--- a/win32_30_nv8/gta_spec/gta_specPS4.asm
++++ b/win32_30_nv8/gta_spec/gta_specPS4.asm
+@@ -47,6 +47,8 @@
+     def c194, 512, 1, 0, 2 // FusionFix texture quality: power scale, one, zero, two
+     def c195, 0.001953125, -1.33333337, 1.33333337, 0.5 // 1/512, bicubic fade, half
+     def c196, -0.5, 1.5, -2.5, 0 // Catmull-Rom weights
++    def c150, 0.5, 0.100000001, 0, 0 // FusionFix POM: the relief's metres or share of them, the most depth in a share of the view depth
++    defi i2, 2, 0, 0, 0 // FusionFix POM: the refining reads
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
+@@ -61,6 +63,7 @@
+     // --- with no normal map, the texture's brightness against its average as the height: the view ray is marched
+     // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
+     // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
++    mov r20.w, c187.y // FusionFix POM: no depth to add
+     mov r23.xy, v0
+     mov r16.w, c187.y
+     if b15
+@@ -145,11 +148,44 @@
+           add r28.y, r29.x, -r29.w // how far above it the ray still is
+           break_le r28.y, c187.x
+         endrep
++      // --- FusionFix POM: two more reads between the last two steps
++      if_le r28.y, c187.x
++        rep i2
++          add r29.x, r28.w, -r28.y
++          rcp r29.x, r29.x
++          mul r29.x, r28.w, r29.x
++          add r29.y, r28.x, -r28.z
++          mad r20.z, r29.x, r29.y, r28.z
++          mov_sat r20.z, r20.z
++              mad r27.xy, r20.z, -r21, r21.zwzw
++              texldd r29, r27, s0, r30, r31
++              dp3 r29.x, r29, c188
++              add r29.x, r29.x, -r8.y
++              mul r29.x, r29.x, c174.x
++              add_sat r29.w, r29.x, c187.z // the height there
++              add r29.x, c187.y, -r20.z
++              add r29.z, r29.x, -r29.w // how far above it the ray still is
++          cmp r28.z, r29.z, r20.z, r28.z
++          cmp r28.w, r29.z, r29.z, r28.w
++          cmp r28.x, r29.z, r28.x, r20.z
++          cmp r28.y, r29.z, r28.y, r29.z
++        endrep
++      endif
+         add r29.x, r28.w, -r28.y
+         rcp r29.x, r29.x
+         mul r29.x, r28.w, r29.x
+         add r29.y, r28.x, -r28.z
+         mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
++        // --- FusionFix POM: the hit's depth, as a share of the view depth
++        dp3 r20.w, r11, r11
++        rsq r20.w, r20.w
++        mul r20.w, r20.w, r29.y
++        mul r20.w, r20.w, r8.w
++        mul r20.w, r20.w, r12.y
++        mul r20.w, r20.w, c150.x
++        mul r20.w, r20.w, c168.w
++        min r20.w, r20.w, c150.y
++        add r20.w, r20.w, c187.y
+         mad r23.xy, r29.y, -r21, r21.zwzw
+         // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
+         dp3 r11.x, c173, r4
+@@ -495,6 +531,7 @@
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
++    mul r19.x, r19.x, r20.w // FusionFix POM
+     log r19.x, r19.x
+     mul r19.x, r19.x, c209.y
+     rcp r19.y, v9.w
+diff --git a/win32_30_nv8/rage_default/rage_defaultPS3.asm b/win32_30_nv8/rage_default/rage_defaultPS3.asm
+index 66d3214c..f0898afb 100644
+--- a/win32_30_nv8/rage_default/rage_defaultPS3.asm
++++ b/win32_30_nv8/rage_default/rage_defaultPS3.asm
+@@ -41,6 +41,8 @@
+     def c0, 0.176470593, -1, -0, 9.99999975e-006
+     def c1, 0.5, 0, 1, 0.25
+     def c189, 0.252199411, 0, 0, 0 // FusionFix: world_no_specular_mark.patch
++    def c150, 0.5, 0.100000001, 0, 0 // FusionFix POM: the relief's metres or share of them, the most depth in a share of the view depth
++    defi i2, 2, 0, 0, 0 // FusionFix POM: the refining reads
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
+@@ -53,6 +55,7 @@
+     // --- with no normal map, the texture's brightness against its average as the height: the view ray is marched
+     // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
+     // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
++    mov r25.w, c187.y // FusionFix POM: no depth to add
+     mov r23.xy, v0
+     mov r16.w, c187.y
+     if b15
+@@ -137,11 +140,44 @@
+           add r28.y, r29.x, -r29.w // how far above it the ray still is
+           break_le r28.y, c187.x
+         endrep
++      // --- FusionFix POM: two more reads between the last two steps
++      if_le r28.y, c187.x
++        rep i2
++          add r29.x, r28.w, -r28.y
++          rcp r29.x, r29.x
++          mul r29.x, r28.w, r29.x
++          add r29.y, r28.x, -r28.z
++          mad r25.z, r29.x, r29.y, r28.z
++          mov_sat r25.z, r25.z
++              mad r27.xy, r25.z, -r21, r21.zwzw
++              texldd r29, r27, s0, r30, r31
++              dp3 r29.x, r29, c188
++              add r29.x, r29.x, -r8.y
++              mul r29.x, r29.x, c174.x
++              add_sat r29.w, r29.x, c187.z // the height there
++              add r29.x, c187.y, -r25.z
++              add r29.z, r29.x, -r29.w // how far above it the ray still is
++          cmp r28.z, r29.z, r25.z, r28.z
++          cmp r28.w, r29.z, r29.z, r28.w
++          cmp r28.x, r29.z, r28.x, r25.z
++          cmp r28.y, r29.z, r28.y, r29.z
++        endrep
++      endif
+         add r29.x, r28.w, -r28.y
+         rcp r29.x, r29.x
+         mul r29.x, r28.w, r29.x
+         add r29.y, r28.x, -r28.z
+         mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
++        // --- FusionFix POM: the hit's depth, as a share of the view depth
++        dp3 r25.w, r11, r11
++        rsq r25.w, r25.w
++        mul r25.w, r25.w, r29.y
++        mul r25.w, r25.w, r8.w
++        mul r25.w, r25.w, r12.y
++        mul r25.w, r25.w, c150.x
++        mul r25.w, r25.w, c168.w
++        min r25.w, r25.w, c150.y
++        add r25.w, r25.w, c187.y
+         mad r23.xy, r29.y, -r21, r21.zwzw
+         // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
+         dp3 r11.x, c173, r4
+@@ -416,6 +452,7 @@
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
++    mul r19.x, r19.x, r25.w // FusionFix POM
+     log r19.x, r19.x
+     mul r19.x, r19.x, c209.y
+     rcp r19.y, v9.w
+diff --git a/win32_30_nv8/rage_default/rage_defaultPS4.asm b/win32_30_nv8/rage_default/rage_defaultPS4.asm
+index ff745631..fd1a3dc5 100644
+--- a/win32_30_nv8/rage_default/rage_defaultPS4.asm
++++ b/win32_30_nv8/rage_default/rage_defaultPS4.asm
+@@ -42,6 +42,8 @@
+     // def c2, 0.5, 0.001953125, 0, 0
+     def c2, 0.5, 0, 1, 0.25
+     def c189, 0.252199411, 0, 0, 0 // FusionFix: world_no_specular_mark.patch
++    def c150, 0.5, 0.100000001, 0, 0 // FusionFix POM: the relief's metres or share of them, the most depth in a share of the view depth
++    defi i2, 2, 0, 0, 0 // FusionFix POM: the refining reads
+     dcl_texcoord v0.xy
+     dcl_texcoord1 v1.xyz
+     dcl_color v2.xw
+@@ -55,6 +57,7 @@
+     // --- with no normal map, the texture's brightness against its average as the height: the view ray is marched
+     // --- through it in UV space, along the texture's gradients in the world (from the screen space slopes of the
+     // --- world position and the UVs), and every read below takes the coordinates it hits (r23).
++    mov r25.w, c187.y // FusionFix POM: no depth to add
+     mov r23.xy, v0
+     mov r16.w, c187.y
+     if b15
+@@ -139,11 +142,44 @@
+           add r28.y, r29.x, -r29.w // how far above it the ray still is
+           break_le r28.y, c187.x
+         endrep
++      // --- FusionFix POM: two more reads between the last two steps
++      if_le r28.y, c187.x
++        rep i2
++          add r29.x, r28.w, -r28.y
++          rcp r29.x, r29.x
++          mul r29.x, r28.w, r29.x
++          add r29.y, r28.x, -r28.z
++          mad r25.z, r29.x, r29.y, r28.z
++          mov_sat r25.z, r25.z
++              mad r27.xy, r25.z, -r21, r21.zwzw
++              texldd r29, r27, s0, r30, r31
++              dp3 r29.x, r29, c188
++              add r29.x, r29.x, -r8.y
++              mul r29.x, r29.x, c174.x
++              add_sat r29.w, r29.x, c187.z // the height there
++              add r29.x, c187.y, -r25.z
++              add r29.z, r29.x, -r29.w // how far above it the ray still is
++          cmp r28.z, r29.z, r25.z, r28.z
++          cmp r28.w, r29.z, r29.z, r28.w
++          cmp r28.x, r29.z, r28.x, r25.z
++          cmp r28.y, r29.z, r28.y, r29.z
++        endrep
++      endif
+         add r29.x, r28.w, -r28.y
+         rcp r29.x, r29.x
+         mul r29.x, r28.w, r29.x
+         add r29.y, r28.x, -r28.z
+         mad r29.y, r29.x, r29.y, r28.z // the hit's depth, between the last two steps
++        // --- FusionFix POM: the hit's depth, as a share of the view depth
++        dp3 r25.w, r11, r11
++        rsq r25.w, r25.w
++        mul r25.w, r25.w, r29.y
++        mul r25.w, r25.w, r8.w
++        mul r25.w, r25.w, r12.y
++        mul r25.w, r25.w, c150.x
++        mul r25.w, r25.w, c168.w
++        min r25.w, r25.w, c150.y
++        add r25.w, r25.w, c187.y
+         mad r23.xy, r29.y, -r21, r21.zwzw
+         // self-shadow: from the hit towards the sun, does the height stand above the ray climbing out?
+         dp3 r11.x, c173, r4
+@@ -413,6 +449,7 @@
+     
+     // LogDepth Write
+     mul r19.x, v9.w, c209.x
++    mul r19.x, r19.x, r25.w // FusionFix POM
+     log r19.x, r19.x
+     mul r19.x, r19.x, c209.y
+     rcp r19.y, v9.w
