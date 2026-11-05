@@ -745,13 +745,16 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
             }
             float candidateZ = 1.0 / lerp(invZ0, invZ1, hitHi);
             float surfaceZ = LinearDepth(lerp(uv0, uv1, hitHi));
-            float thickness = abs(candidateZ - 1.0 / lerp(invZ0, invZ1, hitLo)) + hitSlab;
+            float entryZ = 1.0 / lerp(invZ0, invZ1, hitLo);
+            float thickness = abs(candidateZ - entryZ) + hitSlab;
             // The thickness is a guess; where a ped or a vehicle drew its back faces the depth says
             // how far the thing really goes. A ray past that went behind it and carries on, as it
             // does behind anything thicker than the guess: it took the colour of the leg it passed
             // and widened it across a door, and stopped there it never found the road beyond.
+            // The point before the crossing is the one compared: the one after may lie several centimetres inside,
+            // past the back of a thin arm the ray did enter.
             float backZ = pow(fFarDivNear, max(tex2Dlod(BackFaceDepthTex, float4(lerp(uv0, uv1, hitHi), 0, 0)).r, fBackFacesOff)) * fNearPlane + 0.03;
-            if (abs(candidateZ - surfaceZ) < thickness && candidateZ <= backZ)
+            if (abs(candidateZ - surfaceZ) < thickness && entryZ <= backZ)
             {
                 hit = 1.0;
                 acceptedSurfaceZ = surfaceZ;

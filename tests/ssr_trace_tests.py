@@ -47,12 +47,15 @@ int SpecularTex=1;
 float wall = 5.0f;
 // Scene 3: a leg standing over the ray's path at 1.5, the ray passing behind it; the wall beyond.
 bool inLeg(float2 uv) { return scene==3 && uv.x>=0.4f && uv.x<0.5f; }
-float LinearDepth(float2 uv) { ++reads; return inLeg(uv) ? 1.5f : scene==0 ? 1000.0f : wall; }
+// Scene 4: an arm 1 cm thick the ray does enter, its front met inside the arm's pixels at x = 0.45.
+bool inArm(float2 uv) { return scene==4 && uv.x>=0.4f && uv.x<0.5f; }
+const float armFront = 1.0f/(1.0f-0.9f*0.45f);
+float LinearDepth(float2 uv) { ++reads; return inArm(uv) ? armFront : inLeg(uv) ? 1.5f : scene==0 ? 1000.0f : wall; }
 float MarchDepth(float2 uv) {
     ++reads;
     // Min-reduction includes a pole in a neighbouring pixel, absent on the ray.
     if (scene==2 && uv.x>=0.1f && uv.x<0.3f) return 0.5f;
-    return inLeg(uv) ? 1.5f : scene==0 ? 1000.0f : wall;
+    return inArm(uv) ? armFront : inLeg(uv) ? 1.5f : scene==0 ? 1000.0f : wall;
 }
 // Distinct ids: the stub tells the levels apart by them, and zero is the specular sampler's
 // absence in the other harnesses, so none of them may sit at zero here.
@@ -63,7 +66,7 @@ float4 tex2Dlod(int which,float4 p) {
     // The gloss the receiver's paint stores; the march widens its hit bracket by it.
     if (which==SpecularTex) { p.y=glossValue; return p; }
     // The leg's back, 1 cm behind its front, where the ray has already passed; 1 where nothing drew.
-    if (which==BackFaceDepthTex) { p.r=inLeg(p.uv) ? std::log(1.51f/0.05f)/std::log(1e5f) : 1.0f; return p; }
+    if (which==BackFaceDepthTex) { p.r=inArm(p.uv) ? std::log((armFront+0.01f)/0.05f)/std::log(1e5f) : inLeg(p.uv) ? std::log(1.51f/0.05f)/std::log(1e5f) : 1.0f; return p; }
     // Conservative min over the cell of whichever level the ray chose, the coarse one's cells
     // twice as wide. The test covers both cells intersecting the silhouette and cells in empty
     // space, as a real reduction would.
@@ -193,6 +196,12 @@ int main() {
         require(known.hit && std::abs(known.z-wall)<0.5f,"a ray behind the leg did not carry on to the wall");
         auto plane=trace(1,jitter,false,1920.0f,0.5f);
         require(plane.hit && std::abs(plane.z-wall)<0.5f,"no back faces drawn on the ray, yet the wall was lost");
+        // Refinement stops a few centimetres past the front: past this arm's back, though the ray entered it.
+        for (float pixels : {2.0f,8.0f,64.0f,1920.0f}) {
+            auto arm=trace(4,jitter,false,pixels,0.5f);
+            require(arm.hit && std::abs(arm.z-armFront)<0.5f,"a ray that entered a thin arm went through it");
+            ++cases;
+        }
         backFacesOff=1.0f;
         cases+=3;
     }
