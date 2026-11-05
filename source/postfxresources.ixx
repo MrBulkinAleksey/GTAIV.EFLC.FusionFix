@@ -1074,7 +1074,7 @@ public:
     // from past what hid the ray, to tell which one smeared a reflection into copies around it.
     float fSSRNeighbourFill = 0.8f;
     // SSRNeighbourFillMinDistance (m): hits nearer than this along their ray fill no misses around them (0: all do)
-    float fSSRNeighbourFillMinDistance = 3.0f;
+    float fSSRNeighbourFillMinDistance = 8.0f;
     // deferred_lighting draws SSR's colour, the scene's own light, through the game's reflection scale meant for its
     // parabolic map: 10 times globalScalars.w (c39.w, read in BindLightingInputs, 0 until then) times 2 x specular times
     // its Fresnel. On car bodies, whose clean paint takes SSR in full by its gloss, SSR_PS divides that 10 x c39.w back
@@ -2131,7 +2131,7 @@ public:
             IniFloat("REFLECTIONS", "SSRTemporal", &PostFxResource::fSSRTemporalBlend, 0.85f, 0.0f, 0.97f),
             IniFloat("REFLECTIONS", "SSRFallback", &PostFxResource::fSSRFallback, 0.8f, 0.0f, 1.0f),
             IniFloat("REFLECTIONS", "SSRNeighbourFill", &PostFxResource::fSSRNeighbourFill, 0.8f, 0.0f, 1.0f),
-            IniFloat("REFLECTIONS", "SSRNeighbourFillMinDistance", &PostFxResource::fSSRNeighbourFillMinDistance, 3.0f, 0.0f, 50.0f),
+            IniFloat("REFLECTIONS", "SSRNeighbourFillMinDistance", &PostFxResource::fSSRNeighbourFillMinDistance, 8.0f, 0.0f, 50.0f),
             IniFloat("LIGHTING", "GGXSoft", &PostFxResource::fLightsGGXSoft, 0.0f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "GGXStretchView", &PostFxResource::fLightsGGXStretchView, 1.0f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "GGXGlints", &PostFxResource::fLightsGGXGlints, 1.0f, 0.0f, 8.0f),
