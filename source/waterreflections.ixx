@@ -188,7 +188,8 @@ export void RenderWaterReflections()
 
     auto& h = R.SSREffectHandles;
     ID3DXEffect* effect = R.SSREffect;
-    SetHistorySize(effect, width, height);
+    const float invHistorySize[] = { 1.0f / width, 1.0f / height };
+    effect->SetFloatArray(h.vec2InvHistorySize, invHistorySize, 2);
 
     effect->SetTexture(h.DepthTex2D, LightingDepth());
     effect->SetTexture(h.HistoryTex2D, R.SSRHistoryTex->mD3DTexture);
