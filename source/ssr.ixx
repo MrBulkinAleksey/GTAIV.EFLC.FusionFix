@@ -193,7 +193,6 @@ export void RenderScreenSpaceReflections()
     effect->SetFloat(h.fEdgeFade, R.fSSREdgeFade);
     effect->SetFloat(h.fIntensity, R.fSSRIntensity);
     effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);
-    effect->SetFloat(h.fRayTries, float(R.nSSRRayTries));
     effect->SetFloat(h.fStepJitter, R.bSSRStepJitter ? 1.0f : 0.0f);
     effect->SetFloat(h.fStepsPerPixel, 1.0f / R.fSSRStepPixels);
     effect->SetFloat(h.fMarchFullDepth, R.SSRMarchFullDepth() ? 1.0f : 0.0f);

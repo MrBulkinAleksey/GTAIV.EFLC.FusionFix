@@ -286,7 +286,6 @@ uniform float fDenoiseRadius;     // SSR smoothing radius in pixels, see SSRDeno
 uniform float fDenoiseSSROnly;    // 1 while smoothing SSR, 0 while smoothing contact shadows
 uniform float fDenoiseHitDistance; // hit-distance MRT is valid for SSR's spatial filter
 uniform float fPassThinObjects;   // 1 lets a ray that went far behind an object carry on
-uniform float fRayTries = 3.0;    // surfaces a ray may turn down before it gives up, SSRRayTries
 uniform float fStepsPerPixel;     // march steps per pixel of a ray on this pass's target, 1 / SSRStepPixels
 uniform float fUseHiZ;            // depth hierarchy levels built this frame, 0 without them
 uniform float fStochasticSSR;
@@ -701,11 +700,8 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     float hiZLevel = (fUseHiZ > 1.0 && cellSteps * 2.0 > steps) ? 1.0 : 0.0;
     float2 hiZSize = hiZLevel > 0.0 ? vec2HiZSize1 : vec2HiZSize;
     gTraceHiZLevel = hiZLevel;
-    // The one over is fxc's: at 59, a value PixelJitter's offsets also hold, it compiled the bound
-    // as -59 and the loop left before its first step, no ray hitting anything. tests/effect_slot_tests.py
-    // checks the bounds of the compiled loops.
     [loop] [fastopt]
-    for (int iteration = 0; iteration < NUM_STEPS + 3 * (NUM_REFINE_STEPS + 1) + 1; ++iteration)
+    for (int iteration = 0; iteration < NUM_STEPS + 2 * (NUM_REFINE_STEPS + 1); ++iteration)
     {
         [branch]
         if (refineLeft >= 0)
@@ -735,9 +731,7 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
                 acceptedSurfaceZ = surfaceZ;
                 break;
             }
-            // Up to three: a ray with a small step offset can spend two on its own surface and an
-            // outline, and came out as a dot with no reflection among neighbours that all hit.
-            if ((float) candidates >= fRayTries)
+            if (candidates >= 2)
                 break;
 
             // Resume after the rejected interval. Full-size depth, not the dilated

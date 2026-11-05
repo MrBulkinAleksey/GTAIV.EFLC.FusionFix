@@ -329,7 +329,7 @@ public:
         D3DXHANDLE NormalTex2D, SSRResultTex2D, DebugTex2D, fDebugMode, techSSRDebug, techSSRDebugCopy;
         D3DXHANDLE fUseGBufferNormals;
         D3DXHANDLE PreWaterTex2D, PostWaterTex2D, fUseWaterMask, PrevDepthTex2D, fUsePrevDepth, vec2PrevDepthRange;
-        D3DXHANDLE fRayTries, fDenoiseRadius, fDenoiseSSROnly, fDenoiseHitDistance, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, fNeighbourFill, fFillMinDistance, fFillPixelScale, fSpreadRadius, fVehicleScale;
+        D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, fDenoiseHitDistance, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, fNeighbourFill, fFillMinDistance, fFillPixelScale, fSpreadRadius, fVehicleScale;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, fCSGrassGloss, techContactShadows;
         D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, vec2InvHistorySize, fNearPlane, fFarDivNear, vec4ProjInfo;
@@ -1194,8 +1194,6 @@ public:
         return TransparentTexture;
     }
     int nSSRSteps = 32;
-    // SSRRayTries: surfaces a ray may turn down before it gives up, to compare 2 and 3.
-    int nSSRRayTries = 3;
     int nSSRRefineSteps = 8;
     float fSSRMaxDistance = 24.0f;
     float fSSRThickness = 0.3f;
@@ -1733,7 +1731,6 @@ public:
                 h.fDenoiseSSROnly = SSREffect->GetParameterByName(nullptr, "fDenoiseSSROnly");
                 h.fDenoiseHitDistance = SSREffect->GetParameterByName(nullptr, "fDenoiseHitDistance");
                 h.fPassThinObjects = SSREffect->GetParameterByName(nullptr, "fPassThinObjects");
-                h.fRayTries = SSREffect->GetParameterByName(nullptr, "fRayTries");
                 h.fStepJitter = SSREffect->GetParameterByName(nullptr, "fStepJitter");
                 h.fTowardCamera = SSREffect->GetParameterByName(nullptr, "fTowardCamera");
                 h.fReflectionBlur = SSREffect->GetParameterByName(nullptr, "fReflectionBlur");
@@ -2121,7 +2118,6 @@ public:
             IniFloat("REFLECTIONS", "SSRIntensity", &PostFxResource::fSSRIntensity, 1.0f, 0.0f, 1.0f),
             IniFloat("REFLECTIONS", "SSRWetGround", &PostFxResource::fSSRWetGround, 1.5f, 0.0f, 8.0f),
             IniFloat("REFLECTIONS", "SSRStepPixels", &PostFxResource::fSSRStepPixels, 2.0f, 1.0f, 8.0f),
-            IniInt("REFLECTIONS", "SSRRayTries", &PostFxResource::nSSRRayTries, 3, 1, 3),
             IniFloat("REFLECTIONS", "SSRSmoothing", &PostFxResource::fSSRDenoiseRadius, 2.0f, 0.0f, 8.0f),
             IniFlag("REFLECTIONS", "SSRPastThinObjects", &PostFxResource::bSSRPassThinObjects, 1),
             IniFlag("REFLECTIONS", "SSRStepJitter", &PostFxResource::bSSRStepJitter, 1),
