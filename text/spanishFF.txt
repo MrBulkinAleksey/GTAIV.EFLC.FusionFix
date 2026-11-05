@@ -361,6 +361,12 @@ Volumetric Light
 [GGXLighting]
 GGX Lighting
 
+[EvenLampLight]
+Even Lamp Light
+
+[SoftHighlights]
+Soft Highlights
+
 [WetWeather]
 Wet Weather
 

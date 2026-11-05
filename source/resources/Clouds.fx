@@ -81,6 +81,7 @@ float fSilver;            // the game's CloudInscatteringRange: the brightening 
 float fMinLight;          // VolumetricCloudsMinLight: the least of the sun's light any part of a cloud keeps
 float4 vec4ScatterExtinction; // the share of the extinction each octave of the light scattered many times takes
 float4 vec4ScatterWeight;     // and its weight, the four summing to 1
+float fGroundLight;           // VolumetricCloudsGroundLight: the sunlit ground's light on the bases
 float fLightJitter;           // VolumetricCloudsLightJitter: 1 slides the steps towards the sun per pixel and frame, 0 keeps them fixed
 float fMottle;            // VolumetricCloudsMottle: how much the small billows at the surface fleck the light
 float fBacklight;         // with the sun low, the share of their light the clouds straight towards it keep
@@ -688,6 +689,7 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     float3 termGlow = vec3GlowColour * (forward * sums.glow * (full ? fGlowBoost : 1.0));
     float3 termSunPower = 0.0;
     float3 termTop = 0.0;
+    float3 termGround = 0.0;
     float shadeMul = 1.0;
     [branch]
     if (full)
@@ -699,6 +701,10 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         termSunPower = sunLit * (fSunPower * (0.45 * lobe4 * lobe4 + 0.2 * lobe2) * sums.sun);
         // The sunlit tops brighter still, at four tenths more.
         termTop = sunLit * (0.4 * sums.top);
+        // The sunlit ground throws light back up, warm, on the shaded bases: the lower in the layer, the more,
+        // gone at the top. The sky's light alone left the undersides one even grey whatever lay below.
+        float below = 1.0 - sums.height / cover;
+        termGround = sunLit * float3(1.0, 0.92, 0.8) * (fGroundLight * below * below * sums.shade);
         // The undersides darkened by the sky the cloud above them hides, by the cloud's height in the
         // layer alone, whatever the sun does: up to 15% at the base, none from two thirds up.
         shadeMul = 1.0 - 0.15 * (1.0 - smoothstep(0.0, 0.65, sums.height / cover));
@@ -714,7 +720,7 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         float fleck = 0.65 * tex3Dlod(DetailTex, float4(q, 0)).r + 0.35 * tex3Dlod(DetailTex, float4(q * 2.7 + 0.21, 0)).g - 0.5;
         shadeMul *= 1.0 + 2.0 * fMottle * fleck * exp(-sums.depth / 12000.0);
     }
-    float3 body = (termBase + termSilver + termSunset + termSunPower + termTop) * shadeMul;
+    float3 body = (termBase + termGround + termSilver + termSunset + termSunPower + termTop) * shadeMul;
     float3 colour = body + termGlow;
 
     // A soft knee from three quarters of the ceiling up, on the cloud's mean colour: the glow rises

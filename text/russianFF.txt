@@ -361,6 +361,12 @@ Logitech LightSync RGB
 [GGXLighting]
 Освещение GGX
 
+[EvenLampLight]
+Ровный свет ламп
+
+[SoftHighlights]
+Мягкие блики
+
 [WetWeather]
 Мокрая погода
 

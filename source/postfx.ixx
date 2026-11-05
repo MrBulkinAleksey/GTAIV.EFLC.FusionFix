@@ -2886,6 +2886,10 @@ public:
             const float c165[4] = { on ? R.fLightsGGXFillLights : 0.0f, on ? R.fLightsGGXSun : 0.0f, enabled ? R.fLightsGGXEnvironment : 0.0f, R.fLightsGGXMax };
             pDevice->SetPixelShaderConstantF(200, c200, 1);
             pDevice->SetPixelShaderConstantF(165, c165, 1);
+            // Even Lamp Light: c194 x the strength, y the reference luminance, z the lowest scale; all views alike, so it
+            // stays set for the reflections and mirrors too.
+            const float c194[4] = { R.LampAlbedoResponseEnabled() ? R.fLampAlbedoStrength : 0.0f, R.fLampAlbedoReference, 0.25f, 0.0f };
+            pDevice->SetPixelShaderConstantF(194, c194, 1);
             // c183: alpha squared = w / (x n + 2), the peak times y + z alpha squared; c184: x a widening
             // added to alpha squared, y how far the stretch turns from the light to the view.
             const float soft = R.fLightsGGXSoft;

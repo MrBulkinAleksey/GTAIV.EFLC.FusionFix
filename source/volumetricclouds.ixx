@@ -397,6 +397,7 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     // least of the light inside them stays: lowered with the sun, it darkened the sides the sun
     // lights too, grey where they should take its colour.
     effect->SetFloat(effect->GetParameterByName(nullptr, "fMinLight"), R.fVolumetricCloudsMinLight);
+    effect->SetFloat(effect->GetParameterByName(nullptr, "fGroundLight"), R.fVolumetricCloudsGroundLight);
     {
         // The octaves of the light scattered many times: four at a fifth of the extinction each, or three at half.
         const D3DXVECTOR4 extinction = R.bVolumetricCloudsScatterTail ? D3DXVECTOR4(1.0f, 0.2f, 0.04f, 0.008f) : D3DXVECTOR4(1.0f, 0.5f, 0.25f, 0.0f);

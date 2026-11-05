@@ -452,6 +452,15 @@ public:
         static auto p = FusionFixSettings.GetRef("PREF_GGX_LIGHTING");
         return !p || p->get() != 0;
     }
+    // Even Lamp Light in the graphics menu (PREF_LAMP_ALBEDO_RESPONSE): a lamp's diffuse light scales with
+    // clamp(reference / the surface's luminance, 0.25, 4), by the strength. zz_zz_zz_light_response.py, c194.
+    bool LampAlbedoResponseEnabled() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_LAMP_ALBEDO_RESPONSE");
+        return !p || p->get() != 0;
+    }
+    float fLampAlbedoStrength = 0.5f;
+    float fLampAlbedoReference = 0.35f;
     float fLightsGGXFresnel = 0.5f;
     float fLightsGGXSize = 0.05f;
     float fLightsGGXStretch = 0.5f;
@@ -577,6 +586,8 @@ public:
     // The least of the sun's light any part of a cloud keeps, however deep in its shadow: lighter,
     // airier bases than the light's march alone gives.
     float fVolumetricCloudsMinLight = 0.1f;
+    // The sunlit ground's light on the clouds' bases, warm and over their shaded part (fGroundLight in Clouds.fx).
+    float fVolumetricCloudsGroundLight = 0.25f;
     // [WEATHER] VolumetricCloudsScatterTail: the light scattered many times inside a cloud in four octaves at a
     // fifth of the extinction each (Wrenninge's, as al-ro's clouds have it), which reach deep and fall off
     // smoothly; 0: three at half each, as before, spent 0.3 of the layer in, with VolumetricCloudsMinLight 0.25.
@@ -2084,6 +2095,8 @@ public:
             IniFloat("LIGHTING", "SpecularSheen", &PostFxResource::fSpecularSheen, 0.1f, 0.0f, 50.0f),
             IniFloat("LIGHTING", "GGXLights", &PostFxResource::fLightsGGX, 1.0f, 0.0f, 4.0f),
             IniFloat("LIGHTING", "GGXFresnel", &PostFxResource::fLightsGGXFresnel, 0.5f, 0.0f, 1.0f),
+            IniFloat("LIGHTING", "LampAlbedoStrength", &PostFxResource::fLampAlbedoStrength, 0.5f, 0.0f, 1.0f),
+            IniFloat("LIGHTING", "LampAlbedoReference", &PostFxResource::fLampAlbedoReference, 0.35f, 0.05f, 1.0f),
             IniFloat("LIGHTING", "GGXLampSize", &PostFxResource::fLightsGGXSize, 0.05f, 0.0f, 2.0f),
             IniFloat("LIGHTING", "GGXStretch", &PostFxResource::fLightsGGXStretch, 0.5f, 0.0f, 4.0f),
             IniFloat("LIGHTING", "GGXHeadlightSpacing", &PostFxResource::fLightsGGXHeadlights, 0.65f, 0.0f, 2.0f),
@@ -2135,6 +2148,7 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsMoonlight", &PostFxResource::fVolumetricCloudsMoonlight, 0.2f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsSkyLight", &PostFxResource::fVolumetricCloudsSkyLight, 0.5f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsMinLight", &PostFxResource::fVolumetricCloudsMinLight, 0.1f, 0.0f, 0.9f),
+            IniFloat("WEATHER", "VolumetricCloudsGroundLight", &PostFxResource::fVolumetricCloudsGroundLight, 0.25f, 0.0f, 2.0f),
             IniFlag("WEATHER", "VolumetricCloudsScatterTail", &PostFxResource::bVolumetricCloudsScatterTail, 1),
             IniFlag("WEATHER", "VolumetricCloudsLightJitter", &PostFxResource::bVolumetricCloudsLightJitter, 1),
             IniFloat("WEATHER", "VolumetricCloudsSkyMatch", &PostFxResource::fVolumetricCloudsSkyMatch, 2.0f, 0.0f, 20.0f),
