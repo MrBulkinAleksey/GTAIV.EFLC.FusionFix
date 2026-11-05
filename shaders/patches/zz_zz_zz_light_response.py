@@ -5,6 +5,8 @@
 #  - Even Lamp Light (LampAlbedoResponse, c194 set in postfx.ixx): in each deferred_lighting light shader the albedo
 #    that lights the diffuse term is scaled by 1 + response * (clamp(reference / luminance, 0.25, 4) - 1), so dark
 #    surfaces such as asphalt return more of a lamp's light and bright ones less. The hue stays. Specular is not touched.
+#    The luminance is that around the pixel, two reads to either side: taken from the pixel itself the scale flattened the
+#    texture's own contrast, and peds came out looking like plastic.
 #    c194 all zero (off) gives a scale of 1.
 #
 #  - Soft Highlights (SoftHighlights, c195 set in shaders.ixx): in the composite shaders that carry the tone mapping,
@@ -25,8 +27,8 @@ def strip(line):
     return line.split("//")[0].strip()
 
 
-def x_free(lines, start, reg):
-    """reg.x holds nothing the code after start reads: the first later mention of its x is a plain write."""
+def comp_free(lines, start, reg, comp):
+    """reg.comp holds nothing the code after start reads: the first later mention of it is a plain write."""
     for raw in lines[start:]:
         line = strip(raw)
         if not line or line.startswith(("def", "dcl")):
@@ -38,18 +40,18 @@ def x_free(lines, start, reg):
         reads = operands[1:] if not op.startswith(("if", "break", "call", "rep", "loop", "texkill")) else operands
         for read in reads:
             match = re.fullmatch(rf"-?{reg}(_abs)?(\.[xyzw]+)?", read)
-            if match and (match.group(2) is None or "x" in match.group(2)):
+            if match and (match.group(2) is None or comp in match.group(2)):
                 return False
         match = re.fullmatch(rf"{reg}(\.[xyzw]+)?", operands[0])
-        if match and (match.group(1) is None or "x" in match.group(1)):
+        if match and (match.group(1) is None or comp in match.group(1)):
             return True
     return True
 
 
-def temp(lines, start, avoid):
-    for number in list(range(31, 11, -1)):
+def temp(lines, start, avoid, comps="x"):
+    for number in range(31, 11, -1):
         reg = f"r{number}"
-        if reg not in avoid and x_free(lines, start, reg):
+        if reg not in avoid and all(comp_free(lines, start, reg, comp) for comp in comps):
             return reg
     raise SystemExit("no free temp")
 
@@ -62,46 +64,65 @@ def insert_defs(lines, text):
     raise SystemExit("no dcl")
 
 
-# Where each light shader has its diffuse albedo: (register, the line after which it is ready).
+# Where each light shader reads its diffuse albedo: register, coordinates, sampler. PS16 and PS17 read a projected texture
+# on s0, their albedo is on s1.
 SITES = {
-    6: ("r4", r"texld r4, r0, s0"),
-    7: ("r2", r"texld r2, r0, s0"),
-    8: ("r4", r"texld r4, r0, s0"),
-    9: ("r2", r"texld r2, r0, s0"),
-    10: ("r3", r"texld r3, r0, s0"),
-    11: ("r2", r"texld r2, r0, s0"),
-    12: ("r2", r"texld r2, r0, s0"),
-    14: ("r4", r"texld r4, r0.zwzw, s0"),
-    15: ("r0", r"texld r0, r0, s0"),
+    6: ("r4", "r0", "r0.xy", "s0"),
+    7: ("r2", "r0", "r0.xy", "s0"),
+    8: ("r4", "r0", "r0.xy", "s0"),
+    9: ("r2", "r0", "r0.xy", "s0"),
+    10: ("r3", "r0", "r0.xy", "s0"),
+    11: ("r2", "r0", "r0.xy", "s0"),
+    12: ("r2", "r0", "r0.xy", "s0"),
+    14: ("r4", "r0.zwzw", "r0.zw", "s0"),
+    15: ("r0", "r0", "r0.xy", "s0"),
+    16: ("r3", "r1", "r1.xy", "s1"),
+    17: ("r3", "r1", "r1.xy", "s1"),
 }
-# PS16 and PS17 read a projected texture on s0: their albedo is r3, the diffuse scale goes right before it is used.
-BEFORE = {16: ("r3", r"mul r2.xyz, r3, r6"), 17: ("r3", r"mul r2.xyz, r3, r6")}
 
 
 def albedo(n):
     path = root / "deferred_lighting" / f"deferred_lightingPS{n}.asm"
     lines = path.read_text().split("\n")
-    reg, pattern = SITES.get(n) or BEFORE[n]
+    reg, operand, uv, sampler = SITES[n]
+    pattern = f"texld {reg}, {operand}, {sampler}"
     found = [i for i, line in enumerate(lines) if strip(line) == pattern]
     if len(found) != 1:
         raise SystemExit(f"PS{n}: {pattern}: {len(found)} matches")
-    at = found[0] + (1 if n in SITES else 0)
-    t = temp(lines, at, {reg})
+    at = found[0]
+    uv_reg = uv.split(".")[0]
+    t = temp(lines, at, {reg, uv_reg})
+    u = temp(lines, at, {reg, uv_reg, t}, "xyzw")
+    lines[at + 1:at + 1] = [f"    mul {reg}.xyz, {reg}, {t}.x // FusionFix Even Lamp Light"]
     lines[at:at] = [
-        "    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale): see zz_zz_zz_light_response.py",
-        f"    dp3 {t}.x, {reg}, c191",
-        f"    rcp {t}.x, {t}.x",
-        f"    mul {t}.x, {t}.x, c194.y",
-        f"    max {t}.x, {t}.x, c194.z",
-        f"    min {t}.x, {t}.x, c191.w",
-        f"    add {t}.x, {t}.x, c192.x",
-        f"    mul {t}.x, {t}.x, c194.x",
-        f"    add {t}.x, {t}.x, -c192.x",
-        f"    mul {reg}.xyz, {reg}, {t}.x",
+        "    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale, how far apart its reads are):",
+        "    // --- see zz_zz_zz_light_response.py",
+        f"    mov {t}.x, -c192.x",
+        "    if_ne -c194_abs.x, c194_abs.x",
+        f"      mov {u}.xy, {uv}",
+        f"      mov {u}.zw, c192.y",
+        f"      add {u}.xy, {u}, c194.w",
+        f"      texldl {u}, {u}, {sampler}",
+        f"      dp3 {t}.x, {u}, c191",
+        f"      mov {u}.xy, {uv}",
+        f"      mov {u}.zw, c192.y",
+        f"      add {u}.xy, {u}, -c194.w",
+        f"      texldl {u}, {u}, {sampler}",
+        f"      dp3 {u}.x, {u}, c191",
+        f"      add {t}.x, {t}.x, {u}.x",
+        f"      mul {t}.x, {t}.x, c192.z // the surface's brightness around the pixel",
+        f"      rcp {t}.x, {t}.x",
+        f"      mul {t}.x, {t}.x, c194.y",
+        f"      max {t}.x, {t}.x, c194.z",
+        f"      min {t}.x, {t}.x, c191.w",
+        f"      add {t}.x, {t}.x, c192.x",
+        f"      mul {t}.x, {t}.x, c194.x",
+        f"      add {t}.x, {t}.x, -c192.x",
+        "    endif",
     ]
     insert_defs(lines, [
         "    def c191, 0.2126, 0.7152, 0.0722, 4 // FusionFix Even Lamp Light: luminance, the highest scale",
-        "    def c192, -1, 0, 0, 0 // FusionFix Even Lamp Light",
+        "    def c192, -1, 0, 0.5, 0 // FusionFix Even Lamp Light",
     ])
     path.write_text("\n".join(lines))
 
@@ -140,7 +161,7 @@ def composite(n):
     path.write_text("\n".join(lines))
 
 
-for n in list(SITES) + list(BEFORE):
+for n in SITES:
     albedo(n)
 for n in (11, 12, 14, 24, 26, 28):
     composite(n)
