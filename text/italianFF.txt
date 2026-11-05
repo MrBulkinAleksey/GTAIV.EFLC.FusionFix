@@ -391,6 +391,9 @@ Walls block headlights
 [VolumeClouds]
 Volumetric Clouds
 
+[PhysicalClouds]
+Physical Clouds
+
 [PbrSky]
 Physical Sky
 

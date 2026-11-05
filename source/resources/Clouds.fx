@@ -82,6 +82,8 @@ float fMinLight;          // VolumetricCloudsMinLight: the least of the sun's li
 float4 vec4ScatterExtinction; // the share of the extinction each octave of the light scattered many times takes
 float4 vec4ScatterWeight;     // and its weight, the four summing to 1
 float fGroundLight;           // VolumetricCloudsGroundLight: the sunlit ground's light on the bases
+// Physical Clouds (VolumetricCloudsModel): x 1 on, y the forward lobe's g, z the sun's share, w the sky's share. See Phase.
+float4 vec4Model;
 float fLightJitter;           // VolumetricCloudsLightJitter: 1 slides the steps towards the sun per pixel and frame, 0 keeps them fixed
 float fMottle;            // VolumetricCloudsMottle: how much the small billows at the surface fleck the light
 float fBacklight;         // with the sun low, the share of their light the clouds straight towards it keep
@@ -397,6 +399,19 @@ float3 RayDirection(float2 vpos, out float rayScale)
     return dir / rayScale;
 }
 
+// Physical Clouds: how much each of the light's octaves sends along the view, against even scattering (1). Two
+// Henyey-Greenstein lobes as in Hillaire 2016: a forward one, whose g halves with each octave as light scattered more
+// often loses its direction (Wrenninge et al. 2013), and a weak backward one, so the sides seen with the sun behind the
+// eye stay lit. Held within 8: the peak next to the sun is some forty, and thin rims went white over several pixels.
+float4 Phase(float cosTheta)
+{
+    float4 g = vec4Model.y * float4(1.0, 0.5, 0.25, 0.125);
+    float4 denom = 1.0 + g * g - 2.0 * g * cosTheta;
+    float4 forward = (1.0 - g * g) / (denom * sqrt(denom));
+    float back = 0.96 / pow(abs(1.04 + 0.4 * cosTheta), 1.5);
+    return min(0.5 * (forward + back), 8.0);
+}
+
 // steps, stepScale, lightSteps and lightStart: the march's budget. The scene's clouds take CLOUD_STEPS,
 // 1, LIGHT_STEPS and 0.05; the reflections (Clouds_PS) a quarter of the steps, each four times as long,
 // and two steps towards the sun from a quarter of the layer: drawn at the full size of a 1024 x 1024
@@ -453,6 +468,10 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
     float opaque = full ? 0.01 : REFLECTION_OPAQUE;
     // Looking away from the sun, how much the powder effect darkens the sun's light (below).
     float powderView = full ? 0.35 - 0.35 * dot(dir, vec3SunDir) : 0.0;
+    float4 modelWeight = 0.0;
+    [branch]
+    if (vec4Model.x > 0.5)
+        modelWeight = vec4ScatterWeight * Phase(dot(dir, vec3SunDir));
 
     // [fastopt]: without it D3DX spent close to a minute on this loop while the game loaded.
     [loop] [fastopt]
@@ -534,7 +553,9 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
             float tau = lightDepth * sigma * fLightAbsorption;
             // Never below VolumetricCloudsMinLight of the sun, however deep in the cloud: for looks, the
             // bases and the shaded sides stay light and airy rather than heavy.
-            float sun = lerp(fMinLight, 1.0, dot(exp(-tau * vec4ScatterExtinction), vec4ScatterWeight)) * fLightStrength;
+            // Physical Clouds: each octave by its phase, with no floor: the sky's light is its own term, below.
+            float scattered = dot(exp(-tau * vec4ScatterExtinction), vec4Model.x > 0.5 ? modelWeight : vec4ScatterWeight);
+            float sun = (vec4Model.x > 0.5 ? scattered : lerp(fMinLight, 1.0, scattered)) * fLightStrength;
             // The billows shade each other: where a coarse billow stands a billow's size, 120 m,
             // towards the sun, the sample takes less of it, by its own density. The march above
             // leaves the detail out, and its first steps are too short for a billow to shade the
@@ -572,7 +593,8 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
             // the tops than at the base, less in the folds between the billows; about 1 on average.
             // With only a fifth darker at the base, a cloud the sun did not reach, its shaded side or
             // any cloud at dusk, came out one flat grey. The reflections leave the folds out, for the slots.
-            sums.shade += weight * (1.0 - sun) * (0.65 + 0.65 * sqrt(h)) * (full ? 1.0 - 0.6 * crease * crease : 1.0);
+            // Physical Clouds: the sky lights every sample, whatever the sun does.
+            sums.shade += weight * (vec4Model.x > 0.5 ? 1.0 : 1.0 - sun) * (0.65 + 0.65 * sqrt(h)) * (full ? 1.0 - 0.6 * crease * crease : 1.0);
             // The silver lining is the thin edges' alone: with a third of it on the thick body, a cloud
             // before the sun in game came out half again as bright as its own light.
             sums.silver += weight * sun * thin * thin;
@@ -680,13 +702,16 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     shadeColour = lerp(shadeColour, dot(shadeColour, float3(0.2126, 0.7152, 0.0722)) * hue, vec3SkyHue.x);
     sunLit = lerp(sunLit, dot(sunLit, float3(0.2126, 0.7152, 0.0722)) * hue, vec3SkyHue.y);
     // Each term apart, so VolumetricCloudsDebug 3 to 11 can show it alone.
-    float3 termBase = shadeColour * sums.shade + sunLit * sums.sun;
+    bool physical = vec4Model.x > 0.5;
+    float3 termBase = physical ? shadeColour * (vec4Model.w * sums.shade) + sunLit * (vec4Model.z * sums.sun)
+                               : shadeColour * sums.shade + sunLit * sums.sun;
     // Towards the sun only: the game's cos^2 lit the clouds' edges as brightly with the sun behind the
     // eye, and every cloud across the sky had a white outline.
     float towardsSun = max(cosTheta, 0.0);
-    float3 termSilver = sunLit * (fSilver * towardsSun * towardsSun * sums.silver);
-    float3 termSunset = vec3SunsetColour * (sunsetLobe * sums.sun);
-    float3 termGlow = vec3GlowColour * (forward * sums.glow * (full ? fGlowBoost : 1.0));
+    // Physical Clouds: the phase has them all in the sun's term.
+    float3 termSilver = physical ? 0.0 : sunLit * (fSilver * towardsSun * towardsSun * sums.silver);
+    float3 termSunset = physical ? 0.0 : vec3SunsetColour * (sunsetLobe * sums.sun);
+    float3 termGlow = physical ? 0.0 : vec3GlowColour * (forward * sums.glow * (full ? fGlowBoost : 1.0));
     float3 termSunPower = 0.0;
     float3 termTop = 0.0;
     float3 termGround = 0.0;
@@ -698,9 +723,9 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         // too, in a softer lobe than the glow's, by the weather.
         // By the sun that reaches the cloud alone: the square root of it, which lifted the dark
         // bodies of clouds before the sun as much as their lit sides, washed them out in game.
-        termSunPower = sunLit * (fSunPower * (0.45 * lobe4 * lobe4 + 0.2 * lobe2) * sums.sun);
+        termSunPower = physical ? 0.0 : sunLit * (fSunPower * (0.45 * lobe4 * lobe4 + 0.2 * lobe2) * sums.sun);
         // The sunlit tops brighter still, at four tenths more.
-        termTop = sunLit * (0.4 * sums.top);
+        termTop = physical ? 0.0 : sunLit * (0.4 * sums.top);
         // The sunlit ground throws light back up, warm, on the shaded bases: the lower in the layer, the more,
         // gone at the top. The sky's light alone left the undersides one even grey whatever lay below.
         float below = 1.0 - sums.height / cover;
@@ -732,7 +757,7 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
     // With the sun low, the clouds towards it are lit from behind: their bodies darker than the sky
     // behind them, the glow of their thin edges kept (fBacklight, fGlowBoost); across the sky from it
     // they face its light and keep theirs.
-    float backlit = full ? lerp(1.0, fBacklight, smoothstep(-0.2, 0.8, cosTheta)) : 1.0;
+    float backlit = full && !physical ? lerp(1.0, fBacklight, smoothstep(-0.2, 0.8, cosTheta)) : 1.0;
     colour = (body * backlit + termGlow) * kneeMul;
 
     // The clouds against the sky. The game's CloudColor at its HDR exposure came out several times
@@ -759,7 +784,7 @@ float4 Light(CloudSums sums, float3 dir, bool full, float2 uv)
         // washed out white. By the weather's glow, so rain's deck shows little of it.
         float3 halo = sky * (min(behind, 3.0 * skyLuma) - skyLuma) / max(behind, 1e-4);
         float band = 4.0 * cover * (1.0 - cover);
-        float3 termRim = max(halo, 0.0) * (band * band * fGlow / 6.0);
+        float3 termRim = physical ? 0.0 : max(halo, 0.0) * (band * band * fGlow / 6.0);
         colour += termRim;
         // The haze mixes in the sky behind the cloud held within twice the frame's sky, where it used
         // to let the sky through: a cloud 3 km off let a tenth of it through, and with the sun's

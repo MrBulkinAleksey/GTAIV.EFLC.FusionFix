@@ -400,8 +400,12 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     effect->SetFloat(effect->GetParameterByName(nullptr, "fGroundLight"), R.fVolumetricCloudsGroundLight);
     {
         // The octaves of the light scattered many times: four at a fifth of the extinction each, or three at half.
-        const D3DXVECTOR4 extinction = R.bVolumetricCloudsScatterTail ? D3DXVECTOR4(1.0f, 0.2f, 0.04f, 0.008f) : D3DXVECTOR4(1.0f, 0.5f, 0.25f, 0.0f);
-        const D3DXVECTOR4 weight = R.bVolumetricCloudsScatterTail ? D3DXVECTOR4(1.0f, 0.5f, 0.25f, 0.125f) / 1.875f : D3DXVECTOR4(1.0f, 0.5f, 0.25f, 0.0f) / 1.75f;
+        // Physical Clouds: octaves at Wrenninge's terms, a weaker extinction than weight falls so that no energy is made.
+        const bool physical = R.VolumetricCloudsPhysical();
+        const D3DXVECTOR4 model(physical ? 1.0f : 0.0f, R.fVolumetricCloudsModelForward, R.fVolumetricCloudsModelSun, R.fVolumetricCloudsModelSky);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4Model"), &model);
+        const D3DXVECTOR4 extinction = physical ? D3DXVECTOR4(1.0f, 0.4f, 0.16f, 0.064f) : R.bVolumetricCloudsScatterTail ? D3DXVECTOR4(1.0f, 0.2f, 0.04f, 0.008f) : D3DXVECTOR4(1.0f, 0.5f, 0.25f, 0.0f);
+        const D3DXVECTOR4 weight = physical ? D3DXVECTOR4(1.0f, 0.6f, 0.36f, 0.216f) / 2.176f : R.bVolumetricCloudsScatterTail ? D3DXVECTOR4(1.0f, 0.5f, 0.25f, 0.125f) / 1.875f : D3DXVECTOR4(1.0f, 0.5f, 0.25f, 0.0f) / 1.75f;
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4ScatterExtinction"), &extinction);
         effect->SetVector(effect->GetParameterByName(nullptr, "vec4ScatterWeight"), &weight);
     }

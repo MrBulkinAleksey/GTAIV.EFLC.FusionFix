@@ -2166,6 +2166,7 @@ public:
             { 0, "PREF_CAR_MIRRORS",            "MISC",       "CarMirrors",                         "",                           1, nullptr, 0, 1 },
             { 0, "PREF_LAMP_ALBEDO_RESPONSE",   "LIGHTING",   "LampAlbedoResponse",                 "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SOFT_HIGHLIGHTS",        "LIGHTING",   "SoftHighlights",                     "",                           1, nullptr, 0, 1 },
+            { 0, "PREF_CLOUD_MODEL",            "WEATHER",    "VolumetricCloudsModel",              "",                           0, nullptr, 0, 1 },
         };
 
         for (auto& setting : arr)
@@ -2419,6 +2420,7 @@ public:
             AddRow(category, "SunFlare", "PREF_SUN_FLARE", 2, toggle);
             AddRow(category, "CarMirrors", "PREF_CAR_MIRRORS", 2, toggle);
             AddRow(category, "VolumeClouds", "PREF_VOLUMETRIC_CLOUDS", 2, toggle);
+            AddRow(category, "PhysicalClouds", "PREF_CLOUD_MODEL", 2, toggle);
             AddRow(category, "PbrSky", "PREF_PBR_SKY", 2, toggle);
             AddRow(category, "AerialPersp", "PREF_AERIAL_PERSPECTIVE", 4, "MENU_DISPLAY_AERIAL");
             AddRow(category, "GGXLighting", "PREF_GGX_LIGHTING", 2, toggle);

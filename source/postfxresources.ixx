@@ -586,6 +586,17 @@ public:
     // The least of the sun's light any part of a cloud keeps, however deep in its shadow: lighter,
     // airier bases than the light's march alone gives.
     float fVolumetricCloudsMinLight = 0.1f;
+    // Physical Clouds in the graphics menu (PREF_CLOUD_MODEL, [WEATHER] VolumetricCloudsModel): the sun's light through
+    // the clouds by octaves of a two lobe phase function, and the sky's as a term of its own, in place of the game's
+    // cloud terms (silver lining, sunset colour, glow). Shapes and the march stay as they are. Phase in Clouds.fx.
+    bool VolumetricCloudsPhysical() const
+    {
+        static auto p = FusionFixSettings.GetRef("PREF_CLOUD_MODEL");
+        return p && p->get() != 0;
+    }
+    float fVolumetricCloudsModelForward = 0.8f;
+    float fVolumetricCloudsModelSun = 1.0f;
+    float fVolumetricCloudsModelSky = 0.7f;
     // The sunlit ground's light on the clouds' bases, warm and over their shaded part (fGroundLight in Clouds.fx).
     float fVolumetricCloudsGroundLight = 0.25f;
     // [WEATHER] VolumetricCloudsScatterTail: the light scattered many times inside a cloud in four octaves at a
@@ -2149,6 +2160,9 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsSkyLight", &PostFxResource::fVolumetricCloudsSkyLight, 0.5f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsMinLight", &PostFxResource::fVolumetricCloudsMinLight, 0.1f, 0.0f, 0.9f),
             IniFloat("WEATHER", "VolumetricCloudsGroundLight", &PostFxResource::fVolumetricCloudsGroundLight, 0.25f, 0.0f, 2.0f),
+            IniFloat("WEATHER", "VolumetricCloudsModelForward", &PostFxResource::fVolumetricCloudsModelForward, 0.8f, 0.0f, 0.95f),
+            IniFloat("WEATHER", "VolumetricCloudsModelSun", &PostFxResource::fVolumetricCloudsModelSun, 1.0f, 0.0f, 4.0f),
+            IniFloat("WEATHER", "VolumetricCloudsModelSky", &PostFxResource::fVolumetricCloudsModelSky, 0.7f, 0.0f, 4.0f),
             IniFlag("WEATHER", "VolumetricCloudsScatterTail", &PostFxResource::bVolumetricCloudsScatterTail, 1),
             IniFlag("WEATHER", "VolumetricCloudsLightJitter", &PostFxResource::bVolumetricCloudsLightJitter, 1),
             IniFloat("WEATHER", "VolumetricCloudsSkyMatch", &PostFxResource::fVolumetricCloudsSkyMatch, 2.0f, 0.0f, 20.0f),
