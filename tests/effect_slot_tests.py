@@ -63,6 +63,29 @@ LIGHT_ENTRIES = {
 }
 
 SLOTS = re.compile(r'approximately (\d+) instruction slots')
+DEF = re.compile(r'^\s*def c(\d+), (\S+), (\S+), (\S+), (\S+)\s*$', re.M)
+LOOP_EXIT = re.compile(r'^\s*mov (r\d+\.[xyzw]), (-?)c(\d+)\.([xyzw])\s*\n\s*break_ge \S+, (r\d+\.[xyzw])\s*$', re.M)
+# The march again at other SSRSteps, as its loop bound moves with them.
+MARCH_STEPS = (16, 24, 48, 64, 128)
+
+
+def loop_bounds(assembly):
+    """The bounds of [fastopt] int loops in fxc's output that are not above zero.
+
+    fxc can take a bound from the constant pool with the wrong sign when the same value is there
+    for something else: the loop then leaves before its first step, and all compiles and runs. It
+    took the clouds' self-shadowing (a light march bound of -5) and all of SSR's hits (-59).
+    """
+    constants = {int(m.group(1)): [float(v) for v in m.groups()[1:]] for m in DEF.finditer(assembly)}
+    wrong = []
+    for m in LOOP_EXIT.finditer(assembly):
+        if m.group(1) != m.group(5) or int(m.group(3)) not in constants:
+            continue
+        value = constants[int(m.group(3))]['xyzw'.index(m.group(4))]
+        bound = -value if m.group(2) else value
+        if bound <= 0:
+            wrong.append(bound)
+    return wrong
 
 
 def docker_fxc():
@@ -76,20 +99,22 @@ def docker_fxc():
     return ['docker', 'run', '--rm', '-v', f'{ROOT}:/src', '-e', 'WINEDLLOVERRIDES=d3dcompiler_43=n']
 
 
-def compile_entry(entry, scratch, prefix):
-    """Compile one entry point, returning its slot count or None, and its fxc output."""
+def compile_entry(entry, scratch, prefix, steps=32):
+    """Compile one entry point, returning its slot count or None, its fxc output and its wrong loop bounds."""
     assembly = Path(scratch) / f'{entry}.asm'
+    defines = [f'/DNUM_STEPS={steps}' if d.startswith('/DNUM_STEPS=') else d for d in DEFINES]
     if prefix is None:
-        command = [str(FXC), '/nologo', *DEFINES, '/T', 'ps_3_0', '/E', entry,
+        command = [str(FXC), '/nologo', *defines, '/T', 'ps_3_0', '/E', entry,
                    '/Fc', str(assembly), '/Fo', str(Path(scratch) / f'{entry}.pso'), str(EFFECT)]
     else:
         command = [*prefix, '-v', f'{scratch}:/s', 'ff-wine', 'wine', '/src/source/dxsdk/lib/x86/fxc.exe',
-                   '/nologo', *DEFINES, '/T', 'ps_3_0', '/E', entry,
+                   '/nologo', *defines, '/T', 'ps_3_0', '/E', entry,
                    '/Fc', f'Z:\\s\\{entry}.asm', '/Fo', f'Z:\\s\\{entry}.pso',
                    'Z:\\src\\source\\resources\\SSR.fx']
     ran = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    match = SLOTS.search(assembly.read_text()) if assembly.exists() else None
-    return (int(match.group(1)) if match else None), ran.stdout
+    text = assembly.read_text() if assembly.exists() else ''
+    match = SLOTS.search(text)
+    return (int(match.group(1)) if match else None), ran.stdout, loop_bounds(text)
 
 
 def main():
@@ -121,7 +146,7 @@ def main():
     # wine in docker writes as root, which the cleanup would otherwise trip over.
     with tempfile.TemporaryDirectory(prefix='effect-slots-', ignore_cleanup_errors=True) as scratch:
         for entry, reviewed in entries.items():
-            slots, output = compile_entry(entry, scratch, prefix)
+            slots, output, bounds = compile_entry(entry, scratch, prefix)
             if slots is None:
                 print(f'{entry}: did not compile')
                 for line in output.splitlines():
@@ -135,6 +160,17 @@ def main():
             print(f'{entry:<22} {slots:>5} slots, reviewed at {reviewed:>4}  {state}')
             if over or grown:
                 failures += 1
+            if bounds:
+                print(f'{entry}: loop bounds {bounds}: the loop leaves before its first step')
+                failures += 1
+        for entry in ('SSRTrace_PS', 'SSRWater_PS'):
+            if entry not in entries:
+                continue
+            for steps in MARCH_STEPS:
+                slots, _, bounds = compile_entry(entry, scratch, prefix, steps)
+                if slots is None or slots > HARD_LIMIT or bounds:
+                    print(f'{entry} at {steps} steps: {slots} slots, loop bounds {bounds}')
+                    failures += 1
     if failures:
         print(f'{failures} of {len(entries)} entries outside their budget: the effect the game '
               f'loads is null when one of them is, which takes the reflections, the indirect '

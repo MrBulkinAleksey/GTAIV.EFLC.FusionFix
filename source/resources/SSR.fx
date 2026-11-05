@@ -700,8 +700,11 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     float hiZLevel = (fUseHiZ > 1.0 && cellSteps * 2.0 > steps) ? 1.0 : 0.0;
     float2 hiZSize = hiZLevel > 0.0 ? vec2HiZSize1 : vec2HiZSize;
     gTraceHiZLevel = hiZLevel;
+    // The one over is fxc's: at 59, a value PixelJitter's offsets also hold, it compiled the bound
+    // as -59 and the loop left before its first step, no ray hitting anything. tests/effect_slot_tests.py
+    // checks the bounds of the compiled loops.
     [loop] [fastopt]
-    for (int iteration = 0; iteration < NUM_STEPS + 3 * (NUM_REFINE_STEPS + 1); ++iteration)
+    for (int iteration = 0; iteration < NUM_STEPS + 3 * (NUM_REFINE_STEPS + 1) + 1; ++iteration)
     {
         [branch]
         if (refineLeft >= 0)
