@@ -1,5 +1,5 @@
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
-index edb74bab..ac9e4e02 100644
+index edb74bab..675ae0a8 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS10.asm
 @@ -55,6 +55,8 @@
@@ -7,29 +7,45 @@ index edb74bab..ac9e4e02 100644
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
 +    def c191, 0.2126, 0.7152, 0.0722, 4 // FusionFix Even Lamp Light: luminance, the highest scale
-+    def c192, -1, 0, 0, 0 // FusionFix Even Lamp Light
++    def c192, -1, 0, 0.5, 0 // FusionFix Even Lamp Light
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -86,6 +88,16 @@
+@@ -85,7 +87,32 @@
+     nrm r1.xyz, r2
      mov r11.xyz, r1
      texld r2, r0, s1
++    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale, how far apart its reads are):
++    // --- see zz_zz_zz_light_response.py
++    mov r31.x, -c192.x
++    if_ne -c194_abs.x, c194_abs.x
++      mov r29.xy, r0.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, c194.w
++      texldl r29, r29, s0
++      dp3 r31.x, r29, c191
++      mov r29.xy, r0.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, -c194.w
++      texldl r29, r29, s0
++      dp3 r29.x, r29, c191
++      add r31.x, r31.x, r29.x
++      mul r31.x, r31.x, c192.z // the surface's brightness around the pixel
++      rcp r31.x, r31.x
++      mul r31.x, r31.x, c194.y
++      max r31.x, r31.x, c194.z
++      min r31.x, r31.x, c191.w
++      add r31.x, r31.x, c192.x
++      mul r31.x, r31.x, c194.x
++      add r31.x, r31.x, -c192.x
++    endif
      texld r3, r0, s0
-+    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale): see zz_zz_zz_light_response.py
-+    dp3 r31.x, r3, c191
-+    rcp r31.x, r31.x
-+    mul r31.x, r31.x, c194.y
-+    max r31.x, r31.x, c194.z
-+    min r31.x, r31.x, c191.w
-+    add r31.x, r31.x, c192.x
-+    mul r31.x, r31.x, c194.x
-+    add r31.x, r31.x, -c192.x
-+    mul r3.xyz, r3, r31.x
++    mul r3.xyz, r3, r31.x // FusionFix Even Lamp Light
      texld r10, r0, s13
      // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
      // --- (gloss 258 / 1023, world_no_specular_mark.patch) write specular 0, so lamps and headlights left concrete,
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
-index b0ac3527..0d81e6d3 100644
+index b0ac3527..6fd74735 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS11.asm
 @@ -58,6 +58,8 @@
@@ -37,29 +53,45 @@ index b0ac3527..0d81e6d3 100644
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
 +    def c191, 0.2126, 0.7152, 0.0722, 4 // FusionFix Even Lamp Light: luminance, the highest scale
-+    def c192, -1, 0, 0, 0 // FusionFix Even Lamp Light
++    def c192, -1, 0, 0.5, 0 // FusionFix Even Lamp Light
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -105,6 +107,16 @@
+@@ -104,7 +106,32 @@
+     mul r0.w, r0.w, r1.x
      mul r1.xyz, c76.w, c76
      mul r1.xyz, r0.w, r1
++    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale, how far apart its reads are):
++    // --- see zz_zz_zz_light_response.py
++    mov r31.x, -c192.x
++    if_ne -c194_abs.x, c194_abs.x
++      mov r29.xy, r0.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, c194.w
++      texldl r29, r29, s0
++      dp3 r31.x, r29, c191
++      mov r29.xy, r0.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, -c194.w
++      texldl r29, r29, s0
++      dp3 r29.x, r29, c191
++      add r31.x, r31.x, r29.x
++      mul r31.x, r31.x, c192.z // the surface's brightness around the pixel
++      rcp r31.x, r31.x
++      mul r31.x, r31.x, c194.y
++      max r31.x, r31.x, c194.z
++      min r31.x, r31.x, c191.w
++      add r31.x, r31.x, c192.x
++      mul r31.x, r31.x, c194.x
++      add r31.x, r31.x, -c192.x
++    endif
      texld r2, r0, s0
-+    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale): see zz_zz_zz_light_response.py
-+    dp3 r31.x, r2, c191
-+    rcp r31.x, r31.x
-+    mul r31.x, r31.x, c194.y
-+    max r31.x, r31.x, c194.z
-+    min r31.x, r31.x, c191.w
-+    add r31.x, r31.x, c192.x
-+    mul r31.x, r31.x, c194.x
-+    add r31.x, r31.x, -c192.x
-+    mul r2.xyz, r2, r31.x
++    mul r2.xyz, r2, r31.x // FusionFix Even Lamp Light
      texld r3, r0, s4
      texld r10, r0, s13
      // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
-index 223270cd..e2ce711c 100644
+index 223270cd..284230b5 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS12.asm
 @@ -58,6 +58,8 @@
@@ -67,29 +99,45 @@ index 223270cd..e2ce711c 100644
      defi i2, 2, 0, 0, 0 // FusionFix local contact shadows: rays per pixel
      def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
 +    def c191, 0.2126, 0.7152, 0.0722, 4 // FusionFix Even Lamp Light: luminance, the highest scale
-+    def c192, -1, 0, 0, 0 // FusionFix Even Lamp Light
++    def c192, -1, 0, 0.5, 0 // FusionFix Even Lamp Light
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -105,6 +107,16 @@
+@@ -104,7 +106,32 @@
+     mul r0.w, r0.w, r1.x
      mul r1.xyz, c76.w, c76
      mul r1.xyz, r0.w, r1
++    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale, how far apart its reads are):
++    // --- see zz_zz_zz_light_response.py
++    mov r31.x, -c192.x
++    if_ne -c194_abs.x, c194_abs.x
++      mov r29.xy, r0.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, c194.w
++      texldl r29, r29, s0
++      dp3 r31.x, r29, c191
++      mov r29.xy, r0.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, -c194.w
++      texldl r29, r29, s0
++      dp3 r29.x, r29, c191
++      add r31.x, r31.x, r29.x
++      mul r31.x, r31.x, c192.z // the surface's brightness around the pixel
++      rcp r31.x, r31.x
++      mul r31.x, r31.x, c194.y
++      max r31.x, r31.x, c194.z
++      min r31.x, r31.x, c191.w
++      add r31.x, r31.x, c192.x
++      mul r31.x, r31.x, c194.x
++      add r31.x, r31.x, -c192.x
++    endif
      texld r2, r0, s0
-+    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale): see zz_zz_zz_light_response.py
-+    dp3 r31.x, r2, c191
-+    rcp r31.x, r31.x
-+    mul r31.x, r31.x, c194.y
-+    max r31.x, r31.x, c194.z
-+    min r31.x, r31.x, c191.w
-+    add r31.x, r31.x, c192.x
-+    mul r31.x, r31.x, c194.x
-+    add r31.x, r31.x, -c192.x
-+    mul r2.xyz, r2, r31.x
++    mul r2.xyz, r2, r31.x // FusionFix Even Lamp Light
      texld r3, r0, s4
      texld r10, r0, s13
      // --- FusionFix specular sheen on lamps (c197.x, SpecularSheen in postfx.ixx): materials with no specular map
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
-index 8c26e0a0..526f66c1 100644
+index 8c26e0a0..894f84ff 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS14.asm
 @@ -108,6 +108,8 @@
@@ -97,29 +145,45 @@ index 8c26e0a0..526f66c1 100644
      def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
      def c198, 0.00390625, 0.99609375, 0, 0 // FusionFix: zz_within_tile_shadow_taps.patch: 1/256 inside the tile either way
 +    def c191, 0.2126, 0.7152, 0.0722, 4 // FusionFix Even Lamp Light: luminance, the highest scale
-+    def c192, -1, 0, 0, 0 // FusionFix Even Lamp Light
++    def c192, -1, 0, 0.5, 0 // FusionFix Even Lamp Light
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -450,6 +452,16 @@
+@@ -449,7 +451,32 @@
+     cmp r2.w, -c200.x, r2.w, r13.w // the game's highlight while c200.x is 0
      mul r1.xyz, r1, r2.w
      mul r1.xyz, r0.x, r1
++    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale, how far apart its reads are):
++    // --- see zz_zz_zz_light_response.py
++    mov r31.x, -c192.x
++    if_ne -c194_abs.x, c194_abs.x
++      mov r29.xy, r0.zw
++      mov r29.zw, c192.y
++      add r29.xy, r29, c194.w
++      texldl r29, r29, s0
++      dp3 r31.x, r29, c191
++      mov r29.xy, r0.zw
++      mov r29.zw, c192.y
++      add r29.xy, r29, -c194.w
++      texldl r29, r29, s0
++      dp3 r29.x, r29, c191
++      add r31.x, r31.x, r29.x
++      mul r31.x, r31.x, c192.z // the surface's brightness around the pixel
++      rcp r31.x, r31.x
++      mul r31.x, r31.x, c194.y
++      max r31.x, r31.x, c194.z
++      min r31.x, r31.x, c191.w
++      add r31.x, r31.x, c192.x
++      mul r31.x, r31.x, c194.x
++      add r31.x, r31.x, -c192.x
++    endif
      texld r4, r0.zwzw, s0
-+    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale): see zz_zz_zz_light_response.py
-+    dp3 r31.x, r4, c191
-+    rcp r31.x, r31.x
-+    mul r31.x, r31.x, c194.y
-+    max r31.x, r31.x, c194.z
-+    min r31.x, r31.x, c191.w
-+    add r31.x, r31.x, c192.x
-+    mul r31.x, r31.x, c194.x
-+    add r31.x, r31.x, -c192.x
-+    mul r4.xyz, r4, r31.x
++    mul r4.xyz, r4, r31.x // FusionFix Even Lamp Light
      mad r1.xyz, r4, r2, r1
      mov r1.w, c7.w
      
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
-index 652ed7c0..209e1576 100644
+index 652ed7c0..958781e1 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS15.asm
 @@ -88,6 +88,8 @@
@@ -127,29 +191,45 @@ index 652ed7c0..209e1576 100644
      def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
      def c198, 0.00390625, 0.99609375, 0, 0 // FusionFix: zz_within_tile_shadow_taps.patch: 1/256 inside the tile either way
 +    def c191, 0.2126, 0.7152, 0.0722, 4 // FusionFix Even Lamp Light: luminance, the highest scale
-+    def c192, -1, 0, 0, 0 // FusionFix Even Lamp Light
++    def c192, -1, 0, 0.5, 0 // FusionFix Even Lamp Light
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -137,6 +139,16 @@
+@@ -136,7 +138,32 @@
+     add r24.y, -r24_abs.y, c182.y
      cmp r24.y, r24.y, r24.w, r10.x
      cmp r10.x, -r10.x, r24.y, r10.x // specular 0
++    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale, how far apart its reads are):
++    // --- see zz_zz_zz_light_response.py
++    mov r31.x, -c192.x
++    if_ne -c194_abs.x, c194_abs.x
++      mov r30.xy, r0.xy
++      mov r30.zw, c192.y
++      add r30.xy, r30, c194.w
++      texldl r30, r30, s0
++      dp3 r31.x, r30, c191
++      mov r30.xy, r0.xy
++      mov r30.zw, c192.y
++      add r30.xy, r30, -c194.w
++      texldl r30, r30, s0
++      dp3 r30.x, r30, c191
++      add r31.x, r31.x, r30.x
++      mul r31.x, r31.x, c192.z // the surface's brightness around the pixel
++      rcp r31.x, r31.x
++      mul r31.x, r31.x, c194.y
++      max r31.x, r31.x, c194.z
++      min r31.x, r31.x, c191.w
++      add r31.x, r31.x, c192.x
++      mul r31.x, r31.x, c194.x
++      add r31.x, r31.x, -c192.x
++    endif
      texld r0, r0, s0
-+    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale): see zz_zz_zz_light_response.py
-+    dp3 r31.x, r0, c191
-+    rcp r31.x, r31.x
-+    mul r31.x, r31.x, c194.y
-+    max r31.x, r31.x, c194.z
-+    min r31.x, r31.x, c191.w
-+    add r31.x, r31.x, c192.x
-+    mul r31.x, r31.x, c194.x
-+    add r31.x, r31.x, -c192.x
-+    mul r0.xyz, r0, r31.x
++    mul r0.xyz, r0, r31.x // FusionFix Even Lamp Light
      mad r2.xyz, r2, c0.y, c0.z
      nrm r3.xyz, r2
      mov r9.xyz, r3
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
-index f0be1b34..6c5c4997 100644
+index f0be1b34..36fcf4d9 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS16.asm
 @@ -77,6 +77,8 @@
@@ -157,29 +237,45 @@ index f0be1b34..6c5c4997 100644
      defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
      def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
 +    def c191, 0.2126, 0.7152, 0.0722, 4 // FusionFix Even Lamp Light: luminance, the highest scale
-+    def c192, -1, 0, 0, 0 // FusionFix Even Lamp Light
++    def c192, -1, 0, 0.5, 0 // FusionFix Even Lamp Light
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -240,6 +242,16 @@
-     cmp r0.w, -c200.x, r0.w, r13.w // the game's highlight while c200.x is 0
-     mul r1.xyw, r0.xyzz, r0.w
-     mul r0.xyz, r21, r0 // FusionFix skin lighting: the wrapped N.L per channel
-+    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale): see zz_zz_zz_light_response.py
-+    dp3 r31.x, r3, c191
-+    rcp r31.x, r31.x
-+    mul r31.x, r31.x, c194.y
-+    max r31.x, r31.x, c194.z
-+    min r31.x, r31.x, c191.w
-+    add r31.x, r31.x, c192.x
-+    mul r31.x, r31.x, c194.x
-+    add r31.x, r31.x, -c192.x
-+    mul r3.xyz, r3, r31.x
-     mul r2.xyz, r3, r6
-     mul r1.xyz, r1.z, r1.xyww
-     mad r0.xyz, r2, r0, r1
+@@ -91,7 +93,32 @@
+     add r1.xy, c0.x, vPos
+     mul r1.xy, r1, c79.zwzw
+     texld r2, r1, s5
++    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale, how far apart its reads are):
++    // --- see zz_zz_zz_light_response.py
++    mov r31.x, -c192.x
++    if_ne -c194_abs.x, c194_abs.x
++      mov r29.xy, r1.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, c194.w
++      texldl r29, r29, s1
++      dp3 r31.x, r29, c191
++      mov r29.xy, r1.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, -c194.w
++      texldl r29, r29, s1
++      dp3 r29.x, r29, c191
++      add r31.x, r31.x, r29.x
++      mul r31.x, r31.x, c192.z // the surface's brightness around the pixel
++      rcp r31.x, r31.x
++      mul r31.x, r31.x, c194.y
++      max r31.x, r31.x, c194.z
++      min r31.x, r31.x, c191.w
++      add r31.x, r31.x, c192.x
++      mul r31.x, r31.x, c194.x
++      add r31.x, r31.x, -c192.x
++    endif
+     texld r3, r1, s1
++    mul r3.xyz, r3, r31.x // FusionFix Even Lamp Light
+     // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
+     texld r20, r1, s11
+     mad r20.x, r20.x, c156.x, c156.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
-index efcbc7fb..a189b5e7 100644
+index efcbc7fb..95a29e3d 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS17.asm
 @@ -110,6 +110,8 @@
@@ -187,29 +283,45 @@ index efcbc7fb..a189b5e7 100644
      def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
      def c198, 0.00390625, 0.99609375, 0, 0 // FusionFix: zz_within_tile_shadow_taps.patch: 1/256 inside the tile either way
 +    def c191, 0.2126, 0.7152, 0.0722, 4 // FusionFix Even Lamp Light: luminance, the highest scale
-+    def c192, -1, 0, 0, 0 // FusionFix Even Lamp Light
++    def c192, -1, 0, 0.5, 0 // FusionFix Even Lamp Light
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -465,6 +467,16 @@
-     add_sat r21.xyz, r21, r22 // the game's N.L off skin
-     mul r1.xyw, r0.xyzz, r2.x
-     mul r0.xyz, r0, r21 // FusionFix skin lighting: the wrapped N.L per channel
-+    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale): see zz_zz_zz_light_response.py
-+    dp3 r31.x, r3, c191
-+    rcp r31.x, r31.x
-+    mul r31.x, r31.x, c194.y
-+    max r31.x, r31.x, c194.z
-+    min r31.x, r31.x, c191.w
-+    add r31.x, r31.x, c192.x
-+    mul r31.x, r31.x, c194.x
-+    add r31.x, r31.x, -c192.x
-+    mul r3.xyz, r3, r31.x
-     mul r2.xyz, r3, r6
-     mul r1.xyz, r1.z, r1.xyww
-     mad r26.xyz, r2, r0, r1
+@@ -125,7 +127,32 @@
+     add r1.xy, c0.x, vPos
+     mul r1.xy, r1, c86.zwzw
+     texld r2, r1, s5
++    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale, how far apart its reads are):
++    // --- see zz_zz_zz_light_response.py
++    mov r31.x, -c192.x
++    if_ne -c194_abs.x, c194_abs.x
++      mov r30.xy, r1.xy
++      mov r30.zw, c192.y
++      add r30.xy, r30, c194.w
++      texldl r30, r30, s1
++      dp3 r31.x, r30, c191
++      mov r30.xy, r1.xy
++      mov r30.zw, c192.y
++      add r30.xy, r30, -c194.w
++      texldl r30, r30, s1
++      dp3 r30.x, r30, c191
++      add r31.x, r31.x, r30.x
++      mul r31.x, r31.x, c192.z // the surface's brightness around the pixel
++      rcp r31.x, r31.x
++      mul r31.x, r31.x, c194.y
++      max r31.x, r31.x, c194.z
++      min r31.x, r31.x, c191.w
++      add r31.x, r31.x, c192.x
++      mul r31.x, r31.x, c194.x
++      add r31.x, r31.x, -c192.x
++    endif
+     texld r3, r1, s1
++    mul r3.xyz, r3, r31.x // FusionFix Even Lamp Light
+     // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
+     texld r20.w, r1, s11.x
+     mad r20.w, r20.w, c156.x, c156.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
-index f41af4ff..b13e473a 100644
+index f41af4ff..315b9615 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS6.asm
 @@ -72,6 +72,8 @@
@@ -217,29 +329,45 @@ index f41af4ff..b13e473a 100644
      defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
      def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
 +    def c191, 0.2126, 0.7152, 0.0722, 4 // FusionFix Even Lamp Light: luminance, the highest scale
-+    def c192, -1, 0, 0, 0 // FusionFix Even Lamp Light
++    def c192, -1, 0, 0.5, 0 // FusionFix Even Lamp Light
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -142,6 +144,16 @@
+@@ -141,7 +143,32 @@
+     add r20.y, -r20_abs.y, c182.y
      cmp r20.y, r20.y, r20.w, r1.x
      cmp r1.x, -r1.x, r20.y, r1.x // specular 0
++    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale, how far apart its reads are):
++    // --- see zz_zz_zz_light_response.py
++    mov r31.x, -c192.x
++    if_ne -c194_abs.x, c194_abs.x
++      mov r29.xy, r0.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, c194.w
++      texldl r29, r29, s0
++      dp3 r31.x, r29, c191
++      mov r29.xy, r0.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, -c194.w
++      texldl r29, r29, s0
++      dp3 r29.x, r29, c191
++      add r31.x, r31.x, r29.x
++      mul r31.x, r31.x, c192.z // the surface's brightness around the pixel
++      rcp r31.x, r31.x
++      mul r31.x, r31.x, c194.y
++      max r31.x, r31.x, c194.z
++      min r31.x, r31.x, c191.w
++      add r31.x, r31.x, c192.x
++      mul r31.x, r31.x, c194.x
++      add r31.x, r31.x, -c192.x
++    endif
      texld r4, r0, s0
-+    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale): see zz_zz_zz_light_response.py
-+    dp3 r31.x, r4, c191
-+    rcp r31.x, r31.x
-+    mul r31.x, r31.x, c194.y
-+    max r31.x, r31.x, c194.z
-+    min r31.x, r31.x, c191.w
-+    add r31.x, r31.x, c192.x
-+    mul r31.x, r31.x, c194.x
-+    add r31.x, r31.x, -c192.x
-+    mul r4.xyz, r4, r31.x
++    mul r4.xyz, r4, r31.x // FusionFix Even Lamp Light
      // --- FusionFix skin lighting (c201, c205: SkinLighting in postfx.ixx): on skin the light wraps past the terminator further in red than in green and blue.
      texld r20, r0, s11
      mad r20.x, r20.x, c156.x, c156.y
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
-index 226caad5..bd4bf4fc 100644
+index 226caad5..59925ca7 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS7.asm
 @@ -75,6 +75,8 @@
@@ -247,29 +375,45 @@ index 226caad5..bd4bf4fc 100644
      defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
      def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
 +    def c191, 0.2126, 0.7152, 0.0722, 4 // FusionFix Even Lamp Light: luminance, the highest scale
-+    def c192, -1, 0, 0, 0 // FusionFix Even Lamp Light
++    def c192, -1, 0, 0.5, 0 // FusionFix Even Lamp Light
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -211,6 +213,16 @@
+@@ -210,7 +212,32 @@
+     cmp r2.xyz, r0.z, r2, -c2.z
      mul r3.xyz, r2.w, r2
      mul r1.yzw, r21.xxyz, r2.xxyz // FusionFix skin lighting: the wrapped N.L per channel
++    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale, how far apart its reads are):
++    // --- see zz_zz_zz_light_response.py
++    mov r31.x, -c192.x
++    if_ne -c194_abs.x, c194_abs.x
++      mov r29.xy, r0.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, c194.w
++      texldl r29, r29, s0
++      dp3 r31.x, r29, c191
++      mov r29.xy, r0.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, -c194.w
++      texldl r29, r29, s0
++      dp3 r29.x, r29, c191
++      add r31.x, r31.x, r29.x
++      mul r31.x, r31.x, c192.z // the surface's brightness around the pixel
++      rcp r31.x, r31.x
++      mul r31.x, r31.x, c194.y
++      max r31.x, r31.x, c194.z
++      min r31.x, r31.x, c191.w
++      add r31.x, r31.x, c192.x
++      mul r31.x, r31.x, c194.x
++      add r31.x, r31.x, -c192.x
++    endif
      texld r2, r0, s0
-+    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale): see zz_zz_zz_light_response.py
-+    dp3 r31.x, r2, c191
-+    rcp r31.x, r31.x
-+    mul r31.x, r31.x, c194.y
-+    max r31.x, r31.x, c194.z
-+    min r31.x, r31.x, c191.w
-+    add r31.x, r31.x, c192.x
-+    mul r31.x, r31.x, c194.x
-+    add r31.x, r31.x, -c192.x
-+    mul r2.xyz, r2, r31.x
++    mul r2.xyz, r2, r31.x // FusionFix Even Lamp Light
      texld r0, r0, s5
      mul r0.yzw, r1, r2.xxyz
      mad r1.xyz, r1.x, r3, r0.yzww
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
-index 4047ccaa..2c4b3114 100644
+index 4047ccaa..1102a326 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS8.asm
 @@ -75,6 +75,8 @@
@@ -277,29 +421,45 @@ index 4047ccaa..2c4b3114 100644
      defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
      def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
 +    def c191, 0.2126, 0.7152, 0.0722, 4 // FusionFix Even Lamp Light: luminance, the highest scale
-+    def c192, -1, 0, 0, 0 // FusionFix Even Lamp Light
++    def c192, -1, 0, 0.5, 0 // FusionFix Even Lamp Light
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -210,6 +212,16 @@
+@@ -209,7 +211,32 @@
+     cmp r2.xyz, r0.z, r2, -c3.z
      mul r3.xyz, r2.w, r2
      mul r2.xyz, r21, r2 // FusionFix skin lighting: the wrapped N.L per channel
++    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale, how far apart its reads are):
++    // --- see zz_zz_zz_light_response.py
++    mov r31.x, -c192.x
++    if_ne -c194_abs.x, c194_abs.x
++      mov r29.xy, r0.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, c194.w
++      texldl r29, r29, s0
++      dp3 r31.x, r29, c191
++      mov r29.xy, r0.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, -c194.w
++      texldl r29, r29, s0
++      dp3 r29.x, r29, c191
++      add r31.x, r31.x, r29.x
++      mul r31.x, r31.x, c192.z // the surface's brightness around the pixel
++      rcp r31.x, r31.x
++      mul r31.x, r31.x, c194.y
++      max r31.x, r31.x, c194.z
++      min r31.x, r31.x, c191.w
++      add r31.x, r31.x, c192.x
++      mul r31.x, r31.x, c194.x
++      add r31.x, r31.x, -c192.x
++    endif
      texld r4, r0, s0
-+    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale): see zz_zz_zz_light_response.py
-+    dp3 r31.x, r4, c191
-+    rcp r31.x, r31.x
-+    mul r31.x, r31.x, c194.y
-+    max r31.x, r31.x, c194.z
-+    min r31.x, r31.x, c191.w
-+    add r31.x, r31.x, c192.x
-+    mul r31.x, r31.x, c194.x
-+    add r31.x, r31.x, -c192.x
-+    mul r4.xyz, r4, r31.x
++    mul r4.xyz, r4, r31.x // FusionFix Even Lamp Light
      texld r0, r0, s5
      mul r0.yzw, r2.xxyz, r4.xxyz
      add r1.x, r1.x, r1.x
 diff --git a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
-index c7ec08b3..3badb36e 100644
+index c7ec08b3..6e104f6c 100644
 --- a/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 +++ b/win32_30_nv8/deferred_lighting/deferred_lightingPS9.asm
 @@ -76,6 +76,8 @@
@@ -307,24 +467,40 @@ index c7ec08b3..3badb36e 100644
      defi i3, 48, 0, 0, 0 // FusionFix prop shape shadows: the most shapes a light (FusionFix: zz_ped_capsule_look.patch: 48, the player's bones besides the props)
      def c88, 1.00999999, 0, 1, 0 // FusionFix: zz_sphere_early_out.patch: a little over one, 0, 1
 +    def c191, 0.2126, 0.7152, 0.0722, 4 // FusionFix Even Lamp Light: luminance, the highest scale
-+    def c192, -1, 0, 0, 0 // FusionFix Even Lamp Light
++    def c192, -1, 0, 0.5, 0 // FusionFix Even Lamp Light
      dcl_texcoord v0
      dcl vPos.xy
      dcl_texcoord9 v9
-@@ -212,6 +214,16 @@
+@@ -211,7 +213,32 @@
+     cmp r2.xyz, r0.z, r2, -c2.z
      mul r3.xyz, r2.w, r2
      mul r1.yzw, r21.xxyz, r2.xxyz // FusionFix skin lighting: the wrapped N.L per channel
++    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale, how far apart its reads are):
++    // --- see zz_zz_zz_light_response.py
++    mov r31.x, -c192.x
++    if_ne -c194_abs.x, c194_abs.x
++      mov r29.xy, r0.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, c194.w
++      texldl r29, r29, s0
++      dp3 r31.x, r29, c191
++      mov r29.xy, r0.xy
++      mov r29.zw, c192.y
++      add r29.xy, r29, -c194.w
++      texldl r29, r29, s0
++      dp3 r29.x, r29, c191
++      add r31.x, r31.x, r29.x
++      mul r31.x, r31.x, c192.z // the surface's brightness around the pixel
++      rcp r31.x, r31.x
++      mul r31.x, r31.x, c194.y
++      max r31.x, r31.x, c194.z
++      min r31.x, r31.x, c191.w
++      add r31.x, r31.x, c192.x
++      mul r31.x, r31.x, c194.x
++      add r31.x, r31.x, -c192.x
++    endif
      texld r2, r0, s0
-+    // --- FusionFix Even Lamp Light (c194: response, reference, lowest scale): see zz_zz_zz_light_response.py
-+    dp3 r31.x, r2, c191
-+    rcp r31.x, r31.x
-+    mul r31.x, r31.x, c194.y
-+    max r31.x, r31.x, c194.z
-+    min r31.x, r31.x, c191.w
-+    add r31.x, r31.x, c192.x
-+    mul r31.x, r31.x, c194.x
-+    add r31.x, r31.x, -c192.x
-+    mul r2.xyz, r2, r31.x
++    mul r2.xyz, r2, r31.x // FusionFix Even Lamp Light
      texld r0, r0, s5
      mul r0.yzw, r1, r2.xxyz
      mad r1.xyz, r1.x, r3, r0.yzww
