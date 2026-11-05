@@ -329,10 +329,10 @@ index c7ec08b3..3badb36e 100644
      mul r0.yzw, r1, r2.xxyz
      mad r1.xyz, r1.x, r3, r0.yzww
 diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS11.asm b/win32_30_nv8/rage_postfx/rage_postfxPS11.asm
-index 21ff0ee8..e2ce563d 100644
+index 21ff0ee8..2b11d95a 100644
 --- a/win32_30_nv8/rage_postfx/rage_postfxPS11.asm
 +++ b/win32_30_nv8/rage_postfx/rage_postfxPS11.asm
-@@ -172,6 +172,25 @@
+@@ -172,6 +172,26 @@
        max r1.x, r1.x, c1.x
        mul r1.xyz, r2, r1.x
      endif
@@ -340,8 +340,9 @@ index 21ff0ee8..e2ce563d 100644
 +    // --- see zz_zz_zz_light_response.py. r19.x is the depth over the near plane, read for the depth of field.
 +    if_ne -c195_abs.y, c195_abs.y
 +      mul r9.xyz, r3, c66.x
++      mul r9.xyz, r9, r0.w // and the eye's adaptation, as the colour correction below takes it
 +      max r10.x, r9.x, r9.y
-+      max r10.x, r10.x, r9.z // the brightest channel, exposed
++      max r10.x, r10.x, r9.z // the brightest channel as it will reach the screen
 +      add r10.y, r10.x, -c195.x // past the knee
 +      mul r10.z, r10.y, c195.z
 +      exp r10.z, r10.z
@@ -359,10 +360,10 @@ index 21ff0ee8..e2ce563d 100644
      
      // color correction
 diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS12.asm b/win32_30_nv8/rage_postfx/rage_postfxPS12.asm
-index 2a2e7aa6..f014fcc2 100644
+index 2a2e7aa6..da13980b 100644
 --- a/win32_30_nv8/rage_postfx/rage_postfxPS12.asm
 +++ b/win32_30_nv8/rage_postfx/rage_postfxPS12.asm
-@@ -181,6 +181,25 @@
+@@ -181,6 +181,26 @@
        max r1.x, r1.x, c1.x
        mul r1.xyz, r2, r1.x
      endif
@@ -370,8 +371,9 @@ index 2a2e7aa6..f014fcc2 100644
 +    // --- see zz_zz_zz_light_response.py. r19.x is the depth over the near plane, read for the depth of field.
 +    if_ne -c195_abs.y, c195_abs.y
 +      mul r9.xyz, r3, c66.x
++      mul r9.xyz, r9, r0.w // and the eye's adaptation, as the colour correction below takes it
 +      max r10.x, r9.x, r9.y
-+      max r10.x, r10.x, r9.z // the brightest channel, exposed
++      max r10.x, r10.x, r9.z // the brightest channel as it will reach the screen
 +      add r10.y, r10.x, -c195.x // past the knee
 +      mul r10.z, r10.y, c195.z
 +      exp r10.z, r10.z
@@ -389,10 +391,10 @@ index 2a2e7aa6..f014fcc2 100644
      
      // color correction
 diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS14.asm b/win32_30_nv8/rage_postfx/rage_postfxPS14.asm
-index 7f001ff1..eff40fc0 100644
+index 7f001ff1..10d19ec7 100644
 --- a/win32_30_nv8/rage_postfx/rage_postfxPS14.asm
 +++ b/win32_30_nv8/rage_postfx/rage_postfxPS14.asm
-@@ -181,6 +181,25 @@
+@@ -181,6 +181,26 @@
        max r1.x, r1.x, c1.x
        mul r1.xyz, r2, r1.x
      endif
@@ -400,8 +402,9 @@ index 7f001ff1..eff40fc0 100644
 +    // --- see zz_zz_zz_light_response.py. r19.x is the depth over the near plane, read for the depth of field.
 +    if_ne -c195_abs.y, c195_abs.y
 +      mul r9.xyz, r3, c66.x
++      mul r9.xyz, r9, r0.w // and the eye's adaptation, as the colour correction below takes it
 +      max r10.x, r9.x, r9.y
-+      max r10.x, r10.x, r9.z // the brightest channel, exposed
++      max r10.x, r10.x, r9.z // the brightest channel as it will reach the screen
 +      add r10.y, r10.x, -c195.x // past the knee
 +      mul r10.z, r10.y, c195.z
 +      exp r10.z, r10.z
@@ -419,10 +422,10 @@ index 7f001ff1..eff40fc0 100644
      
      // color correction
 diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS24.asm b/win32_30_nv8/rage_postfx/rage_postfxPS24.asm
-index 19b348aa..7fd25f0f 100644
+index 19b348aa..9401bc1d 100644
 --- a/win32_30_nv8/rage_postfx/rage_postfxPS24.asm
 +++ b/win32_30_nv8/rage_postfx/rage_postfxPS24.asm
-@@ -192,6 +192,25 @@
+@@ -192,6 +192,26 @@
        max r1.x, r1.x, c1.x
        mul r1.xyz, r2, r1.x
      endif
@@ -430,8 +433,9 @@ index 19b348aa..7fd25f0f 100644
 +    // --- see zz_zz_zz_light_response.py. r19.x is the depth over the near plane, read for the depth of field.
 +    if_ne -c195_abs.y, c195_abs.y
 +      mul r9.xyz, r3, c66.x
++      mul r9.xyz, r9, r0.w // and the eye's adaptation, as the colour correction below takes it
 +      max r10.x, r9.x, r9.y
-+      max r10.x, r10.x, r9.z // the brightest channel, exposed
++      max r10.x, r10.x, r9.z // the brightest channel as it will reach the screen
 +      add r10.y, r10.x, -c195.x // past the knee
 +      mul r10.z, r10.y, c195.z
 +      exp r10.z, r10.z
@@ -449,10 +453,10 @@ index 19b348aa..7fd25f0f 100644
      
      // color correction
 diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS26.asm b/win32_30_nv8/rage_postfx/rage_postfxPS26.asm
-index e14da885..b301f252 100644
+index e14da885..14796998 100644
 --- a/win32_30_nv8/rage_postfx/rage_postfxPS26.asm
 +++ b/win32_30_nv8/rage_postfx/rage_postfxPS26.asm
-@@ -192,6 +192,25 @@
+@@ -192,6 +192,26 @@
        max r1.x, r1.x, c1.x
        mul r1.xyz, r2, r1.x
      endif
@@ -460,8 +464,9 @@ index e14da885..b301f252 100644
 +    // --- see zz_zz_zz_light_response.py. r19.x is the depth over the near plane, read for the depth of field.
 +    if_ne -c195_abs.y, c195_abs.y
 +      mul r9.xyz, r3, c66.x
++      mul r9.xyz, r9, r0.w // and the eye's adaptation, as the colour correction below takes it
 +      max r10.x, r9.x, r9.y
-+      max r10.x, r10.x, r9.z // the brightest channel, exposed
++      max r10.x, r10.x, r9.z // the brightest channel as it will reach the screen
 +      add r10.y, r10.x, -c195.x // past the knee
 +      mul r10.z, r10.y, c195.z
 +      exp r10.z, r10.z
@@ -479,10 +484,10 @@ index e14da885..b301f252 100644
      
      // color correction
 diff --git a/win32_30_nv8/rage_postfx/rage_postfxPS28.asm b/win32_30_nv8/rage_postfx/rage_postfxPS28.asm
-index eb6f4303..d7049978 100644
+index eb6f4303..da2f8d45 100644
 --- a/win32_30_nv8/rage_postfx/rage_postfxPS28.asm
 +++ b/win32_30_nv8/rage_postfx/rage_postfxPS28.asm
-@@ -159,6 +159,25 @@
+@@ -159,6 +159,26 @@
      texld r1, c1.x, s5
      rcp r0.w, r1.x
      mul r0.w, r0.w, c81.y
@@ -490,8 +495,9 @@ index eb6f4303..d7049978 100644
 +    // --- see zz_zz_zz_light_response.py. r19.x is the depth over the near plane, read for the depth of field.
 +    if_ne -c195_abs.y, c195_abs.y
 +      mul r9.xyz, r3, c66.x
++      mul r9.xyz, r9, r0.w // and the eye's adaptation, as the colour correction below takes it
 +      max r10.x, r9.x, r9.y
-+      max r10.x, r10.x, r9.z // the brightest channel, exposed
++      max r10.x, r10.x, r9.z // the brightest channel as it will reach the screen
 +      add r10.y, r10.x, -c195.x // past the knee
 +      mul r10.z, r10.y, c195.z
 +      exp r10.z, r10.z
