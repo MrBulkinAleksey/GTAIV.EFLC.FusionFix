@@ -370,6 +370,9 @@ Logitech LightSync RGB
 [WetWeather]
 Мокрая погода
 
+[WaterLook]
+Улучшенная вода
+
 [VehBoxShadows]
 Тени машин от всех фонарей
 

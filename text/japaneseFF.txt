@@ -370,6 +370,9 @@ Soft Highlights
 [WetWeather]
 Wet Weather
 
+[WaterLook]
+Improved Water
+
 [VehBoxShadows]
 Car Shadows From All Lamps
 

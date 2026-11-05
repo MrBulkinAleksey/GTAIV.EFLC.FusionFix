@@ -2167,6 +2167,7 @@ public:
             { 0, "PREF_LAMP_ALBEDO_RESPONSE",   "LIGHTING",   "LampAlbedoResponse",                 "",                           1, nullptr, 0, 1 },
             { 0, "PREF_SOFT_HIGHLIGHTS",        "LIGHTING",   "SoftHighlights",                     "",                           1, nullptr, 0, 1 },
             { 0, "PREF_CLOUD_MODEL",            "WEATHER",    "VolumetricCloudsModel",              "",                           0, nullptr, 0, 1 },
+            { 0, "PREF_WATER_LOOK",             "WEATHER",    "WaterLook",                          "",                           1, nullptr, 0, 1 },
         };
 
         for (auto& setting : arr)
@@ -2427,6 +2428,7 @@ public:
             AddRow(category, "EvenLampLight", "PREF_LAMP_ALBEDO_RESPONSE", 2, toggle);
             AddRow(category, "SoftHighlights", "PREF_SOFT_HIGHLIGHTS", 2, toggle);
             AddRow(category, "WetWeather", "PREF_WET_WEATHER", 2, toggle);
+            AddRow(category, "WaterLook", "PREF_WATER_LOOK", 2, toggle);
             AddRow(category, "CarRaindrops", "PREF_CAR_RAINDROPS", 2, toggle);
             AddRow(category, "VehBoxShadows", "PREF_VEHICLE_BOX_SHADOWS", 2, toggle);
             AddRow(category, "ImprovedGrass", "PREF_GPU_GRASS", 2, toggle);

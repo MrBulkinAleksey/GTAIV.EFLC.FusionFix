@@ -36,6 +36,7 @@ import renderscale;
 import renderskip;
 import temporal;
 import upscaler;
+import waterlook;
 import postfxprofiler;
 import postfxresources;
 import screenquad;
@@ -1738,6 +1739,7 @@ private:
     {
         auto& R = PostFxResources;
         SetWaterRainRings();
+        SetWaterLookConstants();
         auto pProfileDevice = rage::grcDevice::GetD3DDevice();
         ProfilerScope timedWater(pProfileDevice, kProfWaterAll);
         // The game renders water for other views too, into targets of other sizes: each call
