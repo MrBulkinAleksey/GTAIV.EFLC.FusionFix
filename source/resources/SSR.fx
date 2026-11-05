@@ -264,6 +264,7 @@ uniform float2 vec2PrevDepthRange; // fNearPlane and fFarDivNear of the scene Pr
 
 uniform float fMaxDistance;     // world units to march before giving up
 uniform float fThickness;       // how deep behind a surface still counts as a hit
+uniform float fHitFadeStart;    // metres off the surface where a hit starts to give way to the game's reflection map
 uniform float fEdgeFade;        // 0..0.5, screen fraction over which to fade at borders
 uniform float fIntensity;       // final multiplier on confidence
 uniform float fGlossBoost;      // extra intensity on shiny materials, 0 disables
@@ -894,7 +895,11 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // metres away, such as a ped between the camera and a door at night.
     if (distanceFade > 0.0)
         confidence *= 1.0 - smoothstep(distanceFade * 0.5, distanceFade, rayLen);
-    gTraceKept = float3(1.0, 1.0 - smoothstep(hitThickness * 0.75, hitThickness, hitDelta), confidence);
+    // A ray the thickness let through a few dozen centimetres off a surface takes that surface's
+    // colour all the same: rays from a stretch of door all stopped on one column of the screen and
+    // drew it out into a smear. Giving way sooner shows the reflection map there instead, which the
+    // deferred lighting already blends in as the confidence falls.
+    gTraceKept = float3(1.0, 1.0 - smoothstep(min(fHitFadeStart, hitThickness * 0.75), hitThickness, hitDelta), confidence);
     confidence *= gTraceKept.g;
     // Behind an object the screen holds nothing, so a ray passing there may have run into
     // something it does not show. Behind a trunk that is a few dozen centimetres; behind a ped

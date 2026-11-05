@@ -189,6 +189,7 @@ export void RenderScreenSpaceReflections()
 
     effect->SetFloat(h.fMaxDistance, R.fSSRMaxDistance);
     effect->SetFloat(h.fThickness, R.fSSRThickness);
+    effect->SetFloat(h.fHitFadeStart, R.fSSRHitFadeStart);
     effect->SetFloat(h.fEdgeFade, R.fSSREdgeFade);
     effect->SetFloat(h.fIntensity, R.fSSRIntensity);
     effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);

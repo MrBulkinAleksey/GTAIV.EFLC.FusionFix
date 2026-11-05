@@ -333,7 +333,7 @@ public:
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, fCSGrassGloss, techContactShadows;
         D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, vec2InvHistorySize, vec2HitTexelStep, fNearPlane, fFarDivNear, vec4ProjInfo;
-        D3DXHANDLE fMaxDistance, fThickness, fEdgeFade, fIntensity;
+        D3DXHANDLE fMaxDistance, fThickness, fHitFadeStart, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff, fWetness, fWetGroundBoost;
         D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY, vec4WaterRings;
@@ -1198,6 +1198,7 @@ public:
     int nSSRRefineSteps = 8;
     float fSSRMaxDistance = 24.0f;
     float fSSRThickness = 0.3f;
+    float fSSRHitFadeStart = 100.0f; // past any thickness: as before, a hit stays whole up to 3/4 of it
     float fSSREdgeFade = 0.1f;
     float fSSRIntensity = 1.0f;
     float fSSRGlossBoost = 2.0f;
@@ -1704,6 +1705,7 @@ public:
                 h.vec4ProjInfo = SSREffect->GetParameterByName(nullptr, "vec4ProjInfo");
                 h.fMaxDistance = SSREffect->GetParameterByName(nullptr, "fMaxDistance");
                 h.fThickness = SSREffect->GetParameterByName(nullptr, "fThickness");
+                h.fHitFadeStart = SSREffect->GetParameterByName(nullptr, "fHitFadeStart");
                 h.fEdgeFade = SSREffect->GetParameterByName(nullptr, "fEdgeFade");
                 h.fIntensity = SSREffect->GetParameterByName(nullptr, "fIntensity");
                 h.vec4ViewToPrevClip = SSREffect->GetParameterByName(nullptr, "vec4ViewToPrevClip");
@@ -2120,6 +2122,7 @@ public:
             IniFloat("REFLECTIONS", "SSRIntensity", &PostFxResource::fSSRIntensity, 1.0f, 0.0f, 1.0f),
             IniFloat("REFLECTIONS", "SSRWetGround", &PostFxResource::fSSRWetGround, 1.5f, 0.0f, 8.0f),
             IniFloat("REFLECTIONS", "SSRStepPixels", &PostFxResource::fSSRStepPixels, 2.0f, 1.0f, 8.0f),
+            IniFloat("REFLECTIONS", "SSRHitFadeStart", &PostFxResource::fSSRHitFadeStart, 100.0f, 0.0f, 100.0f),
             IniFloat("REFLECTIONS", "SSRSmoothing", &PostFxResource::fSSRDenoiseRadius, 2.0f, 0.0f, 8.0f),
             IniFlag("REFLECTIONS", "SSRPastThinObjects", &PostFxResource::bSSRPassThinObjects, 1),
             IniFlag("REFLECTIONS", "SSRStepJitter", &PostFxResource::bSSRStepJitter, 1),

@@ -232,6 +232,7 @@ export void RenderWaterReflections()
     effect->SetFloat(h.fUseMotion, 0.0f);
     effect->SetFloat(h.fMaxDistance, R.fSSRMaxDistance);
     effect->SetFloat(h.fThickness, R.fSSRThickness);
+    effect->SetFloat(h.fHitFadeStart, 100.0f); // the water keeps its hits whole
     effect->SetFloat(h.fEdgeFade, R.fSSREdgeFade);
     effect->SetFloat(h.fWaterIntensity, R.fSSRWaterIntensity);
     effect->SetFloat(h.fWaterBlur, R.fSSRWaterBlur);
