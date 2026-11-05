@@ -23,6 +23,7 @@ prefix = r'''
 #include <cstdio>
 #include <cstdlib>
 using std::abs;
+using std::pow;
 float max(float a, float b) { return std::max(a, b); }
 float min(float a, float b) { return std::min(a, b); }
 float clamp(float a, float lo, float hi) { return std::clamp(a, lo, hi); }
@@ -44,20 +45,25 @@ float gTraceSkipShare = 0.0f, gTraceHiZLevel = 0.0f, gTraceCosVR = 0.0f;
 float glossValue = 1.0f, fGlossCutoff = 0.5f;
 int SpecularTex=1;
 float wall = 5.0f;
-float LinearDepth(float2) { ++reads; return scene==0 ? 1000.0f : wall; }
+// Scene 3: a leg standing over the ray's path at 1.5, the ray passing behind it; the wall beyond.
+bool inLeg(float2 uv) { return scene==3 && uv.x>=0.4f && uv.x<0.5f; }
+float LinearDepth(float2 uv) { ++reads; return inLeg(uv) ? 1.5f : scene==0 ? 1000.0f : wall; }
 float MarchDepth(float2 uv) {
     ++reads;
     // Min-reduction includes a pole in a neighbouring pixel, absent on the ray.
     if (scene==2 && uv.x>=0.1f && uv.x<0.3f) return 0.5f;
-    return scene==0 ? 1000.0f : wall;
+    return inLeg(uv) ? 1.5f : scene==0 ? 1000.0f : wall;
 }
 // Distinct ids: the stub tells the levels apart by them, and zero is the specular sampler's
 // absence in the other harnesses, so none of them may sit at zero here.
-int HiZDepthTex=2, HiZDepthTex1=3;
+int HiZDepthTex=2, HiZDepthTex1=3, BackFaceDepthTex=4;
+float backFacesOff=1.0f;
 float hiZGrid=8.0f;
 float4 tex2Dlod(int which,float4 p) {
     // The gloss the receiver's paint stores; the march widens its hit bracket by it.
     if (which==SpecularTex) { p.y=glossValue; return p; }
+    // The leg's back, 1 cm behind its front, where the ray has already passed; 1 where nothing drew.
+    if (which==BackFaceDepthTex) { p.r=inLeg(p.uv) ? std::log(1.51f/0.05f)/std::log(1e5f) : 1.0f; return p; }
     // Conservative min over the cell of whichever level the ray chose, the coarse one's cells
     // twice as wide. The test covers both cells intersecting the silhouette and cells in empty
     // space, as a real reduction would.
@@ -74,7 +80,7 @@ Result trace(int which,float jitter,bool hiz,float pixels,float thickness,bool r
     float2 dUV{uv1.x-uv0.x,uv1.y-uv0.y};
     float2 vec2InvViewportSize{1/pixels,1/pixels},vec2HiZSize{grid,grid},vec2HiZSize1{grid*0.5f,grid*0.5f};
     float invZ0=1.0f,invZ1=0.1f,tEnd=1.0f,steps=NUM_STEPS; // the march's own budget is tested below in SSRStepCount
-    float fThickness=thickness,fHitFadeStart=100.0f,fThicknessByAngle=0.0f,fBackFacesOff=1.0f,fFarDivNear=1e5f,fNearPlane=0.05f,fUseHiZ=hiz ? (float)levels : 0.0f,fPassThinObjects=1;
+    float fThickness=thickness,fHitFadeStart=100.0f,fThicknessByAngle=0.0f,fBackFacesOff=backFacesOff,fFarDivNear=1e5f,fNearPlane=0.05f,fUseHiZ=hiz ? (float)levels : 0.0f,fPassThinObjects=1;
     struct { float len; } ray{9};
 '''
 suffix = r'''
@@ -113,7 +119,7 @@ int main() {
         auto pole=trace(2,jitter,hiz,pixels,thickness);
         require(pole.hit,"false coarse silhouette prevented a later valid hit");
         require(std::abs(pole.z-wall)<thickness,"resumed ray hit the false silhouette");
-        require(pole.reads<8*(NUM_STEPS+2*(NUM_REFINE_STEPS+1)),"ray exceeded bounded work");
+        require(pole.reads<8*(NUM_STEPS+3*(NUM_REFINE_STEPS+1)+1),"ray exceeded bounded work");
         cases+=3;
     }
     // The hierarchy's own bookkeeping: it reports the share of steps it took away, and in
@@ -176,6 +182,20 @@ int main() {
         ++cases;
     }
     glossValue=1.0f;
+    // A ray passing behind a leg within the thickness: the guess stops it on the leg, drawing the
+    // leg out across a door; the leg's back faces let it on to what lies beyond.
+    for (float jitter : {0.1f,0.5f,1.0f}) {
+        backFacesOff=1.0f;
+        auto guessed=trace(3,jitter,false,1920.0f,0.5f);
+        require(guessed.hit && guessed.z<2.5f,"without back faces the leg was not hit within the thickness");
+        backFacesOff=0.0f;
+        auto known=trace(3,jitter,false,1920.0f,0.5f);
+        require(known.hit && std::abs(known.z-wall)<0.5f,"a ray behind the leg did not carry on to the wall");
+        auto plane=trace(1,jitter,false,1920.0f,0.5f);
+        require(plane.hit && std::abs(plane.z-wall)<0.5f,"no back faces drawn on the ray, yet the wall was lost");
+        backFacesOff=1.0f;
+        cases+=3;
+    }
     std::printf("%d synthetic traversal cases passed\n",cases);
 }
 '''

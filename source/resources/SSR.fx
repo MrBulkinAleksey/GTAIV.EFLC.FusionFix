@@ -719,8 +719,10 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     float hiZLevel = (fUseHiZ > 1.0 && cellSteps * 2.0 > steps) ? 1.0 : 0.0;
     float2 hiZSize = hiZLevel > 0.0 ? vec2HiZSize1 : vec2HiZSize;
     gTraceHiZLevel = hiZLevel;
+    // The one over the three candidates' work keeps the bound off PixelJitter's 59 in the constant
+    // pool, which at 32 steps and 8 refinements fxc took with the wrong sign: not a ray hit anything.
     [loop] [fastopt]
-    for (int iteration = 0; iteration < NUM_STEPS + 2 * (NUM_REFINE_STEPS + 1); ++iteration)
+    for (int iteration = 0; iteration < NUM_STEPS + 3 * (NUM_REFINE_STEPS + 1) + 1; ++iteration)
     {
         [branch]
         if (refineLeft >= 0)
@@ -744,13 +746,19 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
             float candidateZ = 1.0 / lerp(invZ0, invZ1, hitHi);
             float surfaceZ = LinearDepth(lerp(uv0, uv1, hitHi));
             float thickness = abs(candidateZ - 1.0 / lerp(invZ0, invZ1, hitLo)) + hitSlab;
-            if (abs(candidateZ - surfaceZ) < thickness)
+            // The thickness is a guess; where a ped or a vehicle drew its back faces the depth says
+            // how far the thing really goes. A ray past that went behind it and carries on, as it
+            // does behind anything thicker than the guess: it took the colour of the leg it passed
+            // and widened it across a door, and stopped there it never found the road beyond.
+            float backZ = pow(fFarDivNear, max(tex2Dlod(BackFaceDepthTex, float4(lerp(uv0, uv1, hitHi), 0, 0)).r, fBackFacesOff)) * fNearPlane + 0.03;
+            if (abs(candidateZ - surfaceZ) < thickness && candidateZ <= backZ)
             {
                 hit = 1.0;
                 acceptedSurfaceZ = surfaceZ;
                 break;
             }
-            if (candidates >= 2)
+            // Two legs and then what lies beyond them
+            if (candidates >= 3)
                 break;
 
             // Resume after the rejected interval. Full-size depth, not the dilated
@@ -919,11 +927,6 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // deferred lighting already blends in as the confidence falls.
     gTraceKept = float3(1.0, 1.0 - smoothstep(min(fHitFadeStart, hitThickness * 0.75), hitThickness, hitDelta), confidence);
     confidence *= gTraceKept.g;
-    // The thickness is a guess; where a ped or a vehicle drew its back faces the depth says how
-    // far the thing really goes. A ray past that went behind it, and stopping it at the outline
-    // drew the outline out across a door.
-    if (hitZ > pow(fFarDivNear, max(tex2Dlod(BackFaceDepthTex, float4(finalUV, 0, 0)).r, fBackFacesOff)) * fNearPlane + 0.03)
-        confidence = 0.0;
     // Behind an object the screen holds nothing, so a ray passing there may have run into
     // something it does not show. Behind a trunk that is a few dozen centimetres; behind a ped
     // standing metres in front of a door, with the camera turned so the door shows next to his

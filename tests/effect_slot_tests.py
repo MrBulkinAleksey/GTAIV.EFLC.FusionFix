@@ -37,7 +37,7 @@ SLACK = 8         # slots an entry may grow past its reviewed size before this f
 
 # Entry point -> instruction slots when last reviewed, 2026-11-05, NUM_STEPS=32.
 ENTRIES = {
-    'SSRTrace_PS': 994,
+    'SSRTrace_PS': 995,
     'SSRWater_PS': 872,
     'SSRFallback_PS': 513,
     'SSRTemporal_PS': 390,
