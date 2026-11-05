@@ -432,8 +432,10 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
     // With even steps over the whole crossing a step near the horizon was 150 m long, and the
     // clouds came out smeared down the screen.
     // Each pixel starts up to a coarse step later: with the same coarse steps for every pixel,
-    // thin cloud between two of them went missing in whole bands across the screen.
-    float jitter = frac(PixelJitter(vpos + fFrameShift) + fFrameJitter);
+    // thin cloud between two of them went missing in whole bands across the screen. The reflections
+    // accumulate nothing, and their few pixels are spread over a whole car, where one frame's noise
+    // showed as a grid of dimples on a bonnet: they all start half a step in.
+    float jitter = full ? frac(PixelJitter(vpos + fFrameShift) + fFrameJitter) : 0.5;
     // The steps towards the sun, each twice the last, sample the cloud at fixed distances: as a sample point
     // moved down through a cloud, each of them in turn left its top and the light jumped by its whole step,
     // and the body came out in layers, each a copy of the top's outline (by up to a fifth of the sun's
