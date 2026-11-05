@@ -7,7 +7,7 @@ no skin scattering, and a black screen. AO.fx at about 1330 slots did exactly th
 SSR_PS at about 984 ran, so 984 is the ceiling this check holds the effect to.
 
 Each entry also carries the size it was last reviewed at, and growing past that by more than
-SLACK fails: with the march 24 slots under the ceiling, a growth has to be a decision rather
+SLACK fails: with the march 4 slots under the ceiling, a growth has to be a decision rather
 than a surprise. Update the baseline in ENTRIES once the new size has been seen in the game.
 
 Needs fxc. On Windows source/dxsdk/lib/x86/fxc.exe runs directly; elsewhere the docker image
@@ -34,7 +34,7 @@ SLACK = 8         # slots an entry may grow past its reviewed size before this f
 
 # Entry point -> instruction slots when last reviewed, 2026-11-05, NUM_STEPS=32.
 ENTRIES = {
-    'SSRTrace_PS': 966,
+    'SSRTrace_PS': 980,
     'SSRWater_PS': 855,
     'SSRFallback_PS': 513,
     'SSRTemporal_PS': 390,

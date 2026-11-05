@@ -56,25 +56,42 @@ float sample(float* data,float2 uv) {
 float4 tex2Dlod(int,float4 a) { a.r=sample(depths,a.uv);return a; }
 float3 SampleHistory(float2 uv) { return {sample(colours,uv)}; }
 float3 SampleHistoryPoint(float2 uv) { return SampleHistory(uv); }
+// What TraceHit leaves for SampleHitHistory.
+float2 gHitTexel,gHitTexelFraction;
+float4 gHitTexelApart{0,0,0,0};
 '''
 suffix = r'''
 void close(float a,float b,const char* reason) {
     if (std::abs(a-b)>1e-5f) { std::fprintf(stderr,"%s: %f != %f\n",reason,a,b); std::exit(1); }
+}
+// As TraceHit: a ray that hit the surface of log depth surface, read at uv.
+float Hit(float2 uv,float surface) {
+    float2 pixel=uv/vec2InvHistorySize-0.5f;
+    gHitTexelFraction=frac(pixel);
+    gHitTexel=(floor(pixel)+0.5f)*vec2InvHistorySize;
+    float a[4];
+    for (int i=0;i<4;++i) a[i]=std::abs(depths[i]-surface);
+    float nearest=std::min({a[0],a[1],a[2],a[3]});
+    gHitTexelApart=float4(a[0]-nearest,a[1]-nearest,a[2]-nearest,a[3]-nearest);
+    return SampleHitHistory(uv).x;
 }
 int main() {
     // Black foreground and white background: each side of the depth edge must
     // retain its own colour rather than the hardware bilinear grey.
     depths[0]=depths[2]=0.2f; depths[1]=depths[3]=0.8f;
     colours[0]=colours[2]=0; colours[1]=colours[3]=1;
-    close(SampleHitHistory({0.49f,0.5f}).x,0,"foreground contaminated");
-    close(SampleHitHistory({0.51f,0.5f}).x,1,"background contaminated");
+    close(Hit({0.49f,0.5f},0.2f),0,"foreground contaminated");
+    close(Hit({0.51f,0.5f},0.8f),1,"background contaminated");
+    // A read that fell nearer the other side of the edge still takes the surface the ray hit.
+    close(Hit({0.51f,0.5f},0.2f),0,"foreground hit read the background");
+    close(Hit({0.49f,0.5f},0.8f),1,"background hit read the foreground");
     // The same colours on a continuous surface retain normal bilinear filtering.
     for (float& d:depths) d=0.2f;
-    close(SampleHitHistory({0.49f,0.5f}).x,SampleHistory({0.49f,0.5f}).x,"flat surface filtering changed");
+    close(Hit({0.49f,0.5f},0.2f),SampleHistory({0.49f,0.5f}).x,"flat surface filtering changed");
     // Without previous depth the original bilinear result remains available.
     depths[1]=depths[3]=0.8f; fUsePrevDepth=0;
     close(SampleHitHistory({0.49f,0.5f}).x,SampleHistory({0.49f,0.5f}).x,"missing depth fallback changed");
-    std::puts("history filter passed foreground, background and fallback checks");
+    std::puts("history filter passed foreground, background, surface and fallback checks");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='ssr-history-test-') as directory:

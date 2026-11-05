@@ -398,6 +398,9 @@ float2 ViewToUV(float3 P)
     return S * vec2InvViewportSize;
 }
 
+// The view depth in the history's camera of the point HistoryUV was last given.
+static float gHistoryViewZ = 0.0;
+
 float2 HistoryUV(float3 P)
 {
     float4 clip = P.x * vec4ViewToPrevClip[0]
@@ -405,6 +408,7 @@ float2 HistoryUV(float3 P)
                 + P.z * vec4ViewToPrevClip[2]
                 +       vec4ViewToPrevClip[3];
 
+    gHistoryViewZ = clip.w;
     if (clip.w <= 0.0)
         return float2(-1.0, -1.0);
 
@@ -505,6 +509,12 @@ static float gTraceHiZLevel = 0.0;
 // For debug view 13, what each test left of the last TraceHit's confidence: last frame's depth,
 // the distance to the surface the ray hit, and the rest (screen edge, facing, length, hidden stretch).
 static float3 gTraceKept = 1.0;
+// The four texels of last frame's depth around the last TraceHit's history read: where they start,
+// where between them the read falls, and how much farther each is than the nearest from the surface
+// the ray hit.
+static float2 gHitTexel = 0.0;
+static float2 gHitTexelFraction = 0.0;
+static float4 gHitTexelApart = 0.0;
 // The screen path of the last SetupReflectionRay's ray, for ScreenFallback: from gTraceUV0 to
 // gTraceUVEnd, where it leaves the screen; gTracePath is 0 when the ray was not marched.
 static float2 gTraceUV0 = 0.0;
@@ -905,17 +915,36 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // door reflects, moved by a pixel or two since, put his dark figure into the door. The
     // depth copied with the history tells them apart. It is compared at the surface the depth
     // buffer holds, with the temporal passes' tolerance: the ray's thickness grows with its
-    // step to metres far out and let the ped through. clip.w is the view depth in the
-    // history's camera.
+    // step to metres far out and let the ped through.
+    //
+    // A read between two texels across an outline gave a depth of neither surface, and a step
+    // offset or the camera's jitter moving a hit by under a pixel turned it down or let it
+    // through from frame to frame: stripes and flicker on a car door beside the player. So of
+    // the four texels around the read the nearest to the surface decides, in the stored log
+    // depth, and SampleHitHistory takes its colour from the texels of that surface.
     [branch]
-    if (fUsePrevDepth > 0.0 && checkHitDepth)
+    if (fUsePrevDepth > 0.0)
     {
-        float prevSurfZ = dot(float4(surfP, 1.0), float4(vec4ViewToPrevClip[0].w, vec4ViewToPrevClip[1].w,
-                                                         vec4ViewToPrevClip[2].w, vec4ViewToPrevClip[3].w));
-        float prevZ = PrevLinearDepth(histUV);
-        float tolerance = 0.05 * prevSurfZ + 0.1;
-        gTraceKept.r = 1.0 - smoothstep(tolerance * 0.5, tolerance, abs(prevZ - prevSurfZ));
-        confidence *= gTraceKept.r;
+        float2 pixel = histUV / vec2InvHistorySize - 0.5;
+        gHitTexelFraction = frac(pixel);
+        gHitTexel = (pixel - gHitTexelFraction + 0.5) * vec2InvHistorySize;
+        float4 stored = float4(tex2Dlod(PrevDepthTex, float4(gHitTexel, 0, 0)).r,
+                               tex2Dlod(PrevDepthTex, float4(gHitTexel + float2(vec2InvHistorySize.x, 0.0), 0, 0)).r,
+                               tex2Dlod(PrevDepthTex, float4(gHitTexel + float2(0.0, vec2InvHistorySize.y), 0, 0)).r,
+                               tex2Dlod(PrevDepthTex, float4(gHitTexel + vec2InvHistorySize, 0, 0)).r);
+        float logRange = log2(vec2PrevDepthRange.y);
+        float4 apart = abs(stored - log2(abs(gHistoryViewZ) / vec2PrevDepthRange.x) / logRange);
+        float nearest = min(min(apart.x, apart.y), min(apart.z, apart.w));
+        gHitTexelApart = apart - nearest;
+        // A surface that moved by itself was elsewhere last frame, so nothing can confirm it; the
+        // nearest texels still pick its colour.
+        if (checkHitDepth)
+        {
+            // In relative depth, which log depth gives directly this close to the tolerance.
+            float tolerance = 0.05 + 0.1 / gHistoryViewZ;
+            gTraceKept.r = 1.0 - smoothstep(tolerance * 0.5, tolerance, nearest * logRange * 0.6931472);
+            confidence *= gTraceKept.r;
+        }
     }
 
     return float4(histUV, confidence, saturate(rayLen / fMaxDistance));
@@ -929,32 +958,26 @@ float3 SampleHistoryPoint(float2 uv)
 }
 
 // Bilinear colour alone blends the bright background into an object's silhouette.
-// On a depth edge, discard colour taps from a different previous-frame surface. In
-// flat regions keep the hardware bilinear lookup. History and depth are full size
-// even when SSR itself is half size.
+// On a depth edge, discard colour taps from a different previous-frame surface: the
+// texels TraceHit read for uv, those within a step of the nearest to the hit. In flat
+// regions keep the hardware bilinear lookup. History and depth are full size even when
+// SSR itself is half size.
 float3 SampleHitHistory(float2 uv)
 {
     if (fUsePrevDepth <= 0.0)
         return SampleHistory(uv);
-    float2 pixel = uv / vec2InvHistorySize - 0.5;
-    float2 base = (floor(pixel) + 0.5) * vec2InvHistorySize;
-    float2 f = frac(pixel);
-    float2 dx = float2(vec2InvHistorySize.x, 0.0);
-    float2 dy = float2(0.0, vec2InvHistorySize.y);
-    float d00 = tex2Dlod(PrevDepthTex, float4(base, 0, 0)).r;
-    float d10 = tex2Dlod(PrevDepthTex, float4(base + dx, 0, 0)).r;
-    float d01 = tex2Dlod(PrevDepthTex, float4(base + dy, 0, 0)).r;
-    float d11 = tex2Dlod(PrevDepthTex, float4(base + dx + dy, 0, 0)).r;
-    float reference = f.x < 0.5 ? (f.y < 0.5 ? d00 : d01) : (f.y < 0.5 ? d10 : d11);
     // Stored depth is logarithmic; 0.002 is about a 2% separation for a 10000:1 range.
-    float4 same = 1.0 - step(0.002, abs(float4(d00, d10, d01, d11) - reference));
+    float4 same = 1.0 - step(0.002, gHitTexelApart);
     if (all(same > 0.0))
         return SampleHistory(uv);
+    float2 f = gHitTexelFraction;
+    float2 dx = float2(vec2InvHistorySize.x, 0.0);
+    float2 dy = float2(0.0, vec2InvHistorySize.y);
     float4 w = same * float4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y),
                              (1.0 - f.x) * f.y, f.x * f.y);
     float sum = dot(w, 1.0);
-    float3 colour = SampleHistoryPoint(base) * w.x + SampleHistoryPoint(base + dx) * w.y
-                  + SampleHistoryPoint(base + dy) * w.z + SampleHistoryPoint(base + dx + dy) * w.w;
+    float3 colour = SampleHistoryPoint(gHitTexel) * w.x + SampleHistoryPoint(gHitTexel + dx) * w.y
+                  + SampleHistoryPoint(gHitTexel + dy) * w.z + SampleHistoryPoint(gHitTexel + dx + dy) * w.w;
     return colour / max(sum, 1e-5);
 }
 
