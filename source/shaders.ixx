@@ -470,8 +470,8 @@ public:
                         pDevice->SetPixelShaderConstantF(217, &arr9[0], 1);
 
                         // Soft Highlights (zz_zz_zz_light_response.py): c195 x the knee, y from it to the ceiling (0 off), z
-                        // -log2(e) over that, w the sky's share of the far depth. In the exposed scene, which the composite
-                        // doubles: a brightest channel of 0.75 on the screen starts to roll off, towards 1.25. Not on HDR
+                        // -log2(e) over that, w the sky's share of the far depth. In the scene by its exposure and the eye's
+                        // adaptation, which the composite then doubles: a brightest channel of 0.75 on the screen starts to roll off, towards 1.25. Not on HDR
                         // output, which keeps the highlights.
                         static auto softHighlights = FusionFixSettings.GetRef("PREF_SOFT_HIGHLIGHTS");
                         static constexpr float softKnee = 0.375f, softRange = 0.25f;
