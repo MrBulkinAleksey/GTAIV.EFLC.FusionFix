@@ -332,8 +332,8 @@ public:
         D3DXHANDLE fDenoiseRadius, fDenoiseSSROnly, fDenoiseHitDistance, techSSRDenoise, fPassThinObjects, fStepJitter, fTowardCamera, fReflectionBlur, fDistanceFade, fFallback, fNeighbourFill, fFillMinDistance, fFillPixelScale, fSpreadRadius, fVehicleScale;
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, fCSGrassGloss, techContactShadows;
         D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
-        D3DXHANDLE vec2InvViewportSize, vec2InvHistorySize, vec2HitTexelStep, fNearPlane, fFarDivNear, vec4ProjInfo;
-        D3DXHANDLE fMaxDistance, fThickness, fHitFadeStart, fEdgeFade, fIntensity;
+        D3DXHANDLE vec2InvViewportSize, vec2InvHistorySize, fNearPlane, fFarDivNear, vec4ProjInfo;
+        D3DXHANDLE fMaxDistance, fThickness, fThicknessByAngle, fHitFadeStart, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff, fWetness, fWetGroundBoost;
         D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY, vec4WaterRings;
@@ -1057,7 +1057,6 @@ public:
     float fSSRDenoiseRadius = 2.0f;
     bool bSSRPassThinObjects = true;
     bool bSSRStepJitter = true;
-    bool bSSRHitReadsApart = true;
     // SSRTemporalJitter: while SSR accumulates, the step offsets move on every
     // frame (vec2NoiseOffset in SSR.fx), so the accumulation averages them.
     bool bSSRTemporalJitter = true;
@@ -1198,6 +1197,7 @@ public:
     int nSSRRefineSteps = 8;
     float fSSRMaxDistance = 24.0f;
     float fSSRThickness = 0.3f;
+    float fSSRThicknessByAngle = 0.0f; // 0: the thickness for every ray | 1: it follows the ray's turn from the view
     float fSSRHitFadeStart = 100.0f; // past any thickness: as before, a hit stays whole up to 3/4 of it
     float fSSREdgeFade = 0.1f;
     float fSSRIntensity = 1.0f;
@@ -1699,13 +1699,13 @@ public:
                 h.SurfaceTex2D = SSREffect->GetParameterByName(nullptr, "SurfaceTex2D");
                 h.vec2InvViewportSize = SSREffect->GetParameterByName(nullptr, "vec2InvViewportSize");
                 h.vec2InvHistorySize = SSREffect->GetParameterByName(nullptr, "vec2InvHistorySize");
-                h.vec2HitTexelStep = SSREffect->GetParameterByName(nullptr, "vec2HitTexelStep");
                 h.fNearPlane = SSREffect->GetParameterByName(nullptr, "fNearPlane");
                 h.fFarDivNear = SSREffect->GetParameterByName(nullptr, "fFarDivNear");
                 h.vec4ProjInfo = SSREffect->GetParameterByName(nullptr, "vec4ProjInfo");
                 h.fMaxDistance = SSREffect->GetParameterByName(nullptr, "fMaxDistance");
                 h.fThickness = SSREffect->GetParameterByName(nullptr, "fThickness");
                 h.fHitFadeStart = SSREffect->GetParameterByName(nullptr, "fHitFadeStart");
+                h.fThicknessByAngle = SSREffect->GetParameterByName(nullptr, "fThicknessByAngle");
                 h.fEdgeFade = SSREffect->GetParameterByName(nullptr, "fEdgeFade");
                 h.fIntensity = SSREffect->GetParameterByName(nullptr, "fIntensity");
                 h.vec4ViewToPrevClip = SSREffect->GetParameterByName(nullptr, "vec4ViewToPrevClip");
@@ -2123,10 +2123,10 @@ public:
             IniFloat("REFLECTIONS", "SSRWetGround", &PostFxResource::fSSRWetGround, 1.5f, 0.0f, 8.0f),
             IniFloat("REFLECTIONS", "SSRStepPixels", &PostFxResource::fSSRStepPixels, 2.0f, 1.0f, 8.0f),
             IniFloat("REFLECTIONS", "SSRHitFadeStart", &PostFxResource::fSSRHitFadeStart, 100.0f, 0.0f, 100.0f),
+            IniFloat("REFLECTIONS", "SSRThicknessByAngle", &PostFxResource::fSSRThicknessByAngle, 0.0f, 0.0f, 1.0f),
             IniFloat("REFLECTIONS", "SSRSmoothing", &PostFxResource::fSSRDenoiseRadius, 2.0f, 0.0f, 8.0f),
             IniFlag("REFLECTIONS", "SSRPastThinObjects", &PostFxResource::bSSRPassThinObjects, 1),
             IniFlag("REFLECTIONS", "SSRStepJitter", &PostFxResource::bSSRStepJitter, 1),
-            IniFlag("REFLECTIONS", "SSRHitReadsApart", &PostFxResource::bSSRHitReadsApart, 1),
             IniFlag("REFLECTIONS", "SSRTemporalJitter", &PostFxResource::bSSRTemporalJitter, 1),
             IniFloat("REFLECTIONS", "SSRTemporal", &PostFxResource::fSSRTemporalBlend, 0.85f, 0.0f, 0.97f),
             IniFloat("REFLECTIONS", "SSRFallback", &PostFxResource::fSSRFallback, 0.8f, 0.0f, 1.0f),

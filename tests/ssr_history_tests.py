@@ -24,8 +24,6 @@ struct float2 { float x,y; float2(float a=0,float b=0):x(a),y(b){} };
 float2 operator+(float2 a,float b) { return {a.x+b,a.y+b}; }
 float2 operator+(float2 a,float2 b) { return {a.x+b.x,a.y+b.y}; }
 float2 operator-(float2 a,float b) { return {a.x-b,a.y-b}; }
-float2 operator-(float2 a,float2 b) { return {a.x-b.x,a.y-b.y}; }
-float2 operator*(float2 a,float b) { return {a.x*b,a.y*b}; }
 float2 operator/(float2 a,float2 b) { return {a.x/b.x,a.y/b.y}; }
 float2 operator*(float2 a,float2 b) { return {a.x*b.x,a.y*b.y}; }
 float2 floor(float2 a) { return {std::floor(a.x),std::floor(a.y)}; }
@@ -47,8 +45,7 @@ float4 step(float e,float4 a) { return {a.x>=e?1.f:0.f,a.y>=e?1.f:0.f,a.z>=e?1.f
 bool operator>(float4 a,float b) { return a.x>b&&a.y>b&&a.z>b&&a.w>b; }
 bool all(bool b) { return b; }
 float dot(float4 a,float b) { return (a.x+a.y+a.z+a.w)*b; }
-// The texels vec2HitTexelStep apart are the test's two by two, in both of Check's sizes.
-float2 vec2InvHistorySize,vec2HitTexelStep{0.5f,0.5f};
+float2 vec2InvHistorySize{1.f/6,1.f/6}; // the texels HIT_TEXEL_STEP apart are the test's two by two
 float fUsePrevDepth=1;
 int PrevDepthTex;
 float depths[4],colours[4];
@@ -59,6 +56,7 @@ float sample(float* data,float2 uv) {
 float4 tex2Dlod(int,float4 a) { a.r=sample(depths,a.uv);return a; }
 float3 SampleHistory(float2 uv) { return {sample(colours,uv)}; }
 float3 SampleHistoryPoint(float2 uv) { return SampleHistory(uv); }
+#define HIT_TEXEL_STEP 3.0f
 // What TraceHit leaves for SampleHitHistory.
 float2 gHitTexel,gHitTexelFraction;
 float4 gHitTexelApart{0,0,0,0};
@@ -71,15 +69,14 @@ void close(float a,float b,const char* reason) {
 float Hit(float2 uv,float surface) {
     float2 pixel=uv/vec2InvHistorySize-0.5f;
     gHitTexelFraction=frac(pixel);
-    gHitTexel=(floor(pixel)+1.0f)*vec2InvHistorySize-vec2HitTexelStep*0.5f;
+    gHitTexel=(floor(pixel)-0.5f)*vec2InvHistorySize;
     float a[4];
     for (int i=0;i<4;++i) a[i]=std::abs(depths[i]-surface);
     float nearest=std::min({a[0],a[1],a[2],a[3]});
     gHitTexelApart=float4(a[0]-nearest,a[1]-nearest,a[2]-nearest,a[3]-nearest);
     return SampleHitHistory(uv).x;
 }
-void Check() {
-    fUsePrevDepth=1;
+int main() {
     // Black foreground and white background: each side of the depth edge must
     // retain its own colour rather than the hardware bilinear grey.
     depths[0]=depths[2]=0.2f; depths[1]=depths[3]=0.8f;
@@ -95,10 +92,6 @@ void Check() {
     // Without previous depth the original bilinear result remains available.
     depths[1]=depths[3]=0.8f; fUsePrevDepth=0;
     close(SampleHitHistory({0.49f,0.5f}).x,SampleHistory({0.49f,0.5f}).x,"missing depth fallback changed");
-}
-int main() {
-    vec2InvHistorySize={1.f/6,1.f/6}; Check(); // reads three texels apart
-    vec2InvHistorySize={0.5f,0.5f}; Check();   // next to each other
     std::puts("history filter passed foreground, background, surface and fallback checks");
 }
 '''

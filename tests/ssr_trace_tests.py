@@ -40,7 +40,7 @@ bool all(bool a) { return a; }
 float2 lerp(float2 a,float2 b,float t) { return {lerp(a.x,b.x,t),lerp(a.y,b.y,t)}; }
 struct float4 { float r; float y=0; float2 uv; float4(float2 p,int,int):r(0),uv(p) {} };
 int scene, reads;
-float gTraceSkipShare = 0.0f, gTraceHiZLevel = 0.0f;
+float gTraceSkipShare = 0.0f, gTraceHiZLevel = 0.0f, gTraceCosVR = 0.0f;
 float glossValue = 1.0f, fGlossCutoff = 0.5f;
 int SpecularTex=1;
 float wall = 5.0f;
@@ -74,7 +74,7 @@ Result trace(int which,float jitter,bool hiz,float pixels,float thickness,bool r
     float2 dUV{uv1.x-uv0.x,uv1.y-uv0.y};
     float2 vec2InvViewportSize{1/pixels,1/pixels},vec2HiZSize{grid,grid},vec2HiZSize1{grid*0.5f,grid*0.5f};
     float invZ0=1.0f,invZ1=0.1f,tEnd=1.0f,steps=NUM_STEPS; // the march's own budget is tested below in SSRStepCount
-    float fThickness=thickness,fHitFadeStart=100.0f,fUseHiZ=hiz ? (float)levels : 0.0f,fPassThinObjects=1;
+    float fThickness=thickness,fHitFadeStart=100.0f,fThicknessByAngle=0.0f,fUseHiZ=hiz ? (float)levels : 0.0f,fPassThinObjects=1;
     struct { float len; } ray{9};
 '''
 suffix = r'''

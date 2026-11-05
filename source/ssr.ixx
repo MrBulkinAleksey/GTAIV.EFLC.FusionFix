@@ -133,7 +133,8 @@ export void RenderScreenSpaceReflections()
 
     auto& h = R.SSREffectHandles;
     ID3DXEffect* effect = R.SSREffect;
-    SetHistorySize(effect, width, height);
+    const float invHistorySize[] = { 1.0f / width, 1.0f / height };
+    effect->SetFloatArray(h.vec2InvHistorySize, invHistorySize, 2);
     D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
 
     ScreenQuad screenQuad = {};
@@ -190,6 +191,7 @@ export void RenderScreenSpaceReflections()
     effect->SetFloat(h.fMaxDistance, R.fSSRMaxDistance);
     effect->SetFloat(h.fThickness, R.fSSRThickness);
     effect->SetFloat(h.fHitFadeStart, R.fSSRHitFadeStart);
+    effect->SetFloat(h.fThicknessByAngle, R.fSSRThicknessByAngle);
     effect->SetFloat(h.fEdgeFade, R.fSSREdgeFade);
     effect->SetFloat(h.fIntensity, R.fSSRIntensity);
     effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);

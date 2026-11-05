@@ -249,7 +249,6 @@ sampler2D SurfaceTex
 
 uniform float2 vec2InvViewportSize;
 uniform float2 vec2InvHistorySize; // full-size history texel, independent of SSR resolution
-uniform float2 vec2HitTexelStep; // how far apart TraceHit reads last frame's depth around a hit, see SetHistorySize
 uniform float fNearPlane;
 uniform float fFarDivNear;
 uniform float4 vec4ProjInfo;
@@ -264,6 +263,7 @@ uniform float2 vec2PrevDepthRange; // fNearPlane and fFarDivNear of the scene Pr
 
 uniform float fMaxDistance;     // world units to march before giving up
 uniform float fThickness;       // how deep behind a surface still counts as a hit
+uniform float fThicknessByAngle; // 0..1, how far that depth follows the ray's turn from the view, see TraceHit
 uniform float fHitFadeStart;    // metres off the surface where a hit starts to give way to the game's reflection map
 uniform float fEdgeFade;        // 0..0.5, screen fraction over which to fade at borders
 uniform float fIntensity;       // final multiplier on confidence
@@ -497,10 +497,6 @@ float PixelJitter(float2 pixel)
     return 1.0 - frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
 }
 
-// For debug view 3: the view depth of the last TraceHit's hit, and its ray's view
-// depth direction (negative towards the camera).
-static float gTraceHitZ = 0.0;
-static float gTraceRayZ = 0.0;
 static float gTraceHitMotion = 0.0; // reflected hit's own motion, in full-size pixels
 // Share of the last TraceHit's steps that a depth hierarchy jump took away, for debug view 12:
 // whether the hierarchy pays for its pass and its boundary arithmetic in this scene.
@@ -511,6 +507,10 @@ static float gTraceHiZLevel = 0.0;
 // For debug view 13, what each test left of the last TraceHit's confidence: last frame's depth,
 // the distance to the surface the ray hit, and the rest (screen edge, facing, length, hidden stretch).
 static float3 gTraceKept = 1.0;
+// The cosine between view and reflection of the last SetupReflectionRay's ray.
+static float gTraceCosVR = 0.0;
+// How many history texels apart TraceHit reads last frame's depth around a hit.
+#define HIT_TEXEL_STEP 3.0
 
 // The four texels of last frame's depth around the last TraceHit's history read: where the first is,
 // where between them the read falls, and how much farther each is than the nearest from the surface
@@ -558,7 +558,6 @@ bool SetupReflectionRay(float3 C, float3 n, float3 microNormal, out ReflectionRa
     float z = C.z;
     float3 V = normalize(C);
     float3 R = reflect(V, microNormal);
-    gTraceRayZ = R.z;
     // A microfacet can reflect below the geometric surface; it cannot see the scene.
     if (dot(R, n) <= 0.0)
         return false;
@@ -570,6 +569,7 @@ bool SetupReflectionRay(float3 C, float3 n, float3 microNormal, out ReflectionRa
     // gone at -0.25, which keeps the ped out of the door; at 1 they keep full weight down to
     // -0.5 and fade by -0.8, which lets a roof seen steeply from above (about -0.5) reflect.
     float cosVR = dot(V, R);
+    gTraceCosVR = cosVR;
     ray.facing = lerp(saturate(cosVR * 2.0 + 0.5), saturate((cosVR + 0.8) / 0.3), fTowardCamera);
     if (ray.facing <= 0.0)
         return false;
@@ -673,6 +673,12 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // and the bracket that counts as one widens with roughness. Mirror paint keeps fThickness
     // exactly, and without a specular target the caller passes gloss 1.
     float hitSlab = fThickness * (1.0 + 1.5 * (1.0 - gloss));
+    // A ray running across the screen stays close to the depth it passes, so little depth is
+    // needed to catch what it hits, and more let it stop at outlines it only passed near: rays
+    // from a stretch of door all took the same column of the screen. One running away from the
+    // camera crosses much depth per pixel and needs more. A quarter of the thickness across the
+    // screen, the whole of it at about 75 degrees towards the view.
+    hitSlab *= 1.0 + fThicknessByAngle * (0.25 / sqrt(1.04 - gTraceCosVR) - 1.0);
 
     // March and refinement share one bounded loop. A conservative 2x2 depth can report
     // the silhouette of a neighbouring pixel; reject that candidate in full-size depth
@@ -871,7 +877,6 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     float hitDelta = abs(hitZ - surfZ);
     float hitThickness = abs(hitZ - 1.0 / lerp(invZ0, invZ1, lo)) + hitSlab;
     float3 hitP = ViewPosFromUVZ(finalUV, hitZ);
-    gTraceHitZ = hitP.z;
 
     // The surface the depth buffer holds where the ray hit; hitP is up to a thickness off it.
     float3 surfP = ViewPosFromUVZ(finalUV, surfZ);
@@ -930,18 +935,17 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // four texels around the read the nearest to the surface decides, in the stored log depth,
     // and SampleHitHistory takes its colour from the texels of that surface. A ray stops at the
     // near edge of what it hits, and a jittered camera or a ped shifting his weight had that edge
-    // up to a pixel and a half from there last frame, so the four stand that far off the read
-    // (SSRHitReadsApart = 0 puts them next to it, to see what the distance costs).
+    // up to a pixel and a half from there last frame, so the four stand that far off the read.
     [branch]
     if (fUsePrevDepth > 0.0)
     {
         float2 pixel = histUV / vec2InvHistorySize - 0.5;
         gHitTexelFraction = frac(pixel);
-        gHitTexel = (pixel - gHitTexelFraction + 1.0) * vec2InvHistorySize - 0.5 * vec2HitTexelStep;
+        gHitTexel = (pixel - gHitTexelFraction - 0.5) * vec2InvHistorySize;
         float4 stored = float4(tex2Dlod(PrevDepthTex, float4(gHitTexel, 0, 0)).r,
-                               tex2Dlod(PrevDepthTex, float4(gHitTexel + float2(vec2HitTexelStep.x, 0.0), 0, 0)).r,
-                               tex2Dlod(PrevDepthTex, float4(gHitTexel + float2(0.0, vec2HitTexelStep.y), 0, 0)).r,
-                               tex2Dlod(PrevDepthTex, float4(gHitTexel + vec2HitTexelStep, 0, 0)).r);
+                               tex2Dlod(PrevDepthTex, float4(gHitTexel + float2(HIT_TEXEL_STEP * vec2InvHistorySize.x, 0.0), 0, 0)).r,
+                               tex2Dlod(PrevDepthTex, float4(gHitTexel + float2(0.0, HIT_TEXEL_STEP * vec2InvHistorySize.y), 0, 0)).r,
+                               tex2Dlod(PrevDepthTex, float4(gHitTexel + HIT_TEXEL_STEP * vec2InvHistorySize, 0, 0)).r);
         float logRange = log2(vec2PrevDepthRange.y);
         float4 apart = abs(stored - log2(abs(gHistoryViewZ) / vec2PrevDepthRange.x) / logRange);
         float nearest = min(min(apart.x, apart.y), min(apart.z, apart.w));
@@ -981,8 +985,8 @@ float3 SampleHitHistory(float2 uv)
     if (all(same > 0.0))
         return SampleHistory(uv);
     float2 f = gHitTexelFraction;
-    float2 dx = float2(vec2HitTexelStep.x, 0.0);
-    float2 dy = float2(0.0, vec2HitTexelStep.y);
+    float2 dx = float2(HIT_TEXEL_STEP * vec2InvHistorySize.x, 0.0);
+    float2 dy = float2(0.0, HIT_TEXEL_STEP * vec2InvHistorySize.y);
     float4 w = same * float4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y),
                              (1.0 - f.x) * f.y, f.x * f.y);
     float sum = dot(w, 1.0);
@@ -1315,12 +1319,10 @@ TraceOutput SSRTrace_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS)
         o.colour = float4(hit.x > 0.0 ? gTraceKept : 0.0, 1.0);
         return o;
     }
-    // Debug view 3 (for now): what the ray hit in place of the hit, which SSR_PS passes on, see
-    // SSRDebug_PS.
+    // Debug view 3: where the ray hit in place of the hit, which SSR_PS passes on, see SSRDebug_PS.
     if (fDebugMode > 2.5 && fDebugMode < 3.5)
     {
-        float nearer = gTraceHitZ < C.z - 0.25 ? 1.0 : 0.0;
-        o.colour = float4(nearer, 1.0 - nearer, gTraceRayZ < 0.0 ? 1.0 : 0.0, hit.z);
+        o.colour = float4(0.0, 1.0, 0.0, hit.z);
         return o;
     }
     // Rough paint reflects a spread of directions even where the ray hit, so its hit wants
@@ -1617,10 +1619,9 @@ float4 SSRDebug_PS(float2 uv : TEXCOORD0, float2 vPos : VPOS) : COLOR0
 
     float3 C = ViewPosFromUVZ(uv, LinearDepth(uv));
 
-    // 3 (for now): what each ray hit, which SSR_PS writes in place of the colour, read before
-    // smoothing and accumulation. Red: something nearer the camera than the surface reflecting
-    // it, green: something farther; blue added where the ray heads towards the camera; brighter
-    // the more the hit counts. Black a miss, dark grey a surface SSR does not trace.
+    // 3: where each ray hit, which SSR_PS writes in place of the colour, read before smoothing and
+    // accumulation. Green, brighter the more the hit counts. Black a miss, dark grey a surface SSR
+    // does not trace.
     if (fDebugMode < 3.5)
     {
         if (sky)
