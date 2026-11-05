@@ -46,6 +46,7 @@ bool operator>(float4 a,float b) { return a.x>b&&a.y>b&&a.z>b&&a.w>b; }
 bool all(bool b) { return b; }
 float dot(float4 a,float b) { return (a.x+a.y+a.z+a.w)*b; }
 float2 vec2InvHistorySize{0.5f,0.5f};
+float2 vec2HitTexelStep{0.5f,0.5f};
 float fUsePrevDepth=1;
 int PrevDepthTex;
 float depths[4],colours[4];

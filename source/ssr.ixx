@@ -133,8 +133,7 @@ export void RenderScreenSpaceReflections()
 
     auto& h = R.SSREffectHandles;
     ID3DXEffect* effect = R.SSREffect;
-    const float invHistorySize[] = { 1.0f / width, 1.0f / height };
-    effect->SetFloatArray(h.vec2InvHistorySize, invHistorySize, 2);
+    SetHistorySize(effect, width, height);
     D3DMATRIX proj = *(D3DMATRIX*)vp->mProjectionMatrix;
 
     ScreenQuad screenQuad = {};
