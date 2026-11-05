@@ -40,7 +40,7 @@ ENTRIES = {
     'SSRTemporal_PS': 390,
     'SSGI_PS': 378,
     'SSRDebug_PS': 317,
-    'SSRDenoise_PS': 288,
+    'SSRDenoise_PS': 316,
 }
 LIGHT_ENTRIES = {
     'ContactShadows_PS': 223,

@@ -1750,6 +1750,10 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
     float4 sum = float4(centre.rgb * colourWeight, colourWeight);
     float alphaSum = centre.a;
     float weightSum = 1.0;
+    // What the rays around a ray that found nothing found, see the end.
+    float4 holeSum = 0.0;
+    float holeHits = 0.0;
+    float holeTaps = 0.0;
 
     // Reread colour in this loop: the same taps are cached, and keeping twelve
     // colours in registers made the distance-aware shader too large for ps_3_0.
@@ -1760,14 +1764,31 @@ float4 SSRDenoise_PS(float2 uv : TEXCOORD0) : COLOR0
         w *= saturate(1.0 - abs(LinearDepth(uv + taps[j] * radius) - centreZ) / (centreZ * 0.02));
         if (fDenoiseSSROnly > 0.0 && fUseGBufferNormals > 0.0 && w > 0.0)
             w *= smoothstep(0.8, 0.98, dot(centreNormal, GBufferNormalWorld(uv + taps[j] * radius)));
+        float surfaceShare = w;
+        float tapHitDistance = 0.0;
         if (fDenoiseSSROnly > 0.0 && fDenoiseHitDistance > 0.0 && w > 0.0)
-            w *= SSRHitDistanceWeight(centreHitDistance, tex2Dlod(SSRHitDistTex, float4(uv + taps[j] * radius, 0, 0)).r);
+        {
+            tapHitDistance = tex2Dlod(SSRHitDistTex, float4(uv + taps[j] * radius, 0, 0)).r;
+            w *= SSRHitDistanceWeight(centreHitDistance, tapHitDistance);
+        }
         float4 sample = tex2Dlod(SSRResultTex, float4(uv + taps[j] * radius, 0, 0));
+        holeTaps += surfaceShare;
+        if (tapHitDistance > 0.0)
+        {
+            holeHits += surfaceShare;
+            holeSum += float4(sample.rgb * sample.a, sample.a) * surfaceShare;
+        }
         colourWeight = w * (fDenoiseSSROnly > 0.0 ? sample.a : 1.0);
         sum += float4(sample.rgb * colourWeight, colourWeight);
         alphaSum += w * sample.a;
         weightSum += w;
     }
+
+    // A ray that found nothing where nearly all around it did: on a car this showed the game's bright
+    // reflection map as white dots in a dark reflection. The distance weight above keeps misses and hits
+    // apart, as it must at a reflection's edge, so here it takes what they found.
+    if (fDenoiseHitDistance > 0.0 && centreHitDistance <= 0.0 && holeHits > 0.75 * holeTaps && holeSum.a > 1e-4)
+        return float4(holeSum.rgb / holeSum.a, holeSum.a / holeHits);
 
     float a = alphaSum / weightSum;
     float3 colour = sum.a > 1e-4 ? sum.rgb / sum.a : centre.rgb;
