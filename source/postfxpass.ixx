@@ -641,6 +641,18 @@ namespace PostFxPass
         effect->SetFloatArray(h.vec2MotionJitter, jitter.data(), 2);
     }
 
+    // The size of SSR's history, and how far apart TraceHit reads last frame's depth around a hit: three
+    // texels, the reads a pixel and a half either side of it, or next to each other with SSRHitReadsApart off.
+    export void SetHistorySize(ID3DXEffect* effect, float width, float height)
+    {
+        auto& h = PostFxResources.SSREffectHandles;
+        const float texels = PostFxResources.bSSRHitReadsApart ? 3.0f : 1.0f;
+        const float invHistorySize[] = { 1.0f / width, 1.0f / height };
+        const float hitTexelStep[] = { texels / width, texels / height };
+        effect->SetFloatArray(h.vec2InvHistorySize, invHistorySize, 2);
+        effect->SetFloatArray(h.vec2HitTexelStep, hitTexelStep, 2);
+    }
+
     // The camera parameters the screen space effects share, under the same names in each effect.
 
     // View space from depth for a width x height target: the scale and offset that turn a pixel

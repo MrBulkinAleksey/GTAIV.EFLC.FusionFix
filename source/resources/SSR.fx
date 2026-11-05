@@ -249,6 +249,7 @@ sampler2D SurfaceTex
 
 uniform float2 vec2InvViewportSize;
 uniform float2 vec2InvHistorySize; // full-size history texel, independent of SSR resolution
+uniform float2 vec2HitTexelStep; // how far apart TraceHit reads last frame's depth around a hit, see SetHistorySize
 uniform float fNearPlane;
 uniform float fFarDivNear;
 uniform float4 vec4ProjInfo;
@@ -509,8 +510,6 @@ static float gTraceHiZLevel = 0.0;
 // For debug view 13, what each test left of the last TraceHit's confidence: last frame's depth,
 // the distance to the surface the ray hit, and the rest (screen edge, facing, length, hidden stretch).
 static float3 gTraceKept = 1.0;
-// How many history texels apart TraceHit reads last frame's depth around a hit.
-#define HIT_TEXEL_STEP 3.0
 
 // The four texels of last frame's depth around the last TraceHit's history read: where the first is,
 // where between them the read falls, and how much farther each is than the nearest from the surface
@@ -926,17 +925,18 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // four texels around the read the nearest to the surface decides, in the stored log depth,
     // and SampleHitHistory takes its colour from the texels of that surface. A ray stops at the
     // near edge of what it hits, and a jittered camera or a ped shifting his weight had that edge
-    // up to a pixel and a half from there last frame, so the four stand that far off the read.
+    // up to a pixel and a half from there last frame, so the four stand that far off the read
+    // (SSRHitReadsApart = 0 puts them next to it, to see what the distance costs).
     [branch]
     if (fUsePrevDepth > 0.0)
     {
         float2 pixel = histUV / vec2InvHistorySize - 0.5;
         gHitTexelFraction = frac(pixel);
-        gHitTexel = (pixel - gHitTexelFraction - 0.5) * vec2InvHistorySize;
+        gHitTexel = (pixel - gHitTexelFraction + 1.0) * vec2InvHistorySize - 0.5 * vec2HitTexelStep;
         float4 stored = float4(tex2Dlod(PrevDepthTex, float4(gHitTexel, 0, 0)).r,
-                               tex2Dlod(PrevDepthTex, float4(gHitTexel + float2(HIT_TEXEL_STEP * vec2InvHistorySize.x, 0.0), 0, 0)).r,
-                               tex2Dlod(PrevDepthTex, float4(gHitTexel + float2(0.0, HIT_TEXEL_STEP * vec2InvHistorySize.y), 0, 0)).r,
-                               tex2Dlod(PrevDepthTex, float4(gHitTexel + HIT_TEXEL_STEP * vec2InvHistorySize, 0, 0)).r);
+                               tex2Dlod(PrevDepthTex, float4(gHitTexel + float2(vec2HitTexelStep.x, 0.0), 0, 0)).r,
+                               tex2Dlod(PrevDepthTex, float4(gHitTexel + float2(0.0, vec2HitTexelStep.y), 0, 0)).r,
+                               tex2Dlod(PrevDepthTex, float4(gHitTexel + vec2HitTexelStep, 0, 0)).r);
         float logRange = log2(vec2PrevDepthRange.y);
         float4 apart = abs(stored - log2(abs(gHistoryViewZ) / vec2PrevDepthRange.x) / logRange);
         float nearest = min(min(apart.x, apart.y), min(apart.z, apart.w));
@@ -976,8 +976,8 @@ float3 SampleHitHistory(float2 uv)
     if (all(same > 0.0))
         return SampleHistory(uv);
     float2 f = gHitTexelFraction;
-    float2 dx = float2(HIT_TEXEL_STEP * vec2InvHistorySize.x, 0.0);
-    float2 dy = float2(0.0, HIT_TEXEL_STEP * vec2InvHistorySize.y);
+    float2 dx = float2(vec2HitTexelStep.x, 0.0);
+    float2 dy = float2(0.0, vec2HitTexelStep.y);
     float4 w = same * float4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y),
                              (1.0 - f.x) * f.y, f.x * f.y);
     float sum = dot(w, 1.0);
