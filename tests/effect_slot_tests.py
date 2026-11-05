@@ -29,13 +29,16 @@ EFFECT = ROOT / 'source/resources/SSR.fx'
 # The defines the game compiles the effect with (PostFxResource::nSSRSteps and the rest).
 DEFINES = ('/DNUM_STEPS=32', '/DNUM_REFINE_STEPS=8', '/DGI_RAYS=4', '/DGI_STEPS=8')
 
-HARD_LIMIT = 984  # slots: the largest a device in the field has been seen to accept
+# Slots: past the 984 long seen in play, and not seen in play itself until the build with SSRBackFaces ran.
+# Not a known ceiling: AO.fx at about 1330 once left a null effect, which was put down to its size without
+# being measured, and DXVK reports 32768 (the log's BackFaces Settings line has what a device reports).
+HARD_LIMIT = 1000
 SLACK = 8         # slots an entry may grow past its reviewed size before this fails
 
 # Entry point -> instruction slots when last reviewed, 2026-11-05, NUM_STEPS=32.
 ENTRIES = {
-    'SSRTrace_PS': 980,
-    'SSRWater_PS': 855,
+    'SSRTrace_PS': 994,
+    'SSRWater_PS': 872,
     'SSRFallback_PS': 513,
     'SSRTemporal_PS': 390,
     'SSGI_PS': 378,

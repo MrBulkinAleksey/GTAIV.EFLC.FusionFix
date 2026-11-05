@@ -39,6 +39,7 @@ import postfxresources;
 import screenquad;
 import ssrtrace;
 import postfxpass;
+import backfacedepth;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -192,6 +193,9 @@ export void RenderScreenSpaceReflections()
     effect->SetFloat(h.fThickness, R.fSSRThickness);
     effect->SetFloat(h.fHitFadeStart, R.fSSRHitFadeStart);
     effect->SetFloat(h.fThicknessByAngle, R.fSSRThicknessByAngle);
+    auto backFaces = BackFaceDepth::Texture();
+    effect->SetTexture(h.BackFaceDepthTex2D, backFaces);
+    effect->SetFloat(h.fBackFacesOff, backFaces ? 0.0f : 1.0f);
     effect->SetFloat(h.fEdgeFade, R.fSSREdgeFade);
     effect->SetFloat(h.fIntensity, R.fSSRIntensity);
     effect->SetFloat(h.fPassThinObjects, R.bSSRPassThinObjects ? 1.0f : 0.0f);

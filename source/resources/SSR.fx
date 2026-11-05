@@ -8,6 +8,7 @@ texture MarchDepthTex2D, HiZDepthTex2D, HiZDepthTex2D1;
 texture MotionTex2D;
 texture AlbedoTex2D, AlbedoLinearTex2D, GIPrevTex2D;
 texture SceneTex2D, SkinIDTex2D, SkinLightTex2D;
+texture BackFaceDepthTex2D;
 texture ContactInTex2D, ContactHistTex2D;
 
 sampler2D DepthTex
@@ -82,6 +83,17 @@ sampler2D SSRFallbackTex
 sampler2D SSRHitDistTex
 {
     Texture = <SSRHitDistTex2D>;
+    AddressU = Clamp;
+    AddressV = Clamp;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    MipFilter = NONE;
+};
+
+// The stored depth of the back faces of the peds and vehicles (backfacedepth.ixx), 1 everywhere else.
+sampler2D BackFaceDepthTex
+{
+    Texture = <BackFaceDepthTex2D>;
     AddressU = Clamp;
     AddressV = Clamp;
     MinFilter = POINT;
@@ -265,6 +277,7 @@ uniform float fMaxDistance;     // world units to march before giving up
 uniform float fThickness;       // how deep behind a surface still counts as a hit
 uniform float fThicknessByAngle; // 0..1, how far that depth follows the ray's turn from the view, see TraceHit
 uniform float fHitFadeStart;    // metres off the surface where a hit starts to give way to the game's reflection map
+uniform float fBackFacesOff;    // 1 while BackFaceDepthTex holds nothing to go by (SSRBackFaces off, the water)
 uniform float fEdgeFade;        // 0..0.5, screen fraction over which to fade at borders
 uniform float fIntensity;       // final multiplier on confidence
 uniform float fGlossBoost;      // extra intensity on shiny materials, 0 disables
@@ -906,6 +919,11 @@ float4 TraceHit(float3 C, float3 n, float3 microNormal, float jitter, float dist
     // deferred lighting already blends in as the confidence falls.
     gTraceKept = float3(1.0, 1.0 - smoothstep(min(fHitFadeStart, hitThickness * 0.75), hitThickness, hitDelta), confidence);
     confidence *= gTraceKept.g;
+    // The thickness is a guess; where a ped or a vehicle drew its back faces the depth says how
+    // far the thing really goes. A ray past that went behind it, and stopping it at the outline
+    // drew the outline out across a door.
+    if (hitZ > pow(fFarDivNear, max(tex2Dlod(BackFaceDepthTex, float4(finalUV, 0, 0)).r, fBackFacesOff)) * fNearPlane + 0.03)
+        confidence = 0.0;
     // Behind an object the screen holds nothing, so a ray passing there may have run into
     // something it does not show. Behind a trunk that is a few dozen centimetres; behind a ped
     // standing metres in front of a door, with the camera turned so the door shows next to his

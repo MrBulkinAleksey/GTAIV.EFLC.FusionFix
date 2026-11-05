@@ -333,7 +333,7 @@ public:
         D3DXHANDLE vec4SunView, fCSLength, fCSThickness, fCSMaxViewDistance, fCSIntensity, fCSGrassGloss, techContactShadows;
         D3DXHANDLE techContactTemporal, vec2NoiseOffset, techContactUpsample;
         D3DXHANDLE vec2InvViewportSize, vec2InvHistorySize, fNearPlane, fFarDivNear, vec4ProjInfo;
-        D3DXHANDLE fMaxDistance, fThickness, fThicknessByAngle, fHitFadeStart, fEdgeFade, fIntensity;
+        D3DXHANDLE BackFaceDepthTex2D, fBackFacesOff, fMaxDistance, fThickness, fThicknessByAngle, fHitFadeStart, fEdgeFade, fIntensity;
         D3DXHANDLE vec4ViewToPrevClip, fGlossBoost, fGlossCutoff, fWetness, fWetGroundBoost;
         D3DXHANDLE vec4WaterPlane, fWaterIntensity, fWaterBlur;
         D3DXHANDLE fWaterNormalStrength, vec4WaterToView, vec4WaterWorldX, vec4WaterWorldY, vec4WaterRings;
@@ -1705,6 +1705,8 @@ public:
                 h.fMaxDistance = SSREffect->GetParameterByName(nullptr, "fMaxDistance");
                 h.fThickness = SSREffect->GetParameterByName(nullptr, "fThickness");
                 h.fHitFadeStart = SSREffect->GetParameterByName(nullptr, "fHitFadeStart");
+                h.BackFaceDepthTex2D = SSREffect->GetParameterByName(nullptr, "BackFaceDepthTex2D");
+                h.fBackFacesOff = SSREffect->GetParameterByName(nullptr, "fBackFacesOff");
                 h.fThicknessByAngle = SSREffect->GetParameterByName(nullptr, "fThicknessByAngle");
                 h.fEdgeFade = SSREffect->GetParameterByName(nullptr, "fEdgeFade");
                 h.fIntensity = SSREffect->GetParameterByName(nullptr, "fIntensity");
