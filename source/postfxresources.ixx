@@ -595,7 +595,7 @@ public:
         return p && p->get() != 0;
     }
     float fVolumetricCloudsModelForward = 0.8f;
-    float fVolumetricCloudsModelSun = 1.0f;
+    float fVolumetricCloudsModelSun = 2.0f;
     float fVolumetricCloudsModelSky = 0.7f;
     // The sunlit ground's light on the clouds' bases, warm and over their shaded part (fGroundLight in Clouds.fx). Off by default: the plain clouds looked better in game.
     float fVolumetricCloudsGroundLight = 0.0f;
@@ -2161,7 +2161,7 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsMinLight", &PostFxResource::fVolumetricCloudsMinLight, 0.1f, 0.0f, 0.9f),
             IniFloat("WEATHER", "VolumetricCloudsGroundLight", &PostFxResource::fVolumetricCloudsGroundLight, 0.0f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsModelForward", &PostFxResource::fVolumetricCloudsModelForward, 0.8f, 0.0f, 0.95f),
-            IniFloat("WEATHER", "VolumetricCloudsModelSun", &PostFxResource::fVolumetricCloudsModelSun, 1.0f, 0.0f, 4.0f),
+            IniFloat("WEATHER", "VolumetricCloudsModelSun", &PostFxResource::fVolumetricCloudsModelSun, 2.0f, 0.0f, 4.0f),
             IniFloat("WEATHER", "VolumetricCloudsModelSky", &PostFxResource::fVolumetricCloudsModelSky, 0.7f, 0.0f, 4.0f),
             IniFlag("WEATHER", "VolumetricCloudsScatterTail", &PostFxResource::bVolumetricCloudsScatterTail, 1),
             IniFlag("WEATHER", "VolumetricCloudsLightJitter", &PostFxResource::bVolumetricCloudsLightJitter, 1),
