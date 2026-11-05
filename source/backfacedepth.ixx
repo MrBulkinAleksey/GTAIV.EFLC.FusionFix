@@ -31,6 +31,7 @@ namespace
 
     DrawIndexed realDraw = nullptr;
     bool bEnabled = false;
+    float fMaxDistance = 15.0f;
     // Render thread
     bool bInGBuffer = false;
     bool bBodyDraw = false;
@@ -130,9 +131,25 @@ namespace
         return realDraw(device, type, base, minIndex, vertices, start, count);
     }
 
+    // Far cars cost most of the second draws and take up too few pixels of a reflection to matter. Peds keep
+    // no position in their draw commands (and few draws to the cars' dozen each), so they are always drawn.
+    bool NearEnough()
+    {
+        uint16_t model = 0;
+        const float* place = nullptr;
+        auto vp = rage::GetCurrentViewport();
+        if (fMaxDistance <= 0.0f || !vp || !EntityClass::CurrentModel(model, place) || !place)
+            return true;
+        const float dx = place[0] - vp->mViewInverseMatrix[3][0];
+        const float dy = place[1] - vp->mViewInverseMatrix[3][1];
+        const float dz = place[2] - vp->mViewInverseMatrix[3][2];
+        return dx * dx + dy * dy + dz * dz <= fMaxDistance * fMaxDistance;
+    }
+
     void BeforeEntityDraw(EntityClass::Kind kind)
     {
-        bBodyDraw = kind == EntityClass::Kind::Ped || kind == EntityClass::Kind::Vehicle;
+        bBodyDraw = bEnabled && bInGBuffer &&
+            (kind == EntityClass::Kind::Ped || (kind == EntityClass::Kind::Vehicle && NearEnough()));
     }
 
     void AfterEntityDraw(EntityClass::Kind)
@@ -162,6 +179,7 @@ namespace
     void ReadIni(CIniReader& iniReader)
     {
         bEnabled = iniReader.ReadInteger("REFLECTIONS", "SSRBackFaces", 0) != 0;
+        fMaxDistance = iniReader.ReadFloat("REFLECTIONS", "SSRBackFacesDistance", 15.0f);
     }
 }
 
