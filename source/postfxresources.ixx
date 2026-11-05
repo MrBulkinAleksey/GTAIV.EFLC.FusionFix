@@ -586,8 +586,8 @@ public:
     // The least of the sun's light any part of a cloud keeps, however deep in its shadow: lighter,
     // airier bases than the light's march alone gives.
     float fVolumetricCloudsMinLight = 0.1f;
-    // The sunlit ground's light on the clouds' bases, warm and over their shaded part (fGroundLight in Clouds.fx).
-    float fVolumetricCloudsGroundLight = 0.25f;
+    // The sunlit ground's light on the clouds' bases, warm and over their shaded part (fGroundLight in Clouds.fx). Off by default: the plain clouds looked better in game.
+    float fVolumetricCloudsGroundLight = 0.0f;
     // [WEATHER] VolumetricCloudsScatterTail: the light scattered many times inside a cloud in four octaves at a
     // fifth of the extinction each (Wrenninge's, as al-ro's clouds have it), which reach deep and fall off
     // smoothly; 0: three at half each, as before, spent 0.3 of the layer in, with VolumetricCloudsMinLight 0.25.
@@ -2148,7 +2148,7 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsMoonlight", &PostFxResource::fVolumetricCloudsMoonlight, 0.2f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsSkyLight", &PostFxResource::fVolumetricCloudsSkyLight, 0.5f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsMinLight", &PostFxResource::fVolumetricCloudsMinLight, 0.1f, 0.0f, 0.9f),
-            IniFloat("WEATHER", "VolumetricCloudsGroundLight", &PostFxResource::fVolumetricCloudsGroundLight, 0.25f, 0.0f, 2.0f),
+            IniFloat("WEATHER", "VolumetricCloudsGroundLight", &PostFxResource::fVolumetricCloudsGroundLight, 0.0f, 0.0f, 2.0f),
             IniFlag("WEATHER", "VolumetricCloudsScatterTail", &PostFxResource::bVolumetricCloudsScatterTail, 1),
             IniFlag("WEATHER", "VolumetricCloudsLightJitter", &PostFxResource::bVolumetricCloudsLightJitter, 1),
             IniFloat("WEATHER", "VolumetricCloudsSkyMatch", &PostFxResource::fVolumetricCloudsSkyMatch, 2.0f, 0.0f, 20.0f),
