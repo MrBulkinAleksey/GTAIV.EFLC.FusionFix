@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -645,6 +646,7 @@ namespace
         float sharpness = 0.0f;
         bool reset = false;
         bool reactive = false;
+        float exposure = 0.0f;        // ConfigureFlags::GameExposure, 0 keeps the last
         // Frame generation
         float cameraPosition[3]{};
         float cameraUp[3]{};
@@ -831,6 +833,96 @@ namespace
         uint32_t displayWidth = 0;
         uint32_t displayHeight = 0;
 
+        // The game's exposure (ConfigureFlags::GameExposure): a 1x1 texture FSR reads instead of working one out itself,
+        // copied each frame from a slot of an upload ring that no frame still on the GPU reads
+        static constexpr UINT ExposureSlots = 8;
+        ComPtr<ID3D12Resource> exposureTexture;
+        ComPtr<ID3D12Resource> exposureUpload;
+        uint8_t* exposureMapped = nullptr;
+        UINT exposureSlot = 0;
+        bool exposureWritten = false;
+
+        bool CreateExposure()
+        {
+            D3D12_HEAP_PROPERTIES heap{ D3D12_HEAP_TYPE_DEFAULT };
+            D3D12_RESOURCE_DESC desc{};
+            desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            desc.Width = 1;
+            desc.Height = 1;
+            desc.DepthOrArraySize = 1;
+            desc.MipLevels = 1;
+            desc.Format = DXGI_FORMAT_R32_FLOAT;
+            desc.SampleDesc.Count = 1;
+            if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&exposureTexture))))
+                return false;
+
+            D3D12_HEAP_PROPERTIES upload{ D3D12_HEAP_TYPE_UPLOAD };
+            D3D12_RESOURCE_DESC buffer{};
+            buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+            buffer.Width = ExposureSlots * D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT;
+            buffer.Height = 1;
+            buffer.DepthOrArraySize = 1;
+            buffer.MipLevels = 1;
+            buffer.SampleDesc.Count = 1;
+            buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            void* mapped = nullptr;
+            if (FAILED(device->CreateCommittedResource(&upload, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&exposureUpload))) ||
+                FAILED(exposureUpload->Map(0, nullptr, &mapped)))
+            {
+                ReleaseExposure();
+                return false;
+            }
+            exposureMapped = static_cast<uint8_t*>(mapped);
+            return true;
+        }
+
+        void ReleaseExposure()
+        {
+            exposureTexture.Reset();
+            exposureUpload.Reset();
+            exposureMapped = nullptr;
+            exposureWritten = false;
+        }
+
+        // Copies the frame's exposure into the texture, which is left in the state FSR reads it in. False while there is none.
+        bool WriteExposure(ID3D12GraphicsCommandList* cmd, float exposure)
+        {
+            if (!exposureTexture)
+                return false;
+            if (exposure > 0.0f)
+            {
+                auto offset = exposureSlot * D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT;
+                exposureSlot = (exposureSlot + 1) % ExposureSlots;
+                std::memcpy(exposureMapped + offset, &exposure, sizeof(exposure));
+
+                D3D12_TEXTURE_COPY_LOCATION destination{};
+                destination.pResource = exposureTexture.Get();
+                destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                D3D12_TEXTURE_COPY_LOCATION source{};
+                source.pResource = exposureUpload.Get();
+                source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                source.PlacedFootprint.Offset = offset;
+                source.PlacedFootprint.Footprint = { DXGI_FORMAT_R32_FLOAT, 1, 1, 1, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT };
+                cmd->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
+                exposureWritten = true;
+            }
+            if (!exposureWritten)
+                return false;
+            ExposureBarrier(cmd, true);
+            return true;
+        }
+
+        void ExposureBarrier(ID3D12GraphicsCommandList* cmd, bool toRead)
+        {
+            D3D12_RESOURCE_BARRIER barrier{};
+            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Transition.pResource = exposureTexture.Get();
+            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            barrier.Transition.StateBefore = toRead ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            barrier.Transition.StateAfter = toRead ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE : D3D12_RESOURCE_STATE_COPY_DEST;
+            cmd->ResourceBarrier(1, &barrier);
+        }
+
         // AMD's frame generation swap chain (ConfigureFlags::AmdPacing), while it exists, and what its callback needs
         ffxContext swapChainContext = nullptr;
         IDXGISwapChain4* amdSwapChain = nullptr;    // the reference is the Display's
@@ -920,9 +1012,11 @@ namespace
             return true;
         }
 
-        bool Create(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight)
+        // gameExposure: the game's exposure instead of FSR's own, false when its texture could not be made
+        bool Create(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, bool& gameExposure)
         {
             Release();
+            gameExposure = gameExposure && CreateExposure();
 
             ffxCreateBackendDX12Desc backend{};
             backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
@@ -931,7 +1025,7 @@ namespace
             ffxCreateContextDescUpscale create{};
             create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
             create.header.pNext = &backend.header;
-            create.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+            create.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | (gameExposure ? 0u : FFX_UPSCALE_ENABLE_AUTO_EXPOSURE);
             create.maxRenderSize = { width, height };
             create.maxUpscaleSize = { outputWidth, outputHeight };
 
@@ -977,8 +1071,14 @@ namespace
             dispatch.cameraFar = frame.cameraFar;
             dispatch.cameraFovAngleVertical = frame.cameraFovY;
             dispatch.viewSpaceToMetersFactor = 1.0f;
+            // Without a value yet FSR takes an exposure of 1
+            bool exposure = WriteExposure(cmd, frame.exposure);
+            if (exposure)
+                dispatch.exposure = ffxApiGetResourceDX12(exposureTexture.Get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
 
             auto result = functions.Dispatch(&context, &dispatch.header);
+            if (exposure)
+                ExposureBarrier(cmd, false);
             if (result != FFX_API_RETURN_OK)
             {
                 Log("FSR dispatch failed: %u", result);
@@ -992,6 +1092,7 @@ namespace
             if (context)
                 functions.DestroyContext(&context, nullptr);
             context = nullptr;
+            ReleaseExposure();
         }
 
         // -------------------------------------------------------------------------------------------
@@ -1965,11 +2066,16 @@ namespace
             {
                 auto cmd = device.BeginImmediate();
                 created = dlss.Create(cmd, width, height, outputWidth, outputHeight, shared.DLSSPreset);
+                flags &= ~Protocol::ConfigureFlags::GameExposure;
                 created = device.SubmitImmediate() && created;
             }
             else if (shared.ConfigureBackend == Protocol::Backend::FSR && fsr.available)
             {
-                created = fsr.Create(width, height, outputWidth, outputHeight);
+                bool gameExposure = (flags & Protocol::ConfigureFlags::GameExposure) != 0;
+                created = fsr.Create(width, height, outputWidth, outputHeight, gameExposure);
+                Log("FSR exposure: %s", gameExposure ? "the game's" : "automatic");
+                if (!gameExposure)
+                    flags &= ~Protocol::ConfigureFlags::GameExposure;
             }
 
             if (!created)
@@ -2112,6 +2218,7 @@ namespace
             frame.sharpness = shared.Sharpness;
             frame.reset = shared.Reset != 0;
             frame.reactive = (flags & Protocol::ConfigureFlags::ReactiveMask) != 0;
+            frame.exposure = (flags & Protocol::ConfigureFlags::GameExposure) ? shared.Exposure : 0.0f;
             for (int i = 0; i < 3; ++i)
             {
                 frame.cameraPosition[i] = shared.CameraPosition[i];

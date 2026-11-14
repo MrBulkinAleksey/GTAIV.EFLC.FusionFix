@@ -4,6 +4,7 @@ module;
 #include <cstdarg>
 #include <cstdio>
 #include <d3d12.h>
+#include <dxgi1_4.h>
 #include <d3d9on12.h>
 #include "includes/dxvk_interop.hpp"
 #include <upscaler_protocol.hpp>
@@ -232,6 +233,32 @@ namespace
                 vendor = identifier.VendorId;
             d3d->Release();
         }
+        return vendor;
+    }
+
+    // The vendor of the GPU at the adapter's LUID, as DXGI reports it (D3D9on12's D3D12 device): the D3D9 adapter of a
+    // layer may report another vendor than the GPU's (idea of upstream's bridge). 0 when DXGI can't tell.
+    uint32_t DxgiVendor(LUID luid)
+    {
+        uint32_t vendor = 0;
+        auto dxgi = LoadLibraryExW(L"dxgi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        using CreateFactoryFn = HRESULT(WINAPI*)(REFIID, void**);
+        auto createFactory = dxgi ? reinterpret_cast<CreateFactoryFn>(GetProcAddress(dxgi, "CreateDXGIFactory1")) : nullptr;
+        IDXGIFactory4* factory = nullptr;
+        if (createFactory && SUCCEEDED(createFactory(__uuidof(IDXGIFactory4), reinterpret_cast<void**>(&factory))) && factory)
+        {
+            IDXGIAdapter1* adapter = nullptr;
+            DXGI_ADAPTER_DESC1 desc{};
+            if (SUCCEEDED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter))) && adapter)
+            {
+                if (SUCCEEDED(adapter->GetDesc1(&desc)))
+                    vendor = desc.VendorId;
+                adapter->Release();
+            }
+            factory->Release();
+        }
+        if (dxgi)
+            FreeLibrary(dxgi);
         return vendor;
     }
 
@@ -1018,7 +1045,9 @@ namespace
 
             device9 = realDevice;
             luid = device->GetAdapterLuid();
-            vendorId = AdapterVendor(realDevice);
+            vendorId = DxgiVendor(luid);
+            if (!vendorId)
+                vendorId = AdapterVendor(realDevice);
 
             D3D12_COMMAND_QUEUE_DESC queueDesc{};
             queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -1465,11 +1494,14 @@ namespace
     uint32_t configuredPreset = 0;
     uint32_t configuredFlags = 0;
     bool configureFailed = false;
-    // A request the helper did not answer in time, the helper still running: configured again once this tick count is
-    // reached, a few times, rather than left to temporal AA until the mode or the size changes. The new configuration
-    // also brings new fences, which a late signal of the helper can't take back down past the one signalled from the CPU.
+    // A failed frame with the helper still running (no answer in time, a failed configuration, import, submission or
+    // answer): temporal AA takes those frames, and the upscaler is configured again once this tick count is reached, up
+    // to five times in a row, rather than left to temporal AA until the mode or the size changes (idea of upstream's
+    // bridge). A frame that works again, or another mode or size, starts the count anew. The new configuration also
+    // brings new fences, which a late signal of the helper can't take back down past the one signalled from the CPU.
     uint64_t retryConfigureAt = 0;
     uint32_t configureRetries = 0;
+    uint64_t retrySettings = 0;     // what the count is for: a hash of the backend, sizes, preset and flags
     // Wine without the game's semaphores: the helper answers once its GPU work is done, which it waits up to 2 s for
     constexpr DWORD CpuSyncTimeout = 2500;
     uint64_t fenceValue = 0;
@@ -1517,6 +1549,53 @@ namespace
         helper.Stop(true);
     }
 
+    const char* CommandName(Protocol::Command command)
+    {
+        return command == Protocol::Command::Generate ? "Generate" : command == Protocol::Command::Present ? "Present" :
+            command == Protocol::Command::Hide ? "Hide" : "Evaluate";
+    }
+
+    // The GPU waits on the helper's fences, let through from a thread of their own when the helper doesn't signal them
+    // in time (it hangs, or its work waits for something that never comes). The render thread can't be the one: it may
+    // be blocked in a Present that waits for that GPU work, and never get back to CollectPending, which lets such a
+    // wait through too. Whatever replaces the bridge's fences (Import, ReleaseImports, PrepareGameFence) holds mutex.
+    namespace Watchdog
+    {
+        constexpr ULONGLONG TimeoutMs = 2000;
+        std::mutex mutex;
+        uint64_t value = 0;         // the output value the GPU waits for, 0 when none
+        ULONGLONG deadline = 0;
+
+        void Run()
+        {
+            static uint32_t reported = 0;
+            for (;;)
+            {
+                Sleep(100);
+                std::lock_guard lock(mutex);
+                if (!value || GetTickCount64() < deadline)
+                    continue;
+                if (bridge && !bridge->WaitOnCpu())
+                {
+                    if (Report(reported))
+                        Log("%s: the helper didn't signal %llu in %llu ms, the GPU's wait let through", CommandName(pendingCommand),
+                            value, TimeoutMs);
+                    bridge->SignalFromCpu(value);
+                }
+                value = 0;
+            }
+        }
+
+        void Arm(uint64_t outputValue)
+        {
+            static std::once_flag started;
+            std::call_once(started, [] { std::thread(Run).detach(); });
+            std::lock_guard lock(mutex);
+            value = outputValue;
+            deadline = GetTickCount64() + TimeoutMs;
+        }
+    }
+
     // The helper exited while it worked: it is started again, a few times, and the upscaler stays offered meanwhile.
     // Without this the choice vanished from the menu until the game was restarted.
     void Lost()
@@ -1530,7 +1609,13 @@ namespace
         }
 
         Log("The helper exited, starting it again");
-        bridge->ReleaseImports();
+        {
+            // Nothing signals its fences any more: what still waits on them goes first
+            std::lock_guard lock(Watchdog::mutex);
+            bridge->SignalFromCpu(fenceValue);
+            bridge->ReleaseImports();
+            Watchdog::value = 0;
+        }
         helper.Stop(false);
         helper.Close();
         configuredBackend = 0;
@@ -1552,22 +1637,29 @@ namespace
         startedAt = GetTickCount64();
     }
 
-    const char* CommandName(Protocol::Command command)
-    {
-        return command == Protocol::Command::Generate ? "Generate" : command == Protocol::Command::Present ? "Present" :
-            command == Protocol::Command::Hide ? "Hide" : "Evaluate";
-    }
-
-    // No answer in time from a helper that still runs
-    void ScheduleRetry()
+    // A failed frame with the helper still running: temporal AA until the configuration is tried again
+    void ScheduleRetry(const char* reason)
     {
         configureFailed = true;
         if (configureRetries < 5)
         {
             ++configureRetries;
             retryConfigureAt = GetTickCount64() + 2000;
-            Log("Configured again in 2 s (%u of 5)", configureRetries);
+            Log("%s: temporal AA meanwhile, configured again in 2 s (%u of 5)", reason, configureRetries);
         }
+        else if (configureRetries == 5)
+        {
+            ++configureRetries;
+            Log("%s: 5 attempts in a row failed, temporal AA until the mode or the size changes", reason);
+        }
+    }
+
+    // A frame upscaled: the next failure starts the count anew
+    void Succeeded()
+    {
+        if (configureRetries)
+            Log("Working again after %u failed attempt%s", configureRetries, configureRetries == 1 ? "" : "s");
+        configureRetries = 0;
     }
 
     // The request posted last without waiting is answered before anything else is written. The answer came long
@@ -1588,7 +1680,10 @@ namespace
             Log("%s %s%s", CommandName(pendingCommand), answer == HelperProcess::Answer::None ? "got no answer" : "failed", exited ? ", the helper exited" : "");
         // The copy of the output waits on the GPU for a value nobody will signal now
         if (answer == HelperProcess::Answer::None)
+        {
+            std::lock_guard lock(Watchdog::mutex);
             bridge->SignalFromCpu(pendingOutputValue);
+        }
         if (exited)
         {
             Lost();
@@ -1596,7 +1691,7 @@ namespace
         }
         if (answer == HelperProcess::Answer::None)
         {
-            ScheduleRetry();
+            ScheduleRetry("No answer in time");
             return false;
         }
         // A failed Generate leaves the upscaler working, a failed Hide too
@@ -1607,7 +1702,7 @@ namespace
         else if (pendingCommand == Protocol::Command::Present)
             presentFailed = true;
         else
-            configureFailed = true;
+            ScheduleRetry("The helper failed the frame");
         return true;
     }
 
@@ -1616,6 +1711,9 @@ namespace
         helper.Post(command);
         pendingCommand = command;
         pendingOutputValue = outputValue;
+        // The GPU waits for it (not on the CPU, where Request waits with a timeout)
+        if (outputValue && bridge && !bridge->WaitOnCpu())
+            Watchdog::Arm(outputValue);
     }
 }
 
@@ -1645,6 +1743,8 @@ export namespace Upscaler
         float CameraFovY = 1.0f;
         float FrameTimeMs = 16.6f;
         float Sharpness = 0.0f;
+        bool GameExposure = false;    // FSR: Exposure instead of its automatic exposure
+        float Exposure = 0.0f;        // what the game's tone mapping multiplies the scene by, 0 keeps the last
         uint32_t DLSSPreset = 0;
         bool Reset = false;
         // Frame generation: prepared with this frame's depth and motion vectors, Generate follows
@@ -1760,7 +1860,8 @@ export namespace Upscaler
             return false;
 
         auto backendId = static_cast<uint32_t>(backend);
-        auto flags = frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u;
+        auto flags = (frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u) |
+            (frame.GameExposure ? Protocol::ConfigureFlags::GameExposure : 0u);
         if (bridge->wine)
             flags |= Protocol::ConfigureFlags::Wine;
         // Without HDR the frames are the 8-bit back buffer's: 8-bit textures halve what the frame generation's copies move
@@ -1774,6 +1875,17 @@ export namespace Upscaler
                 (frame.AmdPacing && (flags & Protocol::ConfigureFlags::FrameGeneration) ? Protocol::ConfigureFlags::AmdPacing : 0u);
         auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
         auto outputHeight = frame.OutputHeight ? frame.OutputHeight : frame.Height;
+        // Another mode, size or set of options starts the count of failed attempts anew
+        uint64_t settings = 1469598103934665603ull;
+        for (uint64_t v : { uint64_t(backendId), uint64_t(frame.Width), uint64_t(frame.Height), uint64_t(outputWidth),
+                            uint64_t(outputHeight), uint64_t(frame.DLSSPreset), uint64_t(flags) })
+            settings = (settings ^ v) * 1099511628211ull;
+        if (settings != retrySettings)
+        {
+            retrySettings = settings;
+            configureRetries = 0;
+            retryConfigureAt = 0;
+        }
         if (retryConfigureAt && GetTickCount64() >= retryConfigureAt)
         {
             retryConfigureAt = 0;
@@ -1784,7 +1896,11 @@ export namespace Upscaler
             configuredPreset != frame.DLSSPreset || configuredFlags != flags;
         if (reconfigure)
         {
-            bridge->ReleaseImports();
+            {
+                std::lock_guard lock(Watchdog::mutex);
+                bridge->ReleaseImports();
+                Watchdog::value = 0;
+            }
             // A generated frame not taken yet went with the shared textures
             generatedValue = 0;
             // The helper hides its window without the presentation, or shows it again with its first frame
@@ -1813,8 +1929,11 @@ export namespace Upscaler
             shared.PresentWindow = reinterpret_cast<uint64_t>(frame.PresentWindow);
             shared.ChildWindow = 0;
             shared.PresentFenceHandle = 0;
-            if (bridge->PrepareGameFence(shared, helper.process))
-                shared.Flags |= Protocol::ConfigureFlags::GameFence;
+            {
+                std::lock_guard lock(Watchdog::mutex);
+                if (bridge->PrepareGameFence(shared, helper.process))
+                    shared.Flags |= Protocol::ConfigureFlags::GameFence;
+            }
             const auto configureStart = GetTickCount64();
             if (!helper.Request(Protocol::Command::Configure, 15000))
             {
@@ -1823,6 +1942,8 @@ export namespace Upscaler
                     GetTickCount64() - configureStart, exited ? ", the helper exited" : "", shared.Message);
                 if (exited)
                     Lost();
+                else
+                    ScheduleRetry("The configuration failed");
                 return false;
             }
             bridge->gameFence = (shared.Flags & Protocol::ConfigureFlags::GameFence) != 0;
@@ -1834,9 +1955,15 @@ export namespace Upscaler
                 Log("The helper could not set up its presentation, the game presents");
             else if ((flags & Protocol::ConfigureFlags::AmdPacing) && !(shared.Flags & Protocol::ConfigureFlags::AmdPacing))
                 Log("AMD's frame generation swap chain could not be set up: the helper paces the frames itself");
-            if (!bridge->Import(shared, frame.Width, frame.Height, outputWidth, outputHeight))
+            bool imported;
+            {
+                std::lock_guard lock(Watchdog::mutex);
+                imported = bridge->Import(shared, frame.Width, frame.Height, outputWidth, outputHeight);
+            }
+            if (!imported)
             {
                 Log("Configure %ux%u -> %ux%u: the shared resources could not be imported", frame.Width, frame.Height, outputWidth, outputHeight);
+                ScheduleRetry("The import failed");
                 return false;
             }
             if (shared.Flags & Protocol::ConfigureFlags::HelperPresent)
@@ -1852,7 +1979,7 @@ export namespace Upscaler
         }
         else if (configureFailed)
         {
-            // A failed configuration is not retried every frame, only when something changes
+            // Not every frame: when the retry is due (ScheduleRetry) or something changes
             return false;
         }
 
@@ -1862,11 +1989,8 @@ export namespace Upscaler
         Textures inputs{ frame.Color, frame.Depth, frame.Motion, frame.Reactive };
         if (!bridge->SubmitInputs(inputs, inputValue))
         {
-            // Nothing was submitted, the helper was not asked for this frame. Retried when the mode or size changes.
-            static uint32_t reported = 0;
-            if (Report(reported))
-                Log("The inputs could not be submitted");
-            configureFailed = true;
+            // Nothing was submitted, the helper was not asked for this frame
+            ScheduleRetry("The inputs could not be submitted");
             return false;
         }
 
@@ -1882,6 +2006,7 @@ export namespace Upscaler
         shared.CameraFovY = frame.CameraFovY;
         shared.FrameTimeMs = frame.FrameTimeMs;
         shared.Sharpness = frame.Sharpness;
+        shared.Exposure = frame.Exposure;
         shared.Reset = frame.Reset ? 1 : 0;
         for (int i = 0; i < 3; ++i)
         {
@@ -1927,10 +2052,11 @@ export namespace Upscaler
             if (exited)
                 Lost();
             else
-                ScheduleRetry();
+                ScheduleRetry("Evaluate got no answer");
             return false;
         }
 
+        Succeeded();
         prepare();
         return bridge->SubmitOutput(frame.Output, Protocol::Texture::Output, outputValue, true);
     }

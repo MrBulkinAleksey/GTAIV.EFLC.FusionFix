@@ -715,6 +715,8 @@
   "ANTIALIASING.DLSSPreset": "DLSS Preset",
   "ANTIALIASING.DLSSPreset.description": "DLAA model: 0 default | 10 J | 11 K | 12 L | 13 M (needs nvngx_dlss.dll in the game or plugins folder)",
   "ANTIALIASING.FSRSharpness": "FSR Sharpness",
+  "ANTIALIASING.FSRGameExposure": "FSR Game Exposure",
+  "ANTIALIASING.FSRGameExposure.description": "FSR takes the exposure the game's own tone mapping uses instead of working one out itself | 0: FSR's automatic exposure",
   "ANTIALIASING.ReactiveMaskScale": "Reactive Mask Scale",
   "ANTIALIASING.ReactiveMaskMaximum": "Reactive Mask Maximum",
   "ANTIALIASING.RainAfterAntialiasing": "Rain After Antialiasing",

@@ -40,7 +40,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 17;
+    constexpr uint32_t Version = 18;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -112,6 +112,7 @@ namespace UpscalerProtocol
         constexpr uint32_t AsyncGeneration = 1 << 6;  // Generate runs on a compute queue of the helper; cleared if it has none
         constexpr uint32_t HelperPresent = 1 << 7;    // the helper presents the frames, with the frame generation too; cleared if it can't
         constexpr uint32_t AmdPacing = 1 << 8;        // with HelperPresent and the frame generation, AMD's swap chain generates and paces the frames; cleared if it can't
+        constexpr uint32_t GameExposure = 1 << 9;     // FSR takes Exposure instead of its automatic exposure; cleared if the helper can't
     }
 
 #pragma pack(push, 8)
@@ -168,7 +169,7 @@ namespace UpscalerProtocol
         float CameraForward[3];
         uint64_t FrameId;             // +1 every frame, anything else resets the frame generation
         uint32_t HudLess;             // Generate of this frame comes with HudLess
-        uint32_t Reserved1;
+        float Exposure;               // ConfigureFlags::GameExposure: what the game's tone mapping multiplies the scene by, 0 keeps the last
 
         // Generate (WaitValue and SignalValue as for Evaluate)
         float MaxLuminance;           // nits, HDR output
