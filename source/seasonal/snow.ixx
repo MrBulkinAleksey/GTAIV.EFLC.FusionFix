@@ -512,11 +512,11 @@ private:
         {
             // Include spotlights with a radius between 8 and 20 (Most light models in lamppost.img are within that range)
             // and exclude lights previously volumetric, vehicle lights, traffic lights, fill lights and cutscene lights
-            constexpr uint32_t ExcludedFlags = rage::LIGHTFLAG_DRAW_VOLUME | rage::LIGHTFLAG_NO_SPECULAR | rage::LIGHTFLAG_CUTSCENE | rage::LIGHTFLAG_VEHICLE | rage::LIGHTFLAG_TRAFFIC_LIGHT;
+            constexpr uint32_t ExcludedFlags = rage::LF_SHAFT | rage::LF_FILLER | rage::LF_UNCULLED | rage::LF_VEHICLE | rage::LF_TRAFFIC;
             if (light->mType == rage::LT_SPOT && light->mRadius >= 8.0f && light->mRadius <= 20.0f && !(light->mFlags & ExcludedFlags))
             {
                 // Append the light shaft flag
-                light->mFlags |= rage::LIGHTFLAG_DRAW_VOLUME;
+                light->mFlags |= rage::LF_SHAFT;
 
                 // Distance fading setup
                 float DeltaX = CameraPosition.x - light->mPosition.x;
