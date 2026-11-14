@@ -370,6 +370,7 @@ namespace CShadows
 #include "NearbyVehicleRuntime36.inl"
 #include "ShadowLookupRuntime.inl"
 #include "ShadowCasterRuntime.inl"
+static bool CarLightShadowsOffBySun();
 #include "NightShadowAdmissionRuntime.inl"
 #include "EmergencyTrafficShadowsRuntime.inl"
 
@@ -377,12 +378,21 @@ namespace CShadows
 // shadows while the sun's cascades are drawn, outside by day: at dusk and dawn the lamps' shadows took some 4 GPU ms on
 // top of the sun's 6, where the sun's light washed them out. Inside, where the game draws no cascades, and once the sun is
 // under SunShadowsMinElevation, the lamps keep theirs (with SunShadowsAtNight the cascades are drawn at night too, so
-// the sun's height decides); headlights are not the map's lamps and keep theirs too.
+// the sun's height decides); headlights are not the map's lamps and go by CarLightShadowsInDaylight.
 static bool bLampShadowsInDaylight = false;
+
+// CarLightShadowsInDaylight = 0: the same for cars' headlights and rear lamps, left out of the slots where the game goes
+// through the lights (NightShadowAdmission): in a queue of traffic by day they took all the slots, 1.3 to 2 GPU ms of 11.
+static bool bCarLightShadowsInDaylight = false;
 
 static bool LampShadowsOffBySun()
 {
     return !bLampShadowsInDaylight && RenderSkip::SunShadowsDrawnByDay();
+}
+
+static bool CarLightShadowsOffBySun()
+{
+    return !bCarLightShadowsInDaylight && RenderSkip::SunShadowsDrawnByDay();
 }
 
 #include "LibertyLighting20Runtime.inl"
@@ -475,6 +485,7 @@ class NightShadows
     static void ReadLiveSettings(CIniReader& iniReader)
     {
         bLampShadowsInDaylight = iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowsInDaylight", 0) != 0;
+        bCarLightShadowsInDaylight = iniReader.ReadInteger("NIGHTSHADOWS", "CarLightShadowsInDaylight", 0) != 0;
         LampShadowAxis::mode.store(std::clamp(iniReader.ReadInteger("NIGHTSHADOWS", "LampShadowAxis", 0), 0, 2), std::memory_order_relaxed);
         if (!ceAdapter)
             return;

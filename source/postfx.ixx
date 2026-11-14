@@ -2194,10 +2194,16 @@ private:
     // the corners land far off the screen on both sides, the clamped rectangle is the whole screen and the moon pass
     // redrew all of the sky (SkyTrace: every pass drawn had w under 0.17 and a full screen scissor, the moon itself
     // nowhere in view). The moon's quad (MoonXVector 8 long: a half-size of 0.5 / 0.9 / 8, some 0.1 out to a corner) is
-    // taken 0.2 out from its centre each way; a corner behind the camera, or all four off the screen, draws no moon pass.
-    static bool MoonOnScreen(const float* centre, const float* m)
+    // taken 0.2 out from its centre each way. The viewport's matrix at +0x200 takes a point straight to pixels, not to
+    // -1..1: tested against -1..1, only a box over the top left pixel counted as on the screen, and the moon showed in
+    // the top left of the view alone, gone with a turn of a degree or two (MoonLog, 2026-10-28). w is about the cosine
+    // of the angle off the view's axis (the centre is a unit vector): a corner under 0.2 of it, some 78 degrees and more
+    // off the axis, where the corners blow up across the screen, or all four outside the viewport, draws no moon pass.
+    // box: the four corners' extent in pixels (min x, max x, min y, max y) and whether one was that far off, for MoonLog.
+    static bool MoonOnScreen(const float* centre, const float* m, const D3DVIEWPORT9& viewport, float* box = nullptr, bool* behind = nullptr)
     {
         constexpr float kRadius = 0.2f;
+        constexpr float kMinW = 0.2f;
         const float len = std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
         if (!(len > 0.0f))
             return false;
@@ -2217,8 +2223,12 @@ private:
             for (int i = 0; i < 3; ++i)
                 p[i] = centre[i] + (su * u[i] + sv * v[i]) * len;
             const float w = p[0] * m[3] + p[1] * m[7] + p[2] * m[11] + m[15];
-            if (!(w > 0.0f))
+            if (!(w > kMinW * len))
+            {
+                if (behind)
+                    *behind = true;
                 return false;
+            }
             const float x = (p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12]) / w;
             const float y = (p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13]) / w;
             minX = (std::min)(minX, x);
@@ -2226,7 +2236,33 @@ private:
             minY = (std::min)(minY, y);
             maxY = (std::max)(maxY, y);
         }
-        return maxX >= -1.0f && minX <= 1.0f && maxY >= -1.0f && minY <= 1.0f;
+        if (box)
+        {
+            box[0] = minX;
+            box[1] = maxX;
+            box[2] = minY;
+            box[3] = maxY;
+        }
+        const float left = float(viewport.X), top = float(viewport.Y);
+        return maxX >= left && minX <= left + float(viewport.Width) && maxY >= top && minY <= top + float(viewport.Height);
+    }
+
+    // [DEBUG] MoonLog: each change of the moon pass's decision to GTAIV.EFLC.FusionFix.Moon.log, with what it was taken from.
+    static void LogMoonDecision(const float* centre, const float* m, float w, bool onScreen, bool behind, const float* box, const D3DVIEWPORT9& screen, bool asked, bool drawn)
+    {
+        static int last = -1;
+        const int key = int(w > 0.0f) | int(onScreen) << 1 | int(behind) << 2 | int(asked) << 3 | int(drawn) << 4;
+        if (key == last)
+            return;
+        last = key;
+        RECT scissor{};
+        if (auto device = RageDirect3DDevice9::GetRuntimeDevice(); device && drawn)
+            device->GetScissorRect(&scissor);
+        FusionLog::Write("Moon", "Decision", "w %g onScreen %d cornerFarOff %d box x %g..%g y %g..%g viewport %lu x %lu test %d asked %d drawn %d scissor (%ld %ld %ld %ld) "
+                         "centre (%g %g %g) m (%g %g %g %g | %g %g %g %g | %g %g %g %g | %g %g %g %g)\n",
+                         w, int(onScreen), int(behind), box[0], box[1], box[2], box[3], screen.Width, screen.Height, int(PostFxResources.bMoonOnScreenTest), int(asked), int(drawn),
+                         scissor.left, scissor.top, scissor.right, scissor.bottom, centre[0], centre[1], centre[2],
+                         m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
     }
 
     static inline injector::hook_back<bool(__fastcall*)(void*, void*, rage::grcViewport*)> hbSkyMoonScissor;
@@ -2239,13 +2275,26 @@ private:
             const float* centre = reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(sky) + 0x90);
             const float* m = &viewport->mMatrix_200[0][0];
             const float w = centre[0] * m[3] + centre[1] * m[7] + centre[2] * m[11] + m[15];
-            if (!(w > 0.0f) || !MoonOnScreen(centre, m))
+            float box[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+            bool behind = false;
+            // Without the device's viewport, a screen large enough that only the far-off corners stop the pass.
+            D3DVIEWPORT9 screen = { 0, 0, 16384, 16384, 0.0f, 1.0f };
+            if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
+                device->GetViewport(&screen);
+            const bool onScreen = w > 0.0f && MoonOnScreen(centre, m, screen, box, &behind);
+            // [DEBUG] MoonOnScreenTest 0: only the centre behind the camera stops the moon pass, to tell whether the
+            // corner test is what hides the moon.
+            if (!(w > 0.0f) || (PostFxResources.bMoonOnScreenTest && !onScreen))
             {
                 SkyTrace::Moon(centre, w, w > 0.0f, false);
+                if (PostFxResources.bMoonLog)
+                    LogMoonDecision(centre, m, w, onScreen, behind, box, screen, false, false);
                 return false;
             }
             const bool drawn = hbSkyMoonScissor.fun(sky, edx, viewport);
             SkyTrace::Moon(centre, w, true, drawn);
+            if (PostFxResources.bMoonLog)
+                LogMoonDecision(centre, m, w, onScreen, behind, box, screen, true, drawn);
             if (!drawn)
                 return false;
         }

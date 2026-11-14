@@ -16,6 +16,7 @@ module;
 export module occlusion;
 
 import common;
+import cpuscopes;
 import comvars;
 import framehistory;
 import inireload;
@@ -65,6 +66,9 @@ export namespace Occlusion
     Probe Take();
     // The sphere lies wholly behind the world drawn into the grid
     bool SphereHidden(const Probe& probe, const float centre[3], float radius);
+    // The grid's first level for CoronaRender::BehindWorld, a cheaper test of small balls than SphereHidden's, while
+    // probe is held (CoronasOcclusion 1 only); false where there is none to test against
+    bool CoronaPoints(const Probe& probe, CoronaRender::HiZPoints& points);
 
     // Render thread, a frame's grid read back: the farthest view depth (metres) of each texel, rows pitchBytes apart;
     // viewProjection the camera it was drawn with (rows, clip = [x y z 1] * M, no jitter), position the camera's, and
@@ -441,17 +445,10 @@ namespace Occlusion
     // The grid taken at the pass's start is held until its end
     Probe coronaProbe;
     uint64_t coronaPasses = 0, coronasTested = 0, coronasHidden = 0;
-    bool CoronasBegin(CoronaRender::HiZPoints& points)
+    bool FillCoronaPoints(const Probe& p, CoronaRender::HiZPoints& points)
     {
-        if (!nCoronas)
-            return false;
-        coronaProbe = Take();
-        const Probe& p = coronaProbe;
         if (!p.usable || Precheck(p) != Visible || p.grid->data[0].empty())
-        {
-            coronaProbe = {};
             return false;
-        }
         const Grid& g = *p.grid;
         points.viewProjection = g.viewProjection;
         points.depth = g.data[0].data();
@@ -466,6 +463,24 @@ namespace Occlusion
         points.grow = p.move * fMoveGrowth;
         points.cull = nCoronas == 1;
         return true;
+    }
+
+    bool CoronasBegin(CoronaRender::HiZPoints& points)
+    {
+        if (!nCoronas)
+            return false;
+        coronaProbe = Take();
+        if (!FillCoronaPoints(coronaProbe, points))
+        {
+            coronaProbe = {};
+            return false;
+        }
+        return true;
+    }
+
+    bool CoronaPoints(const Probe& probe, CoronaRender::HiZPoints& points)
+    {
+        return nCoronas == 1 && FillCoronaPoints(probe, points);
     }
 
     void CoronasEnd(uint32_t tested, uint32_t hidden)
@@ -580,6 +595,8 @@ namespace Occlusion
     // The lists' entry: the phases to add the entity to
     uint32_t Phases(uintptr_t entity, uint32_t phases)
     {
+        static const CpuScopes::Id kCpuScope("Occlusion.Entities");
+        CpuScopes::Scope cpuScope(kCpuScope);
         if (!pScenePhase || !entity || !nMode)
             return phases;
         const uint32_t scene = *pScenePhase;
@@ -674,6 +691,8 @@ namespace Occlusion
     // The lists' thread, at the first entity of the next frame
     void EndFrame()
     {
+        static const CpuScopes::Id kCpuScope("Occlusion.EndFrame");
+        CpuScopes::Scope cpuScope(kCpuScope);
         ++stats.frames;
         ticks += frameTicks;
         maxFrameTicks = std::max(maxFrameTicks, frameTicks);

@@ -1345,6 +1345,12 @@ namespace
 
 export namespace FrameGeneration
 {
+    // Frames being presented from inside a draw call of the render thread (CheckPending): their draws are not the game's
+    bool PresentingInDraw()
+    {
+        return bInPresent;
+    }
+
     // Evaluate prepares the frame generation
     bool IsEnabled()
     {

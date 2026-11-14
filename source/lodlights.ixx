@@ -6,8 +6,11 @@ module;
 export module lodlights;
 
 import common;
+import cpuscopes;
 import comvars;
+import coronas;
 import natives;
+import occlusion;
 import settings;
 
 #define IDR_LODLIGHTS 777
@@ -113,6 +116,8 @@ std::vector<CLamppostInfo>                  m_Lampposts;
 std::map<unsigned int, CLamppostInfo>* pFileContent = &FileContent;
 std::multimap<unsigned int, CLamppostInfo>* pFileContentMMap = &FileContentMMap;
 bool							            m_bCatchLamppostsNow;
+// CE 0x128e340, the game camera's position, where it looks 8 floats before (main thread, as RegisterLODLights)
+float*                                      pGameCamera = nullptr;
 
 static inline float GetDistance(RwV3D* v1, RwV3D* v2)
 {
@@ -442,6 +447,8 @@ WplInstance* PossiblyAddThisEntity(WplInstance* pInstance)
 
 void RegisterLODLights()
 {
+    static const CpuScopes::Id kCpuScope("LodLights.Register");
+    CpuScopes::Scope cpuScope(kCpuScope);
     static auto SolveEqSys = [](float a, float b, float c, float d, float value) -> float
     {
         float determinant = a - c;
@@ -488,6 +495,39 @@ void RegisterLODLights()
     float fCoronaFarClip;
     Natives::GetCamFarClip(currentCamera, &fCoronaFarClip);
 
+    // Where the camera looks: the coronas the game lists for drawing are only those in front of it, so a lamp more than
+    // 100 degrees off that way is left out here, before its corona is worked out and registered (the loop over every
+    // lamp of the map was the most of ours on the main thread in a profile). Not the blinking ones, which share one
+    // fade, nor those without a distance.
+    float look[3] = {};
+    bool skipBehind = false;
+    if (pGameCamera)
+    {
+        const float* l = pGameCamera - 8;
+        const float length = std::sqrt(l[0] * l[0] + l[1] * l[1] + l[2] * l[2]);
+        const float ex = camPos.x - pGameCamera[0], ey = camPos.y - pGameCamera[1], ez = camPos.z - pGameCamera[2];
+        if (length > 0.5f && length < 2.0f && ex * ex + ey * ey + ez * ez < 1.0f)
+        {
+            for (int k = 0; k < 3; ++k)
+                look[k] = l[k] / length;
+            skipBehind = true;
+        }
+    }
+    constexpr float kBehindSin = 0.17364818f; // sin 10 degrees
+
+    // CoronasOcclusion: a lamp whose corona lies wholly behind the world drawn into the occlusion grid is not registered.
+    // The game camera's corona pass tested them there on the render thread, the most of its time: of some 14800 coronas
+    // of a dawn 76% hidden, nearly all of them these. The ball and the test are that pass's (BehindWorld: the grid's
+    // first level, a texel or two; Occlusion::SphereHidden took four times as long), 1.5 times the size the game lists
+    // (the radius given times 0.0005, CE 0xc1ee40) and half a metre more.
+    const Occlusion::Probe probe = Occlusion::nCoronas == 1 ? Occlusion::Take() : Occlusion::Probe{};
+    CoronaRender::HiZPoints points;
+    const bool testHidden = Occlusion::CoronaPoints(probe, points);
+    auto hidden = [&](const CLamppostInfo& lamppost, float size)
+    {
+        return testHidden && CoronaRender::BehindWorld(points, &lamppost.vecPos.x, 1.5f * size * 0.0005f + 0.5f, 0.0f);
+    };
+
     for (const auto& lamppost : m_Lampposts)
     {
         // Check height bounds
@@ -499,6 +539,14 @@ void RegisterLODLights()
         float dy = camPos.y - lamppost.vecPos.y;
         float dz = camPos.z - lamppost.vecPos.z;
         float fDistSqr = dx * dx + dy * dy + dz * dz;
+
+        if (skipBehind && !lamppost.nCoronaShowMode && !lamppost.nNoDistance)
+        {
+            // dx..dz point from the lamp to the camera
+            const float behind = dx * look[0] + dy * look[1] + dz * look[2];
+            if (behind > 0.0f && behind * behind > kBehindSin * kBehindSin * fDistSqr)
+                continue;
+        }
 
         float fCoronaDist = lamppost.fObjectDrawDistance - 30.0f;
 
@@ -548,6 +596,9 @@ void RegisterLODLights()
                 finalSize = fRadius * lamppost.fCustomSizeMult * fCoronaRadiusMultiplier * 1270.5f;
             }
 
+            if (hidden(lamppost, finalSize))
+                continue;
+
             DrawCorona2(reinterpret_cast<unsigned int>(&lamppost),
                 lamppost.colour.r, lamppost.colour.g, lamppost.colour.b,
                 finalAlpha,
@@ -588,7 +639,7 @@ void RegisterLODLights()
                 (isRed && redPhase) ||
                 ((isGreen || isGreenAlt) && greenPhase);
 
-            if (shouldDraw)
+            if (shouldDraw && !hidden(lamppost, finalSize))
             {
                 DrawCorona2(reinterpret_cast<unsigned int>(&lamppost),
                     lamppost.colour.r, lamppost.colour.g, lamppost.colour.b,
@@ -620,6 +671,10 @@ public:
 
             auto pattern = find_pattern("05 ? ? ? ? 50 8D 4C 24 60", "05 ? ? ? ? D9 5C 24 04 8D 4C 24 38 D9");
             mTimeCycle = *pattern.get_first<Timecycle*>(1);
+
+            // movss xmm2, [0x128e340] in CE 0xc09440, as coronas.ixx finds it
+            if (auto camera = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 10 15 ? ? ? ? F3 0F 10 0D ? ? ? ? 56 8B 75 0C"); !camera.empty())
+                pGameCamera = *camera.get_first<float*>(12);
 
             pattern = find_pattern("8B 15 ? ? ? ? 56 8D 72 01", "A1 ? ? ? ? 56 8D 70 01 81 FE");
             DrawCorona2 = (int(__cdecl*)(int id, char r, char g, char b, float a5, CVector * pos, float radius, float a8, float a9, int a10, float a11, char a12, char a13, int a14))(pattern.get(0).get<uintptr_t>(0));

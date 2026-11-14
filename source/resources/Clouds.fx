@@ -79,6 +79,9 @@ float3 vec3ShadeColour;   // the game's cloud colour darkened by VolumetricCloud
 float3 vec3SunsetColour;  // the game's sunset colour, exposed
 float fSilver;            // the game's CloudInscatteringRange: the brightening along the sun's axis
 float fMinLight;          // VolumetricCloudsMinLight: the least of the sun's light any part of a cloud keeps
+float4 vec4ScatterExtinction; // the share of the extinction each octave of the light scattered many times takes
+float4 vec4ScatterWeight;     // and its weight, the four summing to 1
+float fLightJitter;           // VolumetricCloudsLightJitter: 1 slides the steps towards the sun per pixel and frame, 0 keeps them fixed
 float fMottle;            // VolumetricCloudsMottle: how much the small billows at the surface fleck the light
 float fBacklight;         // with the sun low, the share of their light the clouds straight towards it keep
 float fGlowBoost;         // and how much stronger the glow of their thin edges is
@@ -116,8 +119,12 @@ float fCurl;              // how far the billows are swept along the coarse nois
 float fLightAbsorption;   // the share of the extinction the sun's light takes inside a cloud
 float fDebug;             // VolumetricCloudsDebug + 1, the numbers in the comments here:2 the sky brightness matched to, 3 to 11 one term of the light alone (Light)
 float fFrameJitter;       // the frame's share of a step, so the march's noise changes every frame
+float fFrameShift;        // pixels the noise's pattern slides by this frame (5.588238 a frame, 64 frames round), so
+                          // the pattern itself changes too: slid by fFrameJitter alone each pixel kept its place in
+                          // it, and what the accumulation left of the noise stood still as a fine grid of dots
 float fDetailFlow;        // VolumetricCloudsDetailFlow: how far up, in billows, the heap's density pushes its billows
 float fWarp;              // how far, in coverage texture units, the outline wanders with height
+float fLump;              // how far, in coverage texture units, the outline bulges by billows, both ways together
 float4 vec4Morph;         // the map's slow morph: phase, reach in texture units; the weather map's scale and its reach
 
 // How far the scene is along the view ray at uv, the nearest of the full size pixels around it (a
@@ -260,6 +267,17 @@ float Density(float3 p, bool detail, Place place, bool full, out float crease, o
         float3 w = p * (vec4Shape.y * 0.35) + float3(vec4Wind.zw, fEvolution);
         wander = tex3Dlod(DetailTex, float4(w, 0)).rg - 0.5;
         uv += wander * fWarp;
+        // And bulges and dents by billows, a third of DetailScale across, fLump either way: the outline
+        // moves whatever the density's slope there. The billows' erosion below is a fixed subtraction, and
+        // towards the tops the dome's stretch makes the density rise steeply at the edge, so it barely
+        // moved the outline there: the sides and tops seen from afar came out smooth as plastic while
+        // the bases seen from below were ragged. More erosion up there ate the tops away instead.
+        // The reflections leave it out, for the slots.
+        if (full)
+        {
+            float3 l = p * (vec4Shape.y * 3.0) + float3(vec4Wind.zw + float2(0.13, 0.71), fEvolution);
+            uv += (tex3Dlod(DetailTex, float4(l, 0)).rg - 0.5) * fLump;
+        }
     }
     // Filtered with a quintic curve between texels: linear filtering's kinks at the texel edges stood
     // out as creases down the clouds' sides.
@@ -414,8 +432,20 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
     // With even steps over the whole crossing a step near the horizon was 150 m long, and the
     // clouds came out smeared down the screen.
     // Each pixel starts up to a coarse step later: with the same coarse steps for every pixel,
-    // thin cloud between two of them went missing in whole bands across the screen.
-    float jitter = frac(PixelJitter(vpos) + fFrameJitter);
+    // thin cloud between two of them went missing in whole bands across the screen. The reflections
+    // accumulate nothing, and their few pixels are spread over a whole car, where one frame's noise
+    // showed as a grid of dimples on a bonnet: they all start half a step in.
+    float jitter = full ? frac(PixelJitter(vpos + fFrameShift) + fFrameJitter) : 0.5;
+    // The steps towards the sun, each twice the last, sample the cloud at fixed distances: as a sample point
+    // moved down through a cloud, each of them in turn left its top and the light jumped by its whole step,
+    // and the body came out in layers, each a copy of the top's outline (by up to a fifth of the sun's
+    // light per few metres where the even steps gave at most half that). The scene's clouds slide the whole
+    // series by up to a step, 2^u for u from a pixel's own noise that changes every frame, and the
+    // accumulation averages the layers away; the reflections, without it, keep the fixed steps.
+    // Each sample along the ray slides by its own share (the golden ratio on from the pixel's): with one
+    // share for the whole ray, neighbouring pixels' light differed by up to half, and the 0.15 of this
+    // frame the accumulation takes showed the noise's pattern as a grid of dots on the sunlit sides.
+    float lightJitter = frac(PixelJitter(vpos + 37.0 + fFrameShift) + fFrameJitter * 1.618034);
     float t = t0 + max(vec4Layer.y / 24.0, t0 * FAR_STEP) * stepScale * COARSE_STEP * jitter;
     float fineLeft = 0.0;
     float lightDepth = 0.0;
@@ -473,7 +503,8 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
             if (sums.transmittance > LIGHT_CUTOFF)
             {
                 lightDepth = 0.0;
-                float stepLength = vec4Layer.y * lightStart;
+                float lightScale = full ? exp2(frac(lightJitter + float(i) * 0.618034) * fLightJitter) : 1.0;
+                float stepLength = vec4Layer.y * lightStart * lightScale;
                 float3 q = p;
                 // A float counter, and no [fastopt]: with an int counter under [fastopt] the compiler
                 // negated the loop's bound, and the loop broke before its first step. The light's march
@@ -488,9 +519,13 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
                 }
             }
             // Light scattered many times inside a cloud gets far deeper than the sun's direct beam,
-            // which is what keeps real clouds bright: three octaves, each with half the extinction
-            // and half the weight of the one before. With the direct beam alone the sun barely
-            // reached the faces seen from below and the clouds came out dark.
+            // which is what keeps real clouds bright: octaves of it, each with a share of the extinction
+            // and half the weight of the one before (vec4ScatterExtinction, vec4ScatterWeight). With the
+            // direct beam alone the sun barely reached the faces seen from below and the clouds came out
+            // dark. Three octaves at half the extinction each (VolumetricCloudsScatterTail 0) were spent
+            // some 0.3 of the layer's thickness in: the sun's light fell to VolumetricCloudsMinLight there
+            // and stayed, so every cloud was a lit cap on one flat grey body with a sharp edge between;
+            // four at a fifth each (1) reach a kilometre and more, and the light falls off all the way in.
             // A share of the extinction (VolumetricCloudsAbsorption): past the sun's direct beam the
             // light inside a cloud is scattered forwards mostly and gets through more cloud than the
             // eye's view does. At 0.6 the sun was spent within some 50 metres, about as deep as the
@@ -500,7 +535,7 @@ CloudSums March(float2 uv, float2 vpos, float3 dir, float rayScale, bool full, i
             float tau = lightDepth * sigma * fLightAbsorption;
             // Never below VolumetricCloudsMinLight of the sun, however deep in the cloud: for looks, the
             // bases and the shaded sides stay light and airy rather than heavy.
-            float sun = lerp(fMinLight, 1.0, (exp(-tau) + 0.5 * exp(-0.5 * tau) + 0.25 * exp(-0.25 * tau)) / 1.75) * fLightStrength;
+            float sun = lerp(fMinLight, 1.0, dot(exp(-tau * vec4ScatterExtinction), vec4ScatterWeight)) * fLightStrength;
             // The billows shade each other: where a coarse billow stands a billow's size, 120 m,
             // towards the sun, the sample takes less of it, by its own density. The march above
             // leaves the detail out, and its first steps are too short for a billow to shade the

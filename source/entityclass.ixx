@@ -35,10 +35,11 @@ import framehistory;
 //
 // EntityDrawLog = 1 ([DEBUG]): every 600 scene frames, the draws of each kind and the CPU time their
 // execute took, per frame and per target the game had locked (RenderSkip::CurrentTarget), to
-// GTAIV.EFLC.FusionFix.EntityClass.log: what leaving a kind out of a pass would save. For the G-buffer and the water's
-// reflection also by the distance from the viewport's camera and by the size on screen (the sphere's reach over the
-// distance), for the lamps' maps the same from the lamp of the half drawn, and for the G-buffer and the lamps' maps the
-// costliest models, by the hash of their name (model info +0x3c), with their mean distance.
+// GTAIV.EFLC.FusionFix.EntityClass.log: what leaving a kind out of a pass would save. For the G-buffer, the water's
+// reflection and FullScreenCopy (the forward and transparent geometry) also by the distance from the viewport's camera
+// and by the size on screen (the sphere's reach over the distance), for the lamps' maps the same from the lamp of the
+// half drawn, and for the G-buffer, FullScreenCopy and the lamps' maps the costliest models, by the hash of their name
+// (model info +0x3c), with their mean distance.
 //
 // SkipLeftOutDraws = 1 ([PERFORMANCE]): RenderSkip leaves passes out on the GPU (the reflections and far cascades
 // taking turns, the night's cascades) by dropping their device draws, but the game still works through every draw
@@ -133,6 +134,10 @@ export namespace EntityClass
     // hook may keep a copy and execute it later through its vtable). Set at init.
     using EntityCommandHook = bool (*)(Kind kind, void* dc);
     void SetEntityCommandHook(EntityCommandHook hook);
+    // The same for each CDrawFragTypeDC (0x60 bytes, CE ctor 0x8dae60: matrix rows +0x10, +0x20, +0x30, position +0x40,
+    // +0x50 and +0x54 to 0x15dbdc0/4, model +0x58, +0x5a, +0x5b, +0x5c to 0xac6ef0, 0xac6fb0, 0xac7050): an object
+    // with fragments drawn whole without a cache entry, each of its parts one drawable (CE 0x5fd190)
+    void SetFragTypeCommandHook(EntityCommandHook hook);
 
     // The model's rmcDrawable as CDrawEntityDC's execute (CE 0x8dcbf0) takes it: a fragment type's (+8) at +0xb4, else
     // the one +0xc points to; 0 while it is not loaded. Its grmShaderGroup is at +8 (shaders +8, their count +0xc).
@@ -157,6 +162,7 @@ namespace
     void* currentDc = nullptr;
     EntityClass::CommandHook commandHook = nullptr;
     EntityClass::EntityCommandHook entityCommandHook = nullptr;
+    EntityClass::EntityCommandHook fragTypeCommandHook = nullptr;
 
     std::vector<std::pair<EntityClass::DrawHook, EntityClass::DrawHook>>& Hooks()
     {
@@ -275,10 +281,11 @@ namespace
             targetStats.push_back({ shown });
             it = targetStats.end() - 1;
             it->water = !std::strcmp(shown, "WATER_REFLECTION_COLOUR");
-            it->camera = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->water;
+            const bool transparent = !std::strcmp(shown, "FullScreenCopy");    // the forward and transparent geometry
+            it->camera = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->water || transparent;
             it->lamp = !std::strcmp(shown, "SHADOW_MAP_COLOUR_POINT");
             it->camera |= it->lamp;
-            it->models = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->lamp;
+            it->models = !std::strcmp(shown, "_DEFERRED_GBUFFER_0_") || it->lamp || transparent;
         }
         lastTargetName = name;
         lastTarget = size_t(it - targetStats.begin());
@@ -377,7 +384,7 @@ namespace
                 int64_t all = 0;
                 for (auto& [model, m] : top)
                     all += m.ticks;
-                text += std::format("    {} models; the costliest (name hash, radius, kind, draws, ms, us a draw, mean distance{}):\n",
+                text += std::format("    {} models; the costliest (name hash, radius, kind, draws, ms, us a draw, mean distance{}, device draws an entity in the G-buffer):\n",
                     top.size(), s.lamp ? " from the lamp" : "");
                 int64_t shown = 0;
                 for (size_t i = 0; i < top.size() && i < 20; ++i)
@@ -386,12 +393,28 @@ namespace
                     const auto info = modelInfos ? *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4) : 0;
                     const uint32_t hash = info ? *reinterpret_cast<const uint32_t*>(info + 0x3c) : 0;
                     const float radius = info ? *reinterpret_cast<const float*>(info + 0x1c) : 0.0f;
-                    text += std::format("      {:08X} {:6.1f} m {:<9} {:7.2f} {:6.3f} ms {:6.2f} {:6.1f} m\n", hash, radius, KindNames[size_t(m.kind)],
+                    text += std::format("      {:08X} {:6.1f} m {:<9} {:7.2f} {:6.3f} ms {:6.2f} {:6.1f} m {:4}\n", hash, radius, KindNames[size_t(m.kind)],
                         m.draws * perFrame, m.ticks * msPerFrame, m.draws ? m.ticks * 1e6 / double(qpcFrequency) / m.draws : 0.0,
-                        m.placed ? m.distance / double(m.placed) : 0.0);
+                        m.placed ? m.distance / double(m.placed) : 0.0, uint32_t(modelDraws[model]));
                     shown += m.ticks;
                 }
                 text += std::format("      the top 20 take {:.0f}% of the models' time\n", all ? 100.0 * shown / all : 0.0);
+                // The models of many device draws an entity (a breakable bench: a geometry for each slat, 48), by those
+                // draws a frame: what instancing them would save
+                std::sort(top.begin(), top.end(), [](auto& a, auto& b) { return a.second.draws * modelDraws[a.first] > b.second.draws * modelDraws[b.first]; });
+                text += "    the most device draws (name hash, radius, kind, entity draws, device draws an entity, device draws, ms):\n";
+                for (size_t i = 0, listed = 0; i < top.size() && listed < 10; ++i)
+                {
+                    const auto& [model, m] = top[i];
+                    if (modelDraws[model] <= 1)
+                        continue;
+                    ++listed;
+                    const auto info = modelInfos ? *reinterpret_cast<const uintptr_t*>(modelInfos + model * 4) : 0;
+                    const uint32_t hash = info ? *reinterpret_cast<const uint32_t*>(info + 0x3c) : 0;
+                    const float radius = info ? *reinterpret_cast<const float*>(info + 0x1c) : 0.0f;
+                    text += std::format("      {:08X} {:6.1f} m {:<9} {:7.2f} {:4} {:8.1f} {:6.3f} ms\n", hash, radius, KindNames[size_t(m.kind)],
+                        m.draws * perFrame, uint32_t(modelDraws[model]), m.draws * perFrame * modelDraws[model], m.ticks * msPerFrame);
+                }
             }
         }
         FusionLog::WriteText("EntityClass", "Draws", text);
@@ -883,6 +906,8 @@ namespace
 
         if (entityCommandHook && source == FromEntity && !entityCommandHook(kind, dc))
             return;
+        if (fragTypeCommandHook && source == FromFragType && !fragTypeCommandHook(kind, dc))
+            return;
 
         if (commandHook && (source == FromEntity || source == FromFrag || source == FromFragType))
         {
@@ -1231,6 +1256,11 @@ namespace EntityClass
     void SetEntityCommandHook(EntityCommandHook hook)
     {
         entityCommandHook = hook;
+    }
+
+    void SetFragTypeCommandHook(EntityCommandHook hook)
+    {
+        fragTypeCommandHook = hook;
     }
 
     uintptr_t ModelInfo(uint16_t model)

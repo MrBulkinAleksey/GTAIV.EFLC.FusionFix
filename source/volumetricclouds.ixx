@@ -22,6 +22,7 @@ module;
 export module volumetricclouds;
 
 import common;
+import cpuscopes;
 import comvars;
 import d3dx9_43;
 import framegeneration;
@@ -123,6 +124,8 @@ static bool ReflectionHalfTarget(IDirect3DDevice9* pDevice, float width, float h
 export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* sceneBase, bool reflection = false,
                                    int reflectionSection = kProfCloudReflectionMap)
 {
+    static const CpuScopes::Id kCpuScope("Clouds.Render");
+    CpuScopes::Scope cpuScope(kCpuScope);
     ProfilerScope timedAll(pDevice, reflection ? kProfCloudReflection : -1);
     ProfilerScope timed(pDevice, reflection ? reflectionSection : kProfClouds);
     auto& R = PostFxResources;
@@ -395,6 +398,14 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     // lights too, grey where they should take its colour.
     effect->SetFloat(effect->GetParameterByName(nullptr, "fMinLight"), R.fVolumetricCloudsMinLight);
     {
+        // The octaves of the light scattered many times: four at a fifth of the extinction each, or three at half.
+        const D3DXVECTOR4 extinction = R.bVolumetricCloudsScatterTail ? D3DXVECTOR4(1.0f, 0.2f, 0.04f, 0.008f) : D3DXVECTOR4(1.0f, 0.5f, 0.25f, 0.0f);
+        const D3DXVECTOR4 weight = R.bVolumetricCloudsScatterTail ? D3DXVECTOR4(1.0f, 0.5f, 0.25f, 0.125f) / 1.875f : D3DXVECTOR4(1.0f, 0.5f, 0.25f, 0.0f) / 1.75f;
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4ScatterExtinction"), &extinction);
+        effect->SetVector(effect->GetParameterByName(nullptr, "vec4ScatterWeight"), &weight);
+    }
+    effect->SetFloat(effect->GetParameterByName(nullptr, "fLightJitter"), R.bVolumetricCloudsLightJitter ? 1.0f : 0.0f);
+    {
         const float lowSun = std::clamp((sun.z - 0.0872f) / (0.5736f - 0.0872f), 0.0f, 1.0f);
         const float day = lowSun * lowSun * (3.0f - 2.0f * lowSun);
         effect->SetFloat(effect->GetParameterByName(nullptr, "fBacklight"), 0.3f + 0.7f * day);
@@ -491,8 +502,11 @@ export void RenderVolumetricClouds(IDirect3DDevice9* pDevice, IDirect3DBaseTextu
     // The golden ratio's fraction per frame: each frame's march noise falls between the last
     // ones', and temporal anti-aliasing averages it away.
     effect->SetFloat(effect->GetParameterByName(nullptr, "fFrameJitter"), static_cast<float>(std::fmod(FrameHistory::Frame() * 0.6180339887, 1.0)));
+    effect->SetFloat(effect->GetParameterByName(nullptr, "fFrameShift"), 5.588238f * float(FrameHistory::Frame() % 64));
     // The outline wanders by up to 150 metres.
     effect->SetFloat(effect->GetParameterByName(nullptr, "fWarp"), 150.0f / R.fCloudShadowsScale);
+    // The outline's bulges by billows, VolumetricCloudsLumps either way.
+    effect->SetFloat(effect->GetParameterByName(nullptr, "fLump"), 2.0f * R.fVolumetricCloudsLumps / R.fCloudShadowsScale);
     const D3DXVECTOR4 morph(R.CloudMorphPhase(), R.kCloudMorphReach / R.fCloudShadowsScale, R.kCloudWeatherScale, R.kCloudWeatherReach);
     effect->SetVector(effect->GetParameterByName(nullptr, "vec4Morph"), &morph);
     effect->SetFloat(effect->GetParameterByName(nullptr, "fMaxDistance"), R.fVolumetricCloudsMaxDistance);

@@ -7,7 +7,10 @@ module;
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <format>
+#include <iterator>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 #include "FusionLog.hpp"
@@ -15,13 +18,16 @@ module;
 export module farpropinstancing;
 
 import common;
+import cpuscopes;
 import comvars;
 import d3dx9_43;
 import inireload;
 import entityclass;
+import framegeneration;
 import framehistory;
 import grasswind;
 import procedural;
+import shadowmerge;
 import temporal;
 import vtablepatch;
 
@@ -35,7 +41,20 @@ import vtablepatch;
 // took 2.5-3.5 ms of CPU a frame, which is why ProceduralSmallFarCull thinned them past 60 m; the models drawn here are
 // left out of that thinning (ProceduralGround::DrawnInstanced). FarPropInstancing = 2 (the default) takes the rest of
 // procedural.dat's PROCOBJ models too, the litter, rocks and rubble, but not those whose record has +0x37 set (they
-// float on water); 1 the plants only, 0 none.
+// float on water); 1 the plants only, 0 none; 3 (the default) any small model besides (radius under kAnyRadius, a
+// building or a prop: the map's fences, bollards, bins, small street furniture) drawn by CDrawEntityDC, a group of one
+// copy executed as it was, trees and bushes left out (GrassShared::SwaysByPlace): at night looking down a street 1360 building draws took 3.9 ms of a 6 ms G-buffer, one
+// model of 2.4 m 115 times (two draws each).
+//
+// CascadeInstancing = 1 ([PERFORMANCE]): the same in each of the sun's cascades. CRenderPhaseCascadeShadows' list
+// (vtable 0xe866ac slot 7, CE 0x928ac0) is made for the four cascades in a loop: its viewport, the lock of
+// CASCADE_TARGET_R32, the entities (CE 0xb1e480(list, -1, 0), cdecl), the unlock and the copy into the atlas. The call
+// is taken (AddCascadeEntities) to put a command before the entities that starts taking copies and one after that
+// executes them, inside the cascade with its viewport current, and before each change of the forced depth shader's pass
+// (FlushCascadePart); each group's sample goes where its copy nearest the camera stands (CopyOrigin), not before the
+// camera. A model that fails there is given up on in the cascades alone. By day props took 290 draws and 0.7 ms of the cascades' 2.1 ms of CPU, buildings 516 and
+// 1.0 ms. Taken first at the target's unlock instead (2026-10-28), when the viewport was no longer the cascade's: 37 of
+// 46 groups found no sample place and the copies executed there one by one cast flickering shadows of the wrong shape.
 //
 // The game's draw command for them, CDrawEntityDC, keeps the entity's place as a quaternion (+0x10, x y z w) and a
 // position (+0x20); its execute (CE 0x8dcbf0) makes the matrix from them (0x6708d0, rows at +0, +0x10, +0x20) and has
@@ -44,7 +63,8 @@ import vtablepatch;
 // off is not executed but copied, grouped by model, fade alpha (+0x32, in kAlphaSteps steps), the two other scalars
 // (+0x33, +0x34), the bucket (+0x35) and the flags (+0x36). At the end of the pass, before the depth copy and the
 // motion vectors (TemporalAA::AppendBeforeSceneEnd), each group's first copy is executed once, turned to no rotation
-// and moved to a point kSampleDistance in front of the camera, so gWorld is a translation by that point. Its device
+// and moved in front of the camera, its bounding sphere wholly in view (GroupOrigin), so gWorld is a translation by
+// that point; it is drawn with the pass states its group's commands stood in (StatesHere). Its device
 // draws are made instanced: stream 1 holds per instance three rows that take a vertex from the model into the space of
 // that point (the entity's rotation, its position less the point), and a copy of the draw's vertex shader, made once
 // from the game's by disassembling and assembling it again (D3DX), puts the position, normal, tangent and binormal
@@ -59,11 +79,20 @@ import vtablepatch;
 // draw (the wrapper at CE 0x6a1d10 -> 0x6a4320) reads that detail's mesh list at drawable +0x40 without a check, and a
 // few props have none there (CJ_PROC_BRICK8-10), so for those the copies are executed one by one as well.
 //
+// FragmentInstancing = 1 ([PERFORMANCE]): objects with fragments the game draws whole without a cache entry
+// (CDrawFragTypeDC, EntityClass::SetFragTypeCommandHook: benches, bins, posts) are taken the same way past
+// kFromDistance. Each of their parts is a drawable of its own drawn with the object's matrix (CE 0x5fd190 -> 0x9ffee0 ->
+// 0xaec7b0), so a breakable bench of 23 parts took 48 device draws (67 us of CPU) each; the command keeps the matrix's
+// rows (+0x10, +0x20, +0x30) and position (+0x40), the sample gets identity rows. Its copies are grouped by model and the
+// command's other fields (+0x50, the bucket mask +0x54, +0x5a-0x5c, EntityClass's mark +0x5f; +0x5d and +0x5e
+// are never written).
+//
 // FarPropInstancingLog = 1 ([DEBUG]): every 600 passes, the instances, groups, instanced draws and copies executed
 // one by one per pass, and the models given up on, to GTAIV.EFLC.FusionFix.FarPropInstancing.log.
 class FarPropInstancing
 {
     static constexpr float kFromDistance = 30.0f;       // metres from the camera
+    static constexpr float kAnyRadius = 15.0f;          // FarPropInstancing 3: models under this radius
     static constexpr float kSampleDistance = 4.0f;
     static constexpr uint32_t kMaxInstances = 32768;    // a pass
     static constexpr int kAlphaSteps = 8;
@@ -72,16 +101,39 @@ class FarPropInstancing
     static constexpr uint32_t kLogPasses = 600;
     static constexpr int kMissesToGiveUp = 30;
 
-    struct Copy { uint8_t dc[0x38]; };     // CDrawEntityDC's size
-    struct Batch { UINT count = 0; UINT offset = 0; int draws = 0; bool failed = false; };
+    struct Copy { uint8_t dc[0x60]; bool frag; uint8_t states; };    // CDrawEntityDC's 0x38 bytes or CDrawFragTypeDC's 0x60
+    struct FragKey
+    {
+        uint64_t a, b;
+        bool operator==(const FragKey&) const = default;
+    };
+    struct FragKeyHash { size_t operator()(const FragKey& k) const { return std::hash<uint64_t>()(k.a ^ (k.b * 0x9E3779B97F4A7C15ull)); } };
+    struct Batch
+    {
+        UINT count = 0; UINT offset = 0; int draws = 0; bool failed = false; const char* reason = "";
+        const std::vector<uint32_t>* items = nullptr;   // the group's copies and its sample's point, for parts on a bone
+        float origin[3] = {};
+    };
+    // A part's own transform within its object, drawn as gWorld = its bone's matrix (rows) and offset, then the sample's
+    // point: a street lamp's arm and head, a container's lid. The instance's rows must come after it, not before
+    struct Part { float m[3][3]; float b[3]; };
 
     static inline bool bEnabled = true;
     static inline bool bProps = true;
+    static inline bool bAnyModel = true;               // FarPropInstancing 3
+    static inline bool bFragments = true;
+    static inline bool bCascades = true;               // CascadeInstancing
     static inline volatile bool bStatesStale = false;  // FarPropInstancing's mode changed: models looked at again
     static inline bool bLog = false;
 
     // Render thread
     static inline bool bInScene = false;
+    static inline bool bCascadePass = false;   // the copies are of a cascade of the sun's, not of the G-buffer
+    // Copies are taken in a cascade's first run of buckets alone, the opaque one, up to the first pass let go or the forced
+    // shader let go. The later runs draw the parts alpha tested (wire fences, grating: vs 850 / ps 98, vs 808 / ps 53, at
+    // the cascade's end); copies taken there cast no shadow, executed one by one as much as instanced (2026-10-28 capture:
+    // a fence's single copy kept its frame and lost its mesh), so those are left to the game
+    static inline bool bCascadeFirstRun = false;
     static inline bool bExecuting = false;      // copies being executed: not taken again
     static inline bool bInstancing = false;     // the sample's draws are made instanced
     static inline DWORD instancingThread = 0;
@@ -90,14 +142,23 @@ class FarPropInstancing
     static inline float cameraPos[3] = {};
     static inline bool cameraKnown = false;
     static inline std::vector<Copy> copies;
-    static inline std::unordered_map<uint64_t, std::vector<uint32_t>> groups;
+    static inline std::unordered_map<FragKey, std::vector<uint32_t>, FragKeyHash> groups;     // the key, the states
+    static inline std::unordered_map<FragKey, std::vector<uint32_t>, FragKeyHash> fragGroups;
 
     // By model: 0 not looked at, 1 drawn instanced, 2 not a candidate, 3 given up on. Written on the render thread, read
     // on the game thread (DrawnInstanced)
     static inline volatile uint8_t modelState[0x10000] = {};
     static inline bool modelIsProp[0x10000] = {};       // a PROCOBJ model that is not a plant
+    static inline bool modelIsAny[0x10000] = {};        // neither: taken by FarPropInstancing 3 for its size
     static inline std::vector<bool> procObjModels;      // PROCOBJ models instanced as props, made once the records are in
     static inline uint8_t modelMisses[0x10000] = {};
+    // The same for the models of CDrawFragTypeDC copies: 0 not looked at, 1 drawn instanced, 3 given up on
+    static inline uint8_t fragState[0x10000] = {};
+    static inline uint8_t fragMisses[0x10000] = {};
+    // The cascades' own: by model, 1 its entity copies and 2 its fragment type copies given up on there (a shadow vertex
+    // shader the copy cannot be made of leaves the G-buffer's instancing alone), and the misses of its samples
+    static inline uint8_t cascadeGivenUp[0x10000] = {};
+    static inline uint8_t cascadeMisses[0x10000] = {};
     // By model, a bit per bucket (+0x35, 0-7): its commands there draw nothing, the game's own executes neither (the
     // game adds an entity to the lists of several buckets, a weed has meshes in one). Dropped then, looked at again
     // every kEmptyRecheck passes.
@@ -120,16 +181,85 @@ class FarPropInstancing
     // FarPropInstancingLog
     static inline uint32_t logPasses = 0;
     static inline uint64_t logInstances = 0, logGroups = 0, logDraws = 0, logOneByOne = 0, logCapped = 0, logEmptyDropped = 0;
-    static inline uint64_t logPropInstances = 0, logNoMeshList = 0;
+    static inline uint64_t logPropInstances = 0, logNoMeshList = 0, logFragInstances = 0, logAnyInstances = 0, logAnySingle = 0;
     static inline uint32_t logShadersMade = 0, logShadersFailed = 0;
+    static inline uint32_t logCascadePasses = 0;
+    static inline uint64_t logCascadeInstances = 0, logCascadeGroups = 0, logCascadeDraws = 0, logCascadeOneByOne = 0, logCascadeNoSample = 0;
+
+    // The pass states the draw list sets around its buckets (CE 0x437140's types: 0 depth test, 2 depth write, 3 alpha
+    // test, 4 and 5 the blend, 6 cull, 7 depth func, 8 alpha ref, 9 alpha func, 10 alpha blending, 11-15, 17, 18 the
+    // stencil but its reference, which each command sets itself (0xac7050), 19 colour write, 23 blend op), as they were
+    // where each copy's command stood. Without the stencil the lighting left the instances' pixels out: black. The copies
+    // are executed at the pass's end, after the list turned alpha blending on for its last bucket: a hydrant's sample
+    // blended its G-buffer into the scene's (capture 2026-10-28: blend 1 5/6), and every fire hydrant and bin drawn from
+    // it looked see-through. Each group's set goes on for its sample and its copies, and the pass's comes back after.
+    static constexpr uint32_t kStateTypes[] = { 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 23 };
+    // With them the technique group the shaders draw with (CE [0x106B308], -1 the default; its setter 0x42F0A0): the list
+    // changes it for its last buckets, and a street lamp's sample drew with another technique (vs 945 / ps 188 for the
+    // game's 947 / 189, other samplers): its albedo 0, black (capture 2026-10-28). And the draw mode (CE [0x17f59d4], its
+    // setter 0x62bf30; CDrawEntityDC's execute draws its own way when it is not 0): the cascades' list puts it back to 0
+    // right after the entities (0x924ce0), before the copies are executed
+    struct States
+    {
+        uint32_t values[std::size(kStateTypes)];
+        int32_t group;
+        int32_t mode;
+        bool operator==(const States&) const = default;
+    };
+    static inline int32_t* techniqueGroup = nullptr;
+    static inline int32_t* drawMode = nullptr;
+    static inline void(__cdecl* setPassState)(uint32_t type, uint32_t value) = nullptr;
+    static inline const uint32_t* passStateCache = nullptr;
+    static inline std::vector<States> stateSets;    // this pass's
+
+    static States CurrentStates()
+    {
+        States now{};
+        for (size_t i = 0; i < std::size(kStateTypes); ++i)
+            now.values[i] = passStateCache[kStateTypes[i]];
+        now.group = *techniqueGroup;
+        now.mode = drawMode ? *drawMode : 0;
+        return now;
+    }
+
+    // The index of the states where a command stands now, 0xFF when they cannot be kept (the copy is not taken then)
+    static uint8_t StatesHere()
+    {
+        if (!passStateCache || !setPassState || !techniqueGroup)
+            return 0xFF;
+        const States now = CurrentStates();
+        for (size_t i = 0; i < stateSets.size(); ++i)
+            if (stateSets[i] == now)
+                return uint8_t(i);
+        if (stateSets.size() >= 0xFF)
+            return 0xFF;
+        stateSets.push_back(now);
+        return uint8_t(stateSets.size() - 1);
+    }
+
+    // Not the pass states in a cascade: its forced shader's passes set the device's states past the cache, which keeps an
+    // earlier pass's (blending and alpha test on)
+    static void SetStates(const States& states)
+    {
+        if (!bCascadePass)
+            for (size_t i = 0; i < std::size(kStateTypes); ++i)
+                if (passStateCache[kStateTypes[i]] != states.values[i])
+                    setPassState(kStateTypes[i], states.values[i]);
+        *techniqueGroup = states.group;
+        if (drawMode)
+            *drawMode = states.mode;
+    }
 
     static void ReadIni(CIniReader& iniReader)
     {
-        const int mode = std::clamp(iniReader.ReadInteger("PERFORMANCE", "FarPropInstancing", 2), 0, 2);
-        if (bEnabled != (mode != 0) || bProps != (mode == 2))
+        const int mode = std::clamp(iniReader.ReadInteger("PERFORMANCE", "FarPropInstancing", 3), 0, 3);
+        if (bEnabled != (mode != 0) || bProps != (mode >= 2) || bAnyModel != (mode == 3))
             bStatesStale = true;
         bEnabled = mode != 0;
-        bProps = mode == 2;
+        bProps = mode >= 2;
+        bAnyModel = mode == 3;
+        bFragments = iniReader.ReadInteger("PERFORMANCE", "FragmentInstancing", 1) != 0;
+        bCascades = iniReader.ReadInteger("PERFORMANCE", "CascadeInstancing", 1) != 0;
         bLog = iniReader.ReadInteger("DEBUG", "FarPropInstancingLog", 0) != 0;
     }
 
@@ -166,8 +296,20 @@ class FarPropInstancing
             const bool prop = !plant && bProps && ProcObjProp(model);
             if (!plant && !prop && bProps && procObjModels.empty())
                 return false;   // not looked at until the records are in
-            state = plant || prop ? uint8_t(1) : uint8_t(2);
+            const float radius = *reinterpret_cast<const float*>(info + 0x1c);
+            bool any = !plant && !prop && bAnyModel && radius > 0.0f && radius < kAnyRadius;
+            if (any)
+            {
+                // Trees and bushes sway and shake by the object's place, which a sample's is not: they swung as the
+                // camera ran
+                const int sways = GrassShared::SwaysByPlace(model);
+                if (sways < 0)
+                    return false;   // looked at again once its drawable is in
+                any = sways == 0;
+            }
+            state = plant || prop || any ? uint8_t(1) : uint8_t(2);
             modelIsProp[model] = prop;
+            modelIsAny[model] = any;
             modelState[model] = state;
         }
         return state == 1;
@@ -187,14 +329,17 @@ class FarPropInstancing
         return *reinterpret_cast<const uintptr_t*>(drawable + 0x40) != 0;
     }
 
-    static void GiveUp(uint16_t model, const char* why)
+    static void GiveUp(uint16_t model, const char* why, bool frag = false)
     {
-        modelState[model] = 3;
+        if (frag)
+            fragState[model] = 3;
+        else
+            modelState[model] = 3;
         if (bLog)
         {
             const auto info = EntityClass::ModelInfo(model);
-            FusionLog::Write("FarPropInstancing", "Model", "model %u (hash %08x) drawn the game's way: %s\n", model,
-                info ? *reinterpret_cast<const uint32_t*>(info + 0x3c) : 0u, why);
+            FusionLog::Write("FarPropInstancing", "Model", "%s model %u (hash %08x) drawn the game's way: %s\n", frag ? "fragment" : "prop",
+                model, info ? *reinterpret_cast<const uint32_t*>(info + 0x3c) : 0u, why);
         }
     }
 
@@ -217,23 +362,22 @@ class FarPropInstancing
         rows[2][2] = 1.0f - (y * y + x * x);
     }
 
-    // EntityClass::SetEntityCommandHook: far candidates are copied instead of executed
-    static bool OnCommand(EntityClass::Kind kind, void* dc)
+    // A copy's rotation rows and position
+    static const float* Placement(const Copy& copy, float rows[3][3])
     {
-        if (!bEnabled || !bInScene || bExecuting)
-            return true;
-        if (kind != EntityClass::Kind::Building && kind != EntityClass::Kind::Prop)
-            return true;
-        const auto* bytes = static_cast<const uint8_t*>(dc);
-        const uint16_t model = *reinterpret_cast<const uint16_t*>(bytes + 0x30);
-        if (!Candidate(model))
-            return true;
-        const uint8_t bucket = bytes[0x35];
-        if (bucket < 8 && (emptyBuckets[model] & (1u << bucket)) && (passCount + model) % kEmptyRecheck != 0)
+        if (!copy.frag)
         {
-            logEmptyDropped++;
-            return false;
+            Rotation(copy.dc, rows);
+            return reinterpret_cast<const float*>(copy.dc + 0x20);
         }
+        for (int r = 0; r < 3; ++r)
+            std::memcpy(rows[r], copy.dc + 0x10 + r * 0x10, 3 * sizeof(float));
+        return reinterpret_cast<const float*>(copy.dc + 0x40);
+    }
+
+    // Far enough from the camera to be taken
+    static bool Far(const float* place)
+    {
         if (cameraFrame != FrameHistory::Frame())
         {
             cameraFrame = FrameHistory::Frame();
@@ -244,30 +388,91 @@ class FarPropInstancing
                 cameraPos[0] = inverse._41, cameraPos[1] = inverse._42, cameraPos[2] = inverse._43;
         }
         if (!cameraKnown)
-            return true;
-        const float* place = reinterpret_cast<const float*>(bytes + 0x20);
+            return false;
         const float dx = place[0] - cameraPos[0], dy = place[1] - cameraPos[1], dz = place[2] - cameraPos[2];
-        if (dx * dx + dy * dy + dz * dz < kFromDistance * kFromDistance)
+        return dx * dx + dy * dy + dz * dz >= kFromDistance * kFromDistance;
+    }
+
+    // EntityClass::SetFragTypeCommandHook: far objects with fragments drawn whole are copied instead of executed
+    static bool OnFragTypeCommand(EntityClass::Kind kind, void* dc)
+    {
+        if (!bEnabled || !bFragments || !bInScene || bExecuting || kind != EntityClass::Kind::Prop || (bCascadePass && !bCascadeFirstRun))
+            return true;
+        const auto* bytes = static_cast<const uint8_t*>(dc);
+        const uint16_t model = *reinterpret_cast<const uint16_t*>(bytes + 0x58);
+        if (fragState[model] == 3 || (bCascadePass && (cascadeGivenUp[model] & 2)))
+            return true;
+        if (!Far(reinterpret_cast<const float*>(bytes + 0x40)))
             return true;
         if (copies.size() >= kMaxInstances)
         {
             logCapped++;
             return true;
         }
+        const uint8_t states = StatesHere();
+        if (states == 0xFF)
+            return true;
+        fragState[model] = 1;
         Copy copy;
         std::memcpy(copy.dc, bytes, sizeof(copy.dc));
+        copy.frag = true;
+        copy.states = states;
+        // +0x5d and +0x5e are left as they were by the constructor (any bytes, a group a bench before)
+        uint64_t a = 0, b = 0;
+        std::memcpy(&a, bytes + 0x50, 8);
+        std::memcpy(&b, bytes + 0x58, 8);
+        b = (b & ~(0xFFFFull << 40)) | uint64_t(states) << 40;
+        fragGroups[{ a, b }].push_back(uint32_t(copies.size()));
+        copies.push_back(copy);
+        return false;
+    }
+
+    // EntityClass::SetEntityCommandHook: far candidates are copied instead of executed
+    static bool OnCommand(EntityClass::Kind kind, void* dc)
+    {
+        if (!bEnabled || !bInScene || bExecuting || (bCascadePass && !bCascadeFirstRun))
+            return true;
+        if (kind != EntityClass::Kind::Building && kind != EntityClass::Kind::Prop)
+            return true;
+        const auto* bytes = static_cast<const uint8_t*>(dc);
+        const uint16_t model = *reinterpret_cast<const uint16_t*>(bytes + 0x30);
+        if (!Candidate(model) || (bCascadePass && (cascadeGivenUp[model] & 1)))
+            return true;
+        const uint8_t bucket = bytes[0x35];
+        // The G-buffer's buckets: a cascade's commands are executed as they come
+        if (!bCascadePass && bucket < 8 && (emptyBuckets[model] & (1u << bucket)) && (passCount + model) % kEmptyRecheck != 0)
+        {
+            logEmptyDropped++;
+            return false;
+        }
+        if (!Far(reinterpret_cast<const float*>(bytes + 0x20)))
+            return true;
+        if (copies.size() >= kMaxInstances)
+        {
+            logCapped++;
+            return true;
+        }
+        const uint8_t states = StatesHere();
+        if (states == 0xFF)
+            return true;
+        Copy copy;
+        std::memcpy(copy.dc, bytes, 0x38);
+        copy.frag = false;
+        copy.states = states;
         const uint8_t alpha = bytes[0x32];
         const uint64_t alphaStep = alpha == 255 ? kAlphaSteps : alpha * kAlphaSteps / 256;
         // +0x37 too: EntityClass marks the command there (ground surfaces' b15), and the sample's mark is the group's
         const uint64_t key = uint64_t(model) | alphaStep << 16 | uint64_t(bytes[0x33]) << 24 | uint64_t(bytes[0x34]) << 32 |
                              uint64_t(bytes[0x35]) << 40 | uint64_t(bytes[0x36]) << 48 | uint64_t(bytes[0x37]) << 56;
-        groups[key].push_back(uint32_t(copies.size()));
+        groups[{ key, states }].push_back(uint32_t(copies.size()));
         copies.push_back(copy);
         return false;
     }
 
     static void Execute(void* dc)
     {
+        static const CpuScopes::Id kCpuScope("Instancing.Execute (the game's draw inside)");
+        CpuScopes::Scope cpuScope(kCpuScope);
         using Exec = void(__fastcall*)(void*, void*);
         (*reinterpret_cast<Exec**>(dc))[1](dc, nullptr);
     }
@@ -278,8 +483,13 @@ class FarPropInstancing
         instancingThread = GetCurrentThreadId();
         deviceDraws = 0;
         bExecuting = true;
+        const States pass = CurrentStates();
         for (auto i : items)
+        {
+            SetStates(stateSets[copies[i].states]);
             Execute(copies[i].dc);
+        }
+        SetStates(pass);
         bExecuting = false;
         logOneByOne += items.size();
         return deviceDraws;
@@ -288,7 +498,7 @@ class FarPropInstancing
     // While copies are executed one by one on the render thread
     static void CountDraw()
     {
-        if (bExecuting && !bInstancing && GetCurrentThreadId() == instancingThread)
+        if (bExecuting && !bInstancing && GetCurrentThreadId() == instancingThread && !FrameGeneration::PresentingInDraw())
             deviceDraws++;
     }
 
@@ -347,6 +557,10 @@ class FarPropInstancing
                 const size_t dot = text.find('.', operand);
                 const bool hasW = dot == std::string::npos || text.find('w', dot) != std::string::npos;
                 maxInput = (std::max)(maxInput, index);
+                // Skinned: a part on a bone (a street lamp's arm 7 m up) went through the instance's rows before its bone,
+                // turned about the object's origin as if the bone were not there, and the lamps' tops came apart
+                if (usage.rfind("blendindices", 0) == 0 || usage.rfind("blendweight", 0) == 0)
+                    return false;
                 if (usage.rfind("texcoord", 0) == 0)
                 {
                     const int usageIndex = usage.size() > 8 ? std::atoi(usage.c_str() + 8) : 0;
@@ -470,6 +684,8 @@ class FarPropInstancing
             return it->second;
         shader->AddRef();
         IDirect3DVertexShader9* made = nullptr;
+        const char* why = "its code could not be read";
+        std::string inputs;
         UINT size = 0;
         if (SUCCEEDED(shader->GetFunction(nullptr, &size)) && size)
         {
@@ -482,8 +698,23 @@ class FarPropInstancing
                 while (!source.empty() && source.back() == '\0')
                     source.pop_back();
                 std::string patched;
+                why = "its text could not be patched";
+                // Its version, inputs and any relative input, for the log
+                for (size_t at = 0; bLog && at < source.size();)
+                {
+                    size_t end = source.find('\n', at);
+                    if (end == std::string::npos)
+                        end = source.size();
+                    const std::string line = source.substr(at, (std::min)(end, source.find("//", at)) - at);
+                    const size_t first = line.find_first_not_of(" \t");
+                    if (first != std::string::npos && (line.compare(first, 3, "vs_") == 0 || line.compare(first, 4, "dcl_") == 0 ||
+                                                       line.find("v[", first) != std::string::npos))
+                        inputs += (inputs.empty() ? "" : "; ") + line.substr(first);
+                    at = end + 1;
+                }
                 if (PatchShaderText(source, patched))
                 {
+                    why = "the copy could not be made";
                     ID3DXBuffer* binary = nullptr;
                     ID3DXBuffer* errors = nullptr;
                     if (SUCCEEDED(D3DXAssembleShader(patched.c_str(), UINT(patched.size()), nullptr, nullptr, 0, &binary, &errors)) && binary)
@@ -494,12 +725,16 @@ class FarPropInstancing
                     else if (bLog)
                         FusionLog::Write("FarPropInstancing", "Shader", "assembling the copy failed: %s\n",
                             errors ? static_cast<const char*>(errors->GetBufferPointer()) : "no error text");
+                    if (!made)
+                        why = "assembling or creating the copy failed";
                     SAFE_RELEASE(binary);
                     SAFE_RELEASE(errors);
                 }
             }
         }
         (made ? logShadersMade : logShadersFailed)++;
+        if (!made && bLog)
+            FusionLog::Write("FarPropInstancing", "Shader", "no instanced copy of vertex shader %p: %s (%s)\n", static_cast<void*>(shader), why, inputs.c_str());
         shaders[shader] = made;
         return made;
     }
@@ -519,8 +754,14 @@ class FarPropInstancing
                 while (!elements.empty() && elements.back().Stream == 0xFF)
                     elements.pop_back();
                 bool usable = true;
+                std::string list;
                 for (const auto& e : elements)
+                {
                     usable &= e.Stream == 0 && !(e.Usage == D3DDECLUSAGE_TEXCOORD && e.UsageIndex >= kInstanceUsage);
+                    list += std::format("{}s{} u{}.{} t{}", list.empty() ? "" : ", ", e.Stream, e.Usage, e.UsageIndex, e.Type);
+                }
+                if (!usable && bLog)
+                    FusionLog::Write("FarPropInstancing", "Declaration", "no instanced copy of a declaration (stream, usage.index, type): %s\n", list.c_str());
                 if (usable)
                 {
                     for (BYTE k = 0; k < 3; ++k)
@@ -538,9 +779,11 @@ class FarPropInstancing
     // ---------------------------------------------------------------------------------------------
     // Device draws on the real device: the sample's are made instanced, any it cannot be are dropped and fail the batch
 
+    // Frame generation presents waiting frames from inside the render thread's draws (CheckPending), a sample's too: those
+    // draws (the shown frame's sharpening from user memory, 2026-10-28) are no part of the sample, and failed its batch
     static bool Instancing()
     {
-        return bInstancing && GetCurrentThreadId() == instancingThread;
+        return bInstancing && GetCurrentThreadId() == instancingThread && !FrameGeneration::PresentingInDraw();
     }
 
     static HRESULT __stdcall DrawIndexedPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count)
@@ -559,8 +802,17 @@ class FarPropInstancing
         auto instancedShader = shader ? InstancedShader(device, shader) : nullptr;
         auto instancedDecl = decl ? InstancedDecl(device, decl) : nullptr;
         HRESULT result = S_OK;
-        if (!instancedShader || !instancedDecl)
+        // A part with its own transform gets rows of its own (written before the draw's states change)
+        UINT offset = batch.offset;
+        Part part;
+        const bool partRowsFailed = instancedShader && instancedDecl && batch.items && PartOfDraw(device, part) &&
+                                    !UploadRows(device, *batch.items, batch.origin, &part, offset);
+        if (!instancedShader || !instancedDecl || partRowsFailed)
+        {
             batch.failed = true;
+            batch.reason = !instancedShader ? "its vertex shader has no instanced copy" : !instancedDecl ? "its declaration has no instanced copy"
+                                            : "a part's rows could not be written";
+        }
         else
         {
             UINT frequency0 = 1, offset1 = 0, stride1 = 0;
@@ -569,7 +821,7 @@ class FarPropInstancing
             device->GetStreamSource(1, &stream1, &offset1, &stride1);
             device->SetVertexShader(instancedShader);
             device->SetVertexDeclaration(instancedDecl);
-            device->SetStreamSource(1, instanceVB, batch.offset, kInstanceStride);
+            device->SetStreamSource(1, instanceVB, offset, kInstanceStride);
             device->SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | batch.count);
             device->SetStreamSourceFreq(1, D3DSTREAMSOURCE_INSTANCEDATA | 1u);
             result = RealDrawIndexedPrimitive(device, type, base, minIndex, vertices, start, count);
@@ -594,6 +846,7 @@ class FarPropInstancing
             return RealDrawPrimitive(device, type, start, count);
         }
         batch.failed = true;
+        batch.reason = "a draw is not indexed";
         return S_OK;
     }
 
@@ -605,6 +858,7 @@ class FarPropInstancing
             return RealDrawPrimitiveUP(device, type, count, data, stride);
         }
         batch.failed = true;
+        batch.reason = "a draw is from user memory";
         return S_OK;
     }
 
@@ -617,6 +871,7 @@ class FarPropInstancing
             return RealDrawIndexedPrimitiveUP(device, type, minIndex, vertices, count, indices, format, data, stride);
         }
         batch.failed = true;
+        batch.reason = "a draw is from user memory";
         return S_OK;
     }
 
@@ -636,7 +891,10 @@ class FarPropInstancing
 
     // ---------------------------------------------------------------------------------------------
 
-    static bool Upload(IDirect3DDevice9* device, const std::vector<uint32_t>& items, const float* origin)
+    // The rows of `items` from `offset` on: each instance's rotation and its position less `origin`; with `part`, those
+    // that put the part's own transform B (rows m, offset b) inside the instance's R, P: v R' + d' then B is (v B + b) R
+    // + P for R' = B R B^-1, d' = (b R + P - b - origin) B^-1
+    static bool UploadRows(IDirect3DDevice9* device, const std::vector<uint32_t>& items, const float* origin, const Part* part, UINT& offset)
     {
         if (!instanceVB)
         {
@@ -646,6 +904,18 @@ class FarPropInstancing
                 return false;
             }
             instanceCursor = 0;
+        }
+        float inverse[3][3] = {};
+        if (part)
+        {
+            D3DXMATRIX m(part->m[0][0], part->m[0][1], part->m[0][2], 0.0f, part->m[1][0], part->m[1][1], part->m[1][2], 0.0f,
+                         part->m[2][0], part->m[2][1], part->m[2][2], 0.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+            D3DXMATRIX mi;
+            if (!D3DXMatrixInverse(&mi, nullptr, &m))
+                return false;
+            for (int r = 0; r < 3; ++r)
+                for (int k = 0; k < 3; ++k)
+                    inverse[r][k] = mi(r, k);
         }
         const UINT size = UINT(items.size()) * kInstanceStride;
         DWORD flags = D3DLOCK_NOOVERWRITE;
@@ -658,29 +928,82 @@ class FarPropInstancing
         auto* out = static_cast<float*>(data);
         for (auto i : items)
         {
-            const uint8_t* dc = copies[i].dc;
             float rotation[3][3];
-            Rotation(dc, rotation);
-            const float* place = reinterpret_cast<const float*>(dc + 0x20);
-            // Row k: the world's axis k from the model's x, y, z (the matrix's rows), and the position less the origin
+            const float* place = Placement(copies[i], rotation);
+            float rows[3][3], move[3];
+            if (!part)
+            {
+                std::memcpy(rows, rotation, sizeof(rows));
+                for (int k = 0; k < 3; ++k)
+                    move[k] = place[k] - origin[k];
+            }
+            else
+            {
+                float br[3][3];    // B R
+                for (int r = 0; r < 3; ++r)
+                    for (int k = 0; k < 3; ++k)
+                        br[r][k] = part->m[r][0] * rotation[0][k] + part->m[r][1] * rotation[1][k] + part->m[r][2] * rotation[2][k];
+                for (int r = 0; r < 3; ++r)
+                    for (int k = 0; k < 3; ++k)
+                        rows[r][k] = br[r][0] * inverse[0][k] + br[r][1] * inverse[1][k] + br[r][2] * inverse[2][k];
+                float d[3];
+                for (int k = 0; k < 3; ++k)
+                    d[k] = part->b[0] * rotation[0][k] + part->b[1] * rotation[1][k] + part->b[2] * rotation[2][k] + place[k] - part->b[k] - origin[k];
+                for (int k = 0; k < 3; ++k)
+                    move[k] = d[0] * inverse[0][k] + d[1] * inverse[1][k] + d[2] * inverse[2][k];
+            }
+            // Row k: the world's axis k from the model's x, y, z (the matrix's rows), and the move
             for (int k = 0; k < 3; ++k)
             {
-                out[0] = rotation[0][k];
-                out[1] = rotation[1][k];
-                out[2] = rotation[2][k];
-                out[3] = place[k] - origin[k];
+                out[0] = rows[0][k];
+                out[1] = rows[1][k];
+                out[2] = rows[2][k];
+                out[3] = move[k];
                 out += 4;
             }
         }
         instanceVB->Unlock();
-        batch.offset = instanceCursor;
-        batch.count = UINT(items.size());
+        offset = instanceCursor;
         instanceCursor += size;
         return true;
     }
 
-    // A point kSampleDistance along the camera's axis that projects into the view
-    static bool SamplePoint(float point[3])
+    static bool Upload(IDirect3DDevice9* device, const std::vector<uint32_t>& items, const float* origin)
+    {
+        if (!UploadRows(device, items, origin, nullptr, batch.offset))
+            return false;
+        batch.count = UINT(items.size());
+        return true;
+    }
+
+    // The draw's part transform from gWorld (c0-c3) less the sample's point; false when it is none (a plain translation)
+    static bool PartOfDraw(IDirect3DDevice9* device, Part& part)
+    {
+        float c[4][4];
+        if (FAILED(device->GetVertexShaderConstantF(0, &c[0][0], 4)))
+            return false;
+        // The shaders take gWorld transposed (dp4 of the position with each register): the fourth register is 0 0 0 1
+        const bool columns = std::abs(c[3][0]) < 1e-5f && std::abs(c[3][1]) < 1e-5f && std::abs(c[3][2]) < 1e-5f && std::abs(c[3][3] - 1.0f) < 1e-5f;
+        float t[3];
+        for (int r = 0; r < 3; ++r)
+        {
+            for (int k = 0; k < 3; ++k)
+                part.m[r][k] = columns ? c[k][r] : c[r][k];
+            t[r] = columns ? c[r][3] : c[3][r];
+        }
+        bool plain = true;
+        for (int r = 0; r < 3; ++r)
+        {
+            part.b[r] = t[r] - batch.origin[r];
+            plain &= std::abs(part.b[r]) < 1e-3f;
+            for (int k = 0; k < 3; ++k)
+                plain &= std::abs(part.m[r][k] - (r == k ? 1.0f : 0.0f)) < 1e-4f;
+        }
+        return !plain;
+    }
+
+    // A point `distance` along the camera's axis that projects into the view
+    static bool SamplePoint(float distance, float point[3])
     {
         const auto& camera = FrameHistory::Current();
         D3DXMATRIX inverse;
@@ -688,8 +1011,8 @@ class FarPropInstancing
             return false;
         for (float side : { 1.0f, -1.0f })
         {
-            const D3DXVECTOR3 p(inverse._41 + side * kSampleDistance * inverse._31, inverse._42 + side * kSampleDistance * inverse._32,
-                                inverse._43 + side * kSampleDistance * inverse._33);
+            const D3DXVECTOR3 p(inverse._41 + side * distance * inverse._31, inverse._42 + side * distance * inverse._32,
+                                inverse._43 + side * distance * inverse._33);
             D3DXVECTOR4 clip;
             D3DXVec3Transform(&clip, &p, &camera.ViewProjection);
             if (clip.w > 0.0f && std::abs(clip.x) < clip.w && std::abs(clip.y) < clip.w)
@@ -701,53 +1024,179 @@ class FarPropInstancing
         return false;
     }
 
+    // The group's first copy at the sample point with no rotation, its device draws instanced: batch tells how it went
+    static void ExecuteSample(const std::vector<uint32_t>& items, const float* origin)
+    {
+        Copy sample = copies[items[0]];
+        if (!sample.frag)
+        {
+            static constexpr float identity[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+            std::memcpy(sample.dc + 0x10, identity, sizeof(identity));
+            std::memcpy(sample.dc + 0x20, origin, 3 * sizeof(float));
+        }
+        else
+        {
+            for (int r = 0; r < 3; ++r)
+            {
+                const float row[3] = { r == 0 ? 1.0f : 0.0f, r == 1 ? 1.0f : 0.0f, r == 2 ? 1.0f : 0.0f };
+                std::memcpy(sample.dc + 0x10 + r * 0x10, row, sizeof(row));
+            }
+            std::memcpy(sample.dc + 0x40, origin, 3 * sizeof(float));
+        }
+        batch.draws = 0;
+        batch.failed = false;
+        batch.reason = "";
+        batch.items = &items;
+        std::memcpy(batch.origin, origin, sizeof(batch.origin));
+        instancingThread = GetCurrentThreadId();
+        bExecuting = true;
+        bInstancing = true;
+        const States pass = CurrentStates();
+        SetStates(stateSets[sample.states]);
+        Execute(sample.dc);
+        SetStates(pass);
+        bInstancing = false;
+        bExecuting = false;
+        logDraws += batch.draws;
+    }
+
+    // Where a group's sample goes: its model's bounding sphere (model info +0x10 centre, +0x1c radius) on the camera's
+    // axis, far enough to be wholly in view. The drawables leave out what is out of view part by part: a street lamp's
+    // sample 4 m off kept only the pole, its arm and head above the view, and so did every lamp drawn from it.
+    static bool GroupOrigin(uint16_t model, float origin[3])
+    {
+        float centre[3] = {}, radius = 0.0f;
+        if (const auto info = EntityClass::ModelInfo(model))
+        {
+            std::memcpy(centre, reinterpret_cast<const void*>(info + 0x10), sizeof(centre));
+            radius = *reinterpret_cast<const float*>(info + 0x1c);
+            if (!(radius > 0.0f && radius < 200.0f) || !std::isfinite(centre[0] + centre[1] + centre[2]))
+                radius = 0.0f, centre[0] = centre[1] = centre[2] = 0.0f;
+        }
+        const auto& projection = FrameHistory::Current().Projection;
+        const float tanHalf = projection._11 > 0.0f && projection._22 > 0.0f ? (std::min)(1.0f / projection._11, 1.0f / projection._22) : 0.0f;
+        float distance = kSampleDistance;
+        if (radius > 0.0f && tanHalf > 0.0f)
+            distance = (std::max)(distance, radius * 1.1f * std::sqrt(1.0f + tanHalf * tanHalf) / tanHalf);
+        float point[3];
+        if (!SamplePoint(distance, point))
+            return false;
+        for (int k = 0; k < 3; ++k)
+            origin[k] = point[k] - centre[k];
+        return true;
+    }
+
+    // A cascade's sample: where one of its group's copies stands, the one nearest the camera (the cascades are made
+    // around the camera's view), drawn there by the game in this very cascade a moment before; its rotation is the
+    // sample's own, none. The cascade's viewport tells nothing that can be trusted: made by hand (CE 0x928c15, camera
+    // 0x4319b0, projection 0x4317e0, which sets +0x2f0 too), its matrices read as a projection scaled 151 times on every
+    // axis and a view at the world's origin with axes 0.0002 long (FarPropInstancingLog, 2026-10-28); a sample placed
+    // from them never fitted, and nothing was instanced. The forced shader's draw (the drawable's 0x6a1e10) is not seen
+    // to test the sphere
+    static bool CopyOrigin(const std::vector<uint32_t>& items, float origin[3])
+    {
+        float best = -1.0f;
+        for (auto i : items)
+        {
+            float rows[3][3];
+            const float* place = Placement(copies[i], rows);
+            if (!std::isfinite(place[0] + place[1] + place[2]))
+                continue;
+            const float dx = place[0] - cameraPos[0], dy = place[1] - cameraPos[1], dz = place[2] - cameraPos[2];
+            const float d = dx * dx + dy * dy + dz * dz;
+            if (best < 0.0f || d < best)
+            {
+                best = d;
+                std::memcpy(origin, place, 3 * sizeof(float));
+            }
+        }
+        return best >= 0.0f;
+    }
+
+    static bool SampleOrigin(uint16_t model, const std::vector<uint32_t>& items, float origin[3])
+    {
+        if (!bCascadePass)
+            return GroupOrigin(model, origin);
+        if (CopyOrigin(items, origin))
+            return true;
+        logCascadeNoSample++;
+        return false;
+    }
+
+    // In a cascade: the sample drew nothing, or failed, where its copies are executed one by one. Given up on there only
+    static void CascadeMiss(uint16_t model, uint8_t bit, uint32_t drawn, const char* why)
+    {
+        if (why || (drawn != 0 && ++cascadeMisses[model] >= kMissesToGiveUp))
+        {
+            cascadeGivenUp[model] |= bit;
+            if (bLog)
+            {
+                const auto info = EntityClass::ModelInfo(model);
+                FusionLog::Write("FarPropInstancing", "Model", "%s model %u (hash %08x) drawn the game's way in the cascades: %s\n",
+                    bit == 2 ? "fragment" : "prop", model, info ? *reinterpret_cast<const uint32_t*>(info + 0x3c) : 0u,
+                    why ? why : "the sample drew nothing where its copies did");
+            }
+        }
+    }
+
     static void Flush()
     {
+        static const CpuScopes::Id kCpuScope("Instancing.Flush");
+        CpuScopes::Scope cpuScope(kCpuScope);
         bInScene = false;
         passCount++;
-        if (groups.empty())
+        if (groups.empty() && fragGroups.empty())
         {
+            bCascadePass = false;
             copies.clear();
+            stateSets.clear();
             return;
         }
         auto device = RageDirect3DDevice9::GetRuntimeDevice();
         float origin[3];
-        const bool ready = device && InstallDrawHooks(device) && SamplePoint(origin);
-        for (auto& [key, items] : groups)
+        const bool ready = device && InstallDrawHooks(device) && (bCascadePass || SamplePoint(kSampleDistance, origin));
+        const auto before = std::make_tuple(logInstances, logGroups, logDraws, logOneByOne);
+        for (auto& [groupKey, items] : groups)
         {
+            const uint64_t key = groupKey.a;
             const uint16_t model = uint16_t(key & 0xFFFF);
             const uint8_t bucket = uint8_t(key >> 40), bucketBit = bucket < 8 ? uint8_t(1u << bucket) : uint8_t(0);
             logInstances += items.size();
             if (modelIsProp[model])
                 logPropInstances += items.size();
+            if (modelIsAny[model])
+                logAnyInstances += items.size();
             logGroups++;
+            // A model taken for its size alone, seen once: a sample would cost more than the copy's own draw
+            if (modelIsAny[model] && items.size() < 2)
+            {
+                logAnySingle++;
+                ExecuteOneByOne(items);
+                continue;
+            }
             if (ready && modelState[model] == 1 && !HasMeshList(model))
             {
                 logNoMeshList += items.size();
                 ExecuteOneByOne(items);
                 continue;
             }
-            if (!ready || modelState[model] != 1 || !Upload(device, items, origin))
+            if (!ready || modelState[model] != 1 || !SampleOrigin(model, items, origin) || !Upload(device, items, origin))
             {
                 ExecuteOneByOne(items);
                 continue;
             }
-            Copy sample = copies[items[0]];
-            static constexpr float identity[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-            std::memcpy(sample.dc + 0x10, identity, sizeof(identity));
-            std::memcpy(sample.dc + 0x20, origin, sizeof(origin));
-            batch.draws = 0;
-            batch.failed = false;
-            instancingThread = GetCurrentThreadId();
-            bExecuting = true;
-            bInstancing = true;
-            Execute(sample.dc);
-            bInstancing = false;
-            bExecuting = false;
-            logDraws += batch.draws;
+            ExecuteSample(items, origin);
+            if (bCascadePass)
+            {
+                if (batch.failed || batch.draws == 0)
+                    CascadeMiss(model, 1, ExecuteOneByOne(items), batch.failed ? batch.reason : nullptr);
+                else
+                    cascadeMisses[model] = 0;
+                continue;
+            }
             if (batch.failed)
             {
-                GiveUp(model, "a draw could not be instanced");
+                GiveUp(model, batch.reason);
                 ExecuteOneByOne(items);
             }
             else if (batch.draws == 0)
@@ -768,23 +1217,129 @@ class FarPropInstancing
                 modelMisses[model] = 0;
             }
         }
+        for (auto& [key, items] : fragGroups)
+        {
+            const uint16_t model = uint16_t(key.b & 0xFFFF);
+            logInstances += items.size();
+            logFragInstances += items.size();
+            logGroups++;
+            if (!ready || fragState[model] != 1 || !SampleOrigin(model, items, origin) || !Upload(device, items, origin))
+            {
+                ExecuteOneByOne(items);
+                continue;
+            }
+            ExecuteSample(items, origin);
+            if (bCascadePass)
+            {
+                if (batch.failed || batch.draws == 0)
+                    CascadeMiss(model, 2, ExecuteOneByOne(items), batch.failed ? batch.reason : nullptr);
+                else
+                    cascadeMisses[model] = 0;
+                continue;
+            }
+            if (batch.failed)
+            {
+                GiveUp(model, batch.reason, true);
+                ExecuteOneByOne(items);
+            }
+            else if (batch.draws == 0)
+            {
+                // The bucket mask is in the group's key: a sample that drew nothing where its copies do is a miss
+                if (ExecuteOneByOne(items) != 0 && ++fragMisses[model] >= kMissesToGiveUp)
+                    GiveUp(model, "the sample drew nothing where its copies did", true);
+            }
+            else
+                fragMisses[model] = 0;
+        }
         groups.clear();
+        fragGroups.clear();
         copies.clear();
+        stateSets.clear();
+
+        // A cascade's counts are its own: the G-buffer's line stays a G-buffer pass's
+        if (bCascadePass)
+        {
+            bCascadePass = false;
+            const auto [instances, groupCount, draws, oneByOne] = before;
+            logCascadeInstances += logInstances - instances, logCascadeGroups += logGroups - groupCount;
+            logCascadeDraws += logDraws - draws, logCascadeOneByOne += logOneByOne - oneByOne;
+            logInstances = instances, logGroups = groupCount, logDraws = draws, logOneByOne = oneByOne;
+            if (bLog && ++logCascadePasses >= kLogPasses)
+            {
+                uint32_t givenUp = 0;
+                for (auto bits : cascadeGivenUp)
+                    givenUp += bits != 0;
+                const double n = double(logCascadePasses);
+                FusionLog::Write("FarPropInstancing", "Cascades", "%u cascade passes; per pass: %.0f instances in %.1f groups, %.1f instanced draws, "
+                    "%.1f copies executed one by one, %.1f groups with no sample place in the cascade; models given up on there %u\n",
+                    logCascadePasses, logCascadeInstances / n, logCascadeGroups / n, logCascadeDraws / n, logCascadeOneByOne / n,
+                    logCascadeNoSample / n, givenUp);
+                logCascadePasses = 0;
+                logCascadeInstances = logCascadeGroups = logCascadeDraws = logCascadeOneByOne = logCascadeNoSample = 0;
+            }
+            return;
+        }
 
         if (bLog && ++logPasses >= kLogPasses)
         {
             uint32_t givenUp = 0;
             for (auto state : modelState)
                 givenUp += state == 3;
+            for (auto state : fragState)
+                givenUp += state == 3;
             const double n = double(logPasses);
-            FusionLog::Write("FarPropInstancing", "Stats", "%u passes; per pass: %.0f instances (%.0f of them props) in %.1f groups, "
+            FusionLog::Write("FarPropInstancing", "Stats", "%u passes; per pass: %.0f instances (%.0f of them props, %.0f other small models in groups of two or more, %.0f objects with fragments) in %.1f groups, "
                 "%.1f instanced draws, %.1f copies executed one by one (%.1f of models without a mesh list), %.1f dropped (a bucket "
                 "the model draws nothing in), %.1f left to the game (store full); shader copies made %u, failed %u; models given up on %u\n",
-                logPasses, logInstances / n, logPropInstances / n, logGroups / n, logDraws / n, logOneByOne / n, logNoMeshList / n,
+                logPasses, logInstances / n, logPropInstances / n, (logAnyInstances - logAnySingle) / n, logFragInstances / n, logGroups / n, logDraws / n, logOneByOne / n, logNoMeshList / n,
                 logEmptyDropped / n, logCapped / n, logShadersMade, logShadersFailed, givenUp);
             logPasses = 0;
-            logInstances = logGroups = logDraws = logOneByOne = logCapped = logEmptyDropped = logPropInstances = logNoMeshList = 0;
+            logInstances = logGroups = logDraws = logOneByOne = logCapped = logEmptyDropped = logPropInstances = logNoMeshList = logFragInstances = logAnyInstances = logAnySingle = 0;
         }
+    }
+
+    // Commands in a cascade's list around its entities: they are taken as the G-buffer's are, executed after them
+    static void BeginCascade()
+    {
+        if (!bEnabled || !bCascades || bInScene || !drawMode)
+            return;
+        BeginScene();
+        bCascadePass = bInScene;
+        bCascadeFirstRun = true;
+    }
+
+    static void EndCascade()
+    {
+        if (bCascadePass)
+            Flush();
+    }
+
+    // A cascade's entities are drawn through its forced depth shader ([0x17f59d4]), a pass of it bound for each run of
+    // buckets (0xaebd90(technique, alpha test)) and the shader let go after them (0x62bf30(0)). Copies executed later drew
+    // with the last pass bound, the alpha test's (vs 850 / ps 98, vs 96E / ps 1AD for the game's 7D1 / 5, capture
+    // 2026-10-28): shadows missing in places and flickering. So the copies taken are executed before either, in the pass
+    // they were taken in
+    static void FlushCascadePart()
+    {
+        static const CpuScopes::Id kCpuScope("Instancing.FlushCascadePart");
+        CpuScopes::Scope cpuScope(kCpuScope);
+        if (!bCascadePass || bExecuting || (groups.empty() && fragGroups.empty()))
+            return;
+        Flush();
+        BeginScene();
+        bCascadePass = bInScene;
+    }
+
+    static inline void(__cdecl* AddEntities)(void* list, int32_t a, int32_t b) = nullptr;
+
+    // Main thread, as the cascades' list is made
+    static void __cdecl AddCascadeEntities(void* list, int32_t a, int32_t b)
+    {
+        if (auto cb = new T_CB_Generic_NoArgs(BeginCascade))
+            cb->Append();
+        AddEntities(list, a, b);
+        if (auto cb = new T_CB_Generic_NoArgs(EndCascade))
+            cb->Append();
     }
 
     static void BeginScene()
@@ -795,10 +1350,15 @@ class FarPropInstancing
             for (auto& state : modelState)
                 if (state != 3)
                     state = 0;
+            for (auto& state : fragState)
+                if (state != 3)
+                    state = 0;
         }
         bInScene = bEnabled;
         groups.clear();
+        fragGroups.clear();
         copies.clear();
+        stateSets.clear();
     }
 
     static void ReleaseResources()
@@ -833,7 +1393,57 @@ public:
             ReadIni(iniReader);
             IniReload::Add(ReadIni);
             EntityClass::SetEntityCommandHook(&OnCommand);
+            EntityClass::SetFragTypeCommandHook(&OnFragTypeCommand);
+            ShadowMerge::pInstancing = [] { return bInstancing; };
             ProceduralGround::DrawnInstanced = &DrawnInstanced;
+            // push 0x92c740 / call / push 0 / push -1 / push [edi+938h] / call AddEntities: CRenderPhaseCascadeShadows'
+            // list, for each cascade
+            if (auto entities = hook::pattern("68 ? ? ? ? E8 ? ? ? ? 6A 00 6A FF FF B7 ? ? ? ? E8"); !entities.empty())
+            {
+                AddEntities = injector::GetBranchDestination(entities.get_first(20)).get<void(__cdecl)(void*, int32_t, int32_t)>();
+                injector::MakeCALL(entities.get_first(20), AddCascadeEntities, true);
+            }
+            // The pass state setter (CE 0x437140): mov eax, [esp+4] / mov edx, [esp+8] / push esi / mov esi, [types + eax*4] /
+            // mov [values + eax*4], edx / cmp esi, -1 / je; without it nothing is taken
+            if (auto passState = hook::pattern("8B 44 24 04 8B 54 24 08 56 8B 34 85 ? ? ? ? 89 14 85 ? ? ? ? 83 FE FF 74"); !passState.empty())
+            {
+                setPassState = passState.get_first<void(__cdecl)(uint32_t, uint32_t)>(0);
+                passStateCache = *passState.get_first<const uint32_t*>(19);
+            }
+            // The technique group's setter: mov eax, [esp+4] / mov [group], eax / ret / int3 x6 / mov eax, [group] / ret
+            if (auto groupSetter = hook::pattern("8B 44 24 04 A3 ? ? ? ? C3 CC CC CC CC CC CC A1 ? ? ? ? C3");
+                !groupSetter.empty() && *groupSetter.get_first<int32_t*>(5) == *groupSetter.get_first<int32_t*>(17))
+                techniqueGroup = *groupSetter.get_first<int32_t*>(5);
+            // The draw mode's reset after a cascade's entities (CE 0x924d66): mov [eax+8], setter / mov [eax+0Ch], 0 / call;
+            // the setter is mov eax, [esp+4] / mov [mode], eax / ret
+            if (auto modeReset = hook::pattern("C7 40 08 ? ? ? ? C7 40 0C 00 00 00 00 E8"); !modeReset.empty())
+            {
+                const auto setter = *modeReset.get_first<const uint8_t*>(3);
+                if (setter[0] == 0x8B && setter[1] == 0x44 && setter[2] == 0x24 && setter[3] == 0x04 && setter[4] == 0xA3 && setter[9] == 0xC3)
+                {
+                    drawMode = *reinterpret_cast<int32_t* const*>(setter + 5);
+                    static auto ForcedShaderSet = safetyhook::create_mid(const_cast<uint8_t*>(setter), [](SafetyHookContext& regs)
+                    {
+                        if (*reinterpret_cast<const int32_t*>(regs.esp + 4) == 0)
+                        {
+                            FlushCascadePart();
+                            bCascadeFirstRun = false;
+                        }
+                    });
+                }
+            }
+            // The forced shader's pass for a run of buckets (CE 0xaebd90): push esi / call 0x444940 / cmp [esp+8], 3 /
+            // mov esi, eax / mov ecx, esi / ja
+            if (auto forcedPass = hook::pattern("56 E8 ? ? ? ? 83 7C 24 08 03 8B F0 8B CE 77"); !forcedPass.empty())
+            {
+                static auto ForcedPassBind = safetyhook::create_mid(forcedPass.get_first(0), [](SafetyHookContext& regs)
+                {
+                    FlushCascadePart();
+                    // (technique, alpha test): a technique past 3 lets the pass go, the first run's end
+                    if (*reinterpret_cast<const uint32_t*>(regs.esp + 4) > 3)
+                        bCascadeFirstRun = false;
+                });
+            }
         };
 
         FusionFix::onGameInitEvent() += []()
@@ -862,10 +1472,13 @@ public:
         FusionFix::onBeforeReset() += []()
         {
             bInScene = false;
+            bCascadePass = false;
             bInstancing = false;
             bExecuting = false;
             groups.clear();
+            fragGroups.clear();
             copies.clear();
+            stateSets.clear();
             ReleaseResources();
         };
     }

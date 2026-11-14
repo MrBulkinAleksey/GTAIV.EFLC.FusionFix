@@ -35,6 +35,10 @@ export namespace GrassShared
     // What a grass model is, by its name: 0 not grass, 1 grass (proc_grass*, grass0_*, GrassWindModels), 2 weeds, 3 small
     // plants with broad leaves (*proc_plant_*, sm_plant*)
     int GrassKind(uint32_t nameHash);
+    // Render thread: whether a model sways or shakes by its own place, drawn with gta_trees or a bush of gta_default and a
+    // plant's texture (the trees' wind and the bush shake read the object's position): 1 yes, 0 no, -1 not known yet
+    // (its drawable not in)
+    int SwaysByPlace(uint16_t model);
     inline float BendPerHeight = 0.0f, FlutterPerHeight = 0.0f;   // at the tip, per metre of height
     inline float GustPhase = 0.0f, FlutterPhase = 0.0f;           // cycles
     inline float Direction[2] = { 0.929f, 0.370f };
@@ -163,6 +167,11 @@ class GrassWind
     static inline IDirect3DTexture9* trampleTexture = nullptr;
     static inline int trampleSupport = -1;                    // vertex textures: -1 not checked yet, 0 none, 1 there
     static inline bool trampleAny = false, trampleUploaded = false, bTrampleBound = false;
+    // Stamped this frame, and the window's rows the stamps reached (first, last); frames since the last whole upload
+    // while the grass only stands up again
+    static inline bool trampleStamped = false;
+    static inline int trampleRows[2] = { INT_MAX, INT_MIN };
+    static inline int trampleRecoverFrames = 0;
 
     // By model index: the hash the entry was made for, the model's height (0 if not grass) and its height above its origin
     // if it is short enough for a bush (else 0), and whether it is a bush (-1 not looked at yet)
@@ -353,6 +362,11 @@ class GrassWind
     {
         const int x0 = int(std::floor((x - radius) / kCell)) - 2, x1 = int(std::floor((x + radius) / kCell)) + 2;
         const int y0 = int(std::floor((y - radius) / kCell)) - 2, y1 = int(std::floor((y + radius) / kCell)) + 2;
+        if ((std::max)(y0, gridOrigin[1]) <= (std::min)(y1, gridOrigin[1] + kCells - 1))
+        {
+            trampleRows[0] = (std::min)(trampleRows[0], (std::max)(y0, gridOrigin[1]) - gridOrigin[1]);
+            trampleRows[1] = (std::max)(trampleRows[1], (std::min)(y1, gridOrigin[1] + kCells - 1) - gridOrigin[1]);
+        }
         for (int cy = (std::max)(y0, gridOrigin[1]); cy <= (std::min)(y1, gridOrigin[1] + kCells - 1); ++cy)
         {
             for (int cx = (std::max)(x0, gridOrigin[0]); cx <= (std::min)(x1, gridOrigin[0] + kCells - 1); ++cx)
@@ -376,7 +390,7 @@ class GrassWind
                     cell.direction[0] = lx / length, cell.direction[1] = ly / length;
                 cell.strength = s;
                 cell.ground = ground;
-                trampleAny = true;
+                trampleAny = trampleStamped = true;
             }
         }
     }
@@ -430,15 +444,16 @@ class GrassWind
     // The grid's cells to the texture: r, g the direction, b the strength, a the ground modulo kHeightWrap. From the
     // window's corner, not by world cell modulo kCells: sampled with wrapping, ground 32-64 m off took the cells of the
     // other side of the player, so grass ahead lay down along the path behind and rose as the player came nearer.
-    // The edge texels stay empty, so the clamped sampler gives nothing outside the window.
-    static void UploadTrample()
+    // The edge texels stay empty, so the clamped sampler gives nothing outside the window. Rows first to last.
+    static void UploadTrample(int first = 0, int last = kCells - 1)
     {
         D3DLOCKED_RECT locked{};
-        if (FAILED(trampleTexture->LockRect(0, &locked, nullptr, 0)))
+        const RECT rect = { 0, first, kCells, last + 1 };
+        if (FAILED(trampleTexture->LockRect(0, &locked, &rect, 0)))
             return;
-        for (int y = 0; y < kCells; ++y)
+        for (int y = first; y <= last; ++y)
         {
-            auto row = reinterpret_cast<uint8_t*>(locked.pBits) + y * locked.Pitch;
+            auto row = reinterpret_cast<uint8_t*>(locked.pBits) + (y - first) * locked.Pitch;
             for (int x = 0; x < kCells; ++x)
             {
                 const bool edge = x == 0 || y == 0 || x == kCells - 1 || y == kCells - 1;
@@ -459,7 +474,11 @@ class GrassWind
     {
         if (!MakeTrampleTexture(pDevice))
             return false;
+        const int origin[2] = { gridOrigin[0], gridOrigin[1] };
         MoveGrid(focus);
+        const bool moved = origin[0] != gridOrigin[0] || origin[1] != gridOrigin[1];
+        trampleStamped = false;
+        trampleRows[0] = INT_MAX, trampleRows[1] = INT_MIN;
         if (trampleAny && dt > 0.0f)
         {
             trampleAny = false;
@@ -493,10 +512,21 @@ class GrassWind
                 StampPath(body.centre[0] + fx * a + fy * c, body.centre[1] + fy * a - fx * c, body.bottom, body.velocity, dt, 0.3f, 1.0f);
             }
         }
+        // The whole texture each frame while any cell still stood up again (fTrampleSeconds after a walk) was 1.5% of the
+        // render thread (profile at Firefly Island, 2026-10-28). While the grass only stands up, every few frames: at
+        // 12 s it rises a third of a texel step a frame. A moved window or the last of it at once, whole; a stamp (anyone
+        // moving near the player, a car on the road, stamps every frame) only the rows it reached.
         if (trampleAny || trampleUploaded)
         {
-            UploadTrample();
-            trampleUploaded = trampleAny;
+            const int every = std::clamp(int(fTrampleSeconds / 3.0f), 1, 4);
+            if (!trampleAny || moved || ++trampleRecoverFrames >= every)
+            {
+                UploadTrample();
+                trampleUploaded = trampleAny;
+                trampleRecoverFrames = 0;
+            }
+            else if (trampleStamped && trampleRows[0] <= trampleRows[1])
+                UploadTrample(trampleRows[0], trampleRows[1]);
         }
         return true;
     }
@@ -904,6 +934,17 @@ class GrassWind
     }
 
 public:
+    static int SwaysByPlace(uint16_t model)
+    {
+        MakeModelListIfAsked();
+        if (models.empty())
+            return -1;
+        GrassHeight(model);     // the entry made fresh for this model
+        if (models[model].bush < 0)
+            IsBush(model);
+        return models[model].bush;
+    }
+
     static bool IsGrass(uint32_t hash)
     {
         MakeModelListIfAsked();
@@ -964,5 +1005,10 @@ namespace GrassShared
     int GrassKind(uint32_t nameHash)
     {
         return GrassWind::Kind(nameHash);
+    }
+
+    int SwaysByPlace(uint16_t model)
+    {
+        return GrassWind::SwaysByPlace(model);
     }
 }
