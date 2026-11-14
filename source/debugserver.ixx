@@ -36,11 +36,13 @@ export module debugserver;
 
 import common;
 import comvars;
+import cpuscopes;
 import d3dx9_43;
 import framecapture;
 import inireload;
 import natives;
 import postfxprofiler;
+import postfxresources;
 import profiler;
 import settings;
 
@@ -50,7 +52,8 @@ import settings;
 // and the logs (and FusionFix's other files next to it: files, file), and over time: values read each frame (watch_start) and the hits of an instruction or a piece of
 // memory (trace_start: a mid-hook or a debug register, with registers, callers and reads; trace_read, trace_stop,
 // trace_list), the GPU time of FusionFix's passes and the game's (profiler: PostFxProfiler's next block), and where the
-// threads spend their CPU time (cpu_profile: a session of the sampling profiler, Profiler), and what a whole scene frame
+// threads spend their CPU time (cpu_profile: a session of the sampling profiler, Profiler), FusionFix's own work in
+// milliseconds a frame by scope and thread with the frames' times (cpu_scopes: CpuScopes), and what a whole scene frame
 // draws (frame_capture: Frame Capture with the request's options). One client at a time; a request is a JSON object on one line ({"id": 1, "cmd": "read", ...}), the
 // answer one line ({"id": 1, "ok": true, ...}), the same protocol as the recomp's debug server. Bytes travel as hex in
 // memory order (little-endian here), addresses as "0x..." strings.
@@ -558,11 +561,37 @@ namespace DebugServer
         std::vector<std::string> items;
         for (const auto& row : rows)
         {
-            char ms[32];
+            char ms[32], draws[32], primitives[32];
             snprintf(ms, sizeof(ms), "%.3f", row.ms);
-            items.push_back(Object({{"name", Quote(row.name)}, {"depth", std::to_string(row.depth)}, {"ms", ms}}));
+            snprintf(draws, sizeof(draws), "%.1f", row.draws);
+            snprintf(primitives, sizeof(primitives), "%.0f", row.primitives);
+            items.push_back(Object({{"name", Quote(row.name)}, {"depth", std::to_string(row.depth)}, {"ms", ms},
+                {"draws", draws}, {"primitives", primitives}}));
         }
         return Object({{"frames", std::to_string(frames)}, {"rows", Array(items)}});
+    }
+
+    // ---- CPU scopes (CpuScopes): FusionFix's own work in milliseconds a frame by scope and thread, and the frames' times
+
+    std::string CpuScopesRequest(const Request& request)
+    {
+        const int frames = std::clamp(int((std::min)(request.Number("frames", 240), uint64_t(5000))), 10, 5000);
+        const auto report = CpuScopes::Measure(frames, 10 + frames / 10);
+        auto number = [](double value, const char* format = "%.3f")
+        {
+            char text[32];
+            snprintf(text, sizeof(text), format, value);
+            return std::string(text);
+        };
+        std::vector<std::string> rows;
+        for (const auto& row : report.rows)
+            rows.push_back(Object({{"name", Quote(row.name)}, {"thread", Quote(row.thread)}, {"ms", number(row.mean)},
+                {"max_ms", number(row.max)}, {"calls", number(row.calls, "%.1f")}}));
+        const auto& f = report.frames;
+        return Object({{"frames", std::to_string(f.count)}, {"frame_ms", number(f.mean)}, {"p50_ms", number(f.p50)},
+            {"p95_ms", number(f.p95)}, {"p99_ms", number(f.p99)}, {"max_ms", number(f.max)},
+            {"main_frame_ms", number(f.mainMean)}, {"main_max_ms", number(f.mainMax)},
+            {"main_thread", std::to_string(report.mainThread)}, {"render_thread", std::to_string(report.renderThread)}, {"rows", Array(rows)}});
     }
 
     // ---- the sampling profiler (Profiler): a session of some seconds, its report as text
@@ -717,20 +746,24 @@ namespace DebugServer
         }, 30); // (LoadScene streams the place in before it returns, which can take seconds)
     }
 
-    // Freeze's script camera and whether it stopped the clock (SetTime keeps it stopped).
+    // Freeze's script camera and whether it stopped the clock (SetTime keeps it stopped) and held the weather
+    // (SetWeather takes it over).
     static Camera frozenCamera = 0;
     static bool clockStopped = false;
+    static bool weatherHeld = false, weatherForced = false;
+    static bool timeScaled = false;
 
     std::string SetTime(const Request& request)
     {
         const uint32_t hour = uint32_t(request.Number("hour")) % 24, minute = uint32_t(request.Number("minute", 0)) % 60;
         return OnMainThread([=]
         {
-            // (while frozen the clock stays stopped at the new time)
+            // The clock itself first: FORCE_TIME_OF_DAY alone gives the timecycle's colours the new time while the sky's
+            // SunDirection (RenderSkip's sun height, Physical Sky) keeps the clock's (at 5:33 forced over 7:50, the
+            // cascades and lamp shadows of 7:50). While frozen it stays stopped at the new time.
+            Natives::SetTimeOfDay(hour, minute);
             if (clockStopped)
                 Natives::ForceTimeOfDay(hour, minute);
-            else
-                Natives::SetTimeOfDay(hour, minute);
             return Object({{"time", Quote(std::to_string(hour) + ":" + (minute < 10 ? "0" : "") + std::to_string(minute))}});
         });
     }
@@ -774,12 +807,18 @@ namespace DebugServer
                 Natives::ReleaseWeather();
             else
                 Natives::ForceWeatherNow(uint32_t(std::stoul(weather)));
+            weatherForced = weather != "release";
+            weatherHeld = false;
             return Object({{"weather", Quote(weather)}});
         });
     }
 
     // A still scene for comparing frames: a script camera where the game camera is (or at x, y, z turned rx, ry, rz
-    // with fov, as given), the player frozen and without control, the clock stopped. "on": false gives all back.
+    // with fov, as given), the player frozen and without control, the clock stopped, the weather held as it is now
+    // (not one forced by set_weather), the volumetric clouds' drift and evolution stopped: they go by real time, not
+    // the clock, and the clouds moved and changed between two frames of a comparison. "time_scale" (default 0.01, 1 to
+    // leave it) slows the world, people, cars, water and all, to next to still: the game's own slow motion (SET_TIME_SCALE),
+    // not 0, which the steps of physics and animation are not made for. "on": false gives all back.
 
     std::string Freeze(const Request& request)
     {
@@ -793,6 +832,9 @@ namespace DebugServer
         }
         if (request.Has("fov"))
             fov = std::stof(request.Get("fov"));
+        const float timeScale = std::stof(request.Get("time_scale", "0.01"));
+        if (!(timeScale > 0.0f && timeScale <= 1.0f))
+            throw std::runtime_error("time_scale is more than 0, at most 1");
         return OnMainThread([=]() mutable
         {
             const Ped ped = PlayerPed();
@@ -812,6 +854,13 @@ namespace DebugServer
                 if (clockStopped)
                     Natives::ReleaseTimeOfDay();
                 clockStopped = false;
+                if (weatherHeld)
+                    Natives::ReleaseWeather();
+                weatherHeld = false;
+                PostFxResources.bCloudsHeld = false;
+                if (timeScaled)
+                    Natives::SetTimeScale(1.0f);
+                timeScaled = false;
                 FusionLog::Write("DebugServer", "Scene", "freeze off\n");
                 return Object({{"frozen", "false"}});
             }
@@ -845,9 +894,24 @@ namespace DebugServer
             Natives::GetTimeOfDay(&hour, &minute);
             Natives::ForceTimeOfDay(hour, minute);
             clockStopped = true;
-            FusionLog::Write("DebugServer", "Scene", "freeze at %.2f %.2f %.2f rot %.2f %.2f %.2f fov %.1f\n", x, y, z, rx, ry, rz, fov);
+            // (a change under way ends at once: it would go on otherwise)
+            if (!weatherHeld && !weatherForced)
+            {
+                uint32_t weather = 0;
+                Natives::GetCurrentWeather(&weather);
+                Natives::ForceWeatherNow(weather);
+                weatherHeld = true;
+            }
+            PostFxResources.bCloudsHeld = true;
+            if (timeScale < 1.0f || timeScaled)
+            {
+                Natives::SetTimeScale(timeScale);
+                timeScaled = timeScale < 1.0f;
+            }
+            FusionLog::Write("DebugServer", "Scene", "freeze at %.2f %.2f %.2f rot %.2f %.2f %.2f fov %.1f, time scale %.3f\n",
+                x, y, z, rx, ry, rz, fov, timeScale);
             return Object({{"frozen", "true"}, {"camera", Array({Float(x), Float(y), Float(z)})},
-                {"camera_rotation", Array({Float(rx), Float(ry), Float(rz)})}, {"fov", Float(fov)}});
+                {"camera_rotation", Array({Float(rx), Float(ry), Float(rz)})}, {"fov", Float(fov)}, {"time_scale", Float(timeScale)}});
         });
     }
 
@@ -2441,6 +2505,7 @@ namespace DebugServer
         if (command == "nearby") return Nearby(request);
         if (command == "profiler") return GpuProfiler(request);
         if (command == "cpu_profile") return CpuProfile(request);
+        if (command == "cpu_scopes") return CpuScopesRequest(request);
         if (command == "frame_capture") return FrameCaptureRequest(request);
         throw std::runtime_error("unknown command '" + command + "'");
     }

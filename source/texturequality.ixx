@@ -127,6 +127,11 @@ class TextureQuality
     // Stages whose last MINFILTER from the game was linear and went to the device as anisotropic.
     static inline bool bRaisedMinFilter[kMaterialStages] = {};
     static inline float lastDiffuseSize[4] = {};
+    // The textures c192 and c179 were last set for: the same one again (most draws of a model) asks no GetLevelDesc nor
+    // looks in tileInfos, 1.5% of the render thread together (profile at Firefly Island, 2026-10-28). Forgotten with
+    // the values, at each pass's start and on a reset.
+    static inline IDirect3DBaseTexture9* lastDiffuseTexture = nullptr;
+    static inline IDirect3DBaseTexture9* lastTileTexture = nullptr;
 
     static int32_t Pref(std::optional<std::reference_wrapper<int32_t>>& ref)
     {
@@ -463,6 +468,9 @@ private:
     // c179 for the hexagonal tiling: how evenly the diffuse texture the next draws read tiles.
     static void SetTileScore(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* pTexture)
     {
+        if (pTexture && pTexture == lastTileTexture)
+            return;
+        lastTileTexture = pTexture;
         float score = 0.0f;
         if (pTexture)
         {
@@ -493,7 +501,10 @@ private:
                 score = info.score;
             }
             else
+            {
                 score = 1.0f; // looked at in a later frame
+                lastTileTexture = nullptr;
+            }
         }
         if (score == lastTileScore)
             return;
@@ -505,6 +516,9 @@ private:
     // c192 for the bicubic filter: the size of the diffuse texture the next draws read.
     static void SetDiffuseSize(IDirect3DDevice9* pDevice, IDirect3DBaseTexture9* pTexture)
     {
+        if (pTexture && pTexture == lastDiffuseTexture)
+            return;
+        lastDiffuseTexture = pTexture;
         float size[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
         D3DSURFACE_DESC desc = {};
         if (pTexture && pTexture->GetType() == D3DRTYPE_TEXTURE &&
@@ -789,6 +803,7 @@ private:
             if (++tileFrames % kTileFramesKept == 0)
                 tileInfos.clear();
             lastTileScore = -1.0f;
+            lastTileTexture = nullptr;
             if (bTileHook)
             {
                 // The game skips setting a texture that is already bound, so start from what is.
@@ -809,6 +824,7 @@ private:
         {
             // The game skips setting a texture that is already bound, so start from what is.
             memset(lastDiffuseSize, 0, sizeof(lastDiffuseSize));
+            lastDiffuseTexture = nullptr;
             IDirect3DBaseTexture9* tex = nullptr;
             pDevice->GetTexture(0, &tex);
             SetDiffuseSize(pDevice, tex);
@@ -946,6 +962,7 @@ public:
             bLodBiasSet = false;
             memset(bRaisedMinFilter, 0, sizeof(bRaisedMinFilter));
             memset(lastDiffuseSize, 0, sizeof(lastDiffuseSize));
+            lastDiffuseTexture = lastTileTexture = nullptr;
             // Shaders made after the reset may reuse the old ones' addresses. Emptied on the render thread, which
             // fills them while the main thread resets the device
             bForgetAfterReset = true;

@@ -13,6 +13,8 @@ export module postfxprofiler;
 
 import common;
 import comvars;
+import cpuscopes;
+import drawcapture;
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p)=NULL; } }
@@ -29,7 +31,9 @@ namespace PostFxProfiler
     // many frames it averages, numbered from 1.
     export inline std::atomic<int> nRemoteRequests = 0;
     export inline std::atomic<bool> bRemoteReset = false;   // set by a request: the next frame starts a block afresh, then false
-    export struct ProfilerRow { std::string name; int depth; double ms; };
+    // draws and primitives: the device draws a frame made in it (its passes' included, the game's own sections
+    // without FusionFix's inside them), and their primitives
+    export struct ProfilerRow { std::string name; int depth; double ms; double draws = 0.0; double primitives = 0.0; };
     static std::mutex lastBlockMutex;
     static std::vector<ProfilerRow> lastBlockRows;
     static int nLastBlockFrames = 0;
@@ -160,6 +164,12 @@ namespace PostFxProfiler
     static std::unordered_map<const void*, int> profilerTargetIds; // the game's targets by address
     static double profilerFrameSum = 0.0;
     static int nProfilerSamples = 0;
+    // The device draws of each section, counted on the render thread as they are made (RenderSkip's draw observer)
+    // into the innermost section open: FusionFix's own as they nest, else the game's target. Counted over their own
+    // frames, nDrawFrames of them, which are not quite the block's (its timestamps come back kProfilerFrames late).
+    static double drawSums[kProfAll] = {}, primitiveSums[kProfAll] = {};
+    static int nDrawFrames = 0;
+    static std::vector<int> ownSectionStack;
 
     // Whether the profiler ran last frame: PostFxProfiler is a live setting, Ctrl+Shift+F10 turns it on
     // and off in game.
@@ -211,21 +221,33 @@ namespace PostFxProfiler
     }
 
     // A section, its passes below it, then what they leave of it.
-    static void AddProfilerSection(std::vector<ProfilerRow>& rows, int section, int depth, double n)
+    // A section's draws with those of the sections inside it
+    static double InclusiveSum(const double (&sums)[kProfAll], int section)
     {
-        rows.push_back({ kProfilerSectionInfo[section].name, depth, profilerSums[section] / n });
+        double sum = sums[section];
+        for (int i = 0; i < kProfSections; ++i)
+            if (kProfilerSectionInfo[i].parent == section)
+                sum += InclusiveSum(sums, i);
+        return sum;
+    }
+
+    static void AddProfilerSection(std::vector<ProfilerRow>& rows, int section, int depth, double n, double drawFrames)
+    {
+        rows.push_back({ kProfilerSectionInfo[section].name, depth, profilerSums[section] / n,
+                         InclusiveSum(drawSums, section) / drawFrames, InclusiveSum(primitiveSums, section) / drawFrames });
         double children = 0.0;
         bool any = false;
         for (int i = 0; i < kProfSections; ++i)
         {
             if (kProfilerSectionInfo[i].parent != section || profilerSums[i] <= 0.0)
                 continue;
-            AddProfilerSection(rows, i, depth + 1, n);
+            AddProfilerSection(rows, i, depth + 1, n, drawFrames);
             children += profilerSums[i];
             any = true;
         }
         if (any)
-            rows.push_back({ "other", depth + 1, (std::max)(profilerSums[section] - children, 0.0) / n });
+            rows.push_back({ "other", depth + 1, (std::max)(profilerSums[section] - children, 0.0) / n,
+                             drawSums[section] / drawFrames, primitiveSums[section] / drawFrames });
     }
 
     static void WriteProfilerBlock()
@@ -233,17 +255,29 @@ namespace PostFxProfiler
         {
             std::vector<ProfilerRow> rows;
             const double n = double(nProfilerSamples);
-            rows.push_back({ "frame", -1, profilerFrameSum / n });
+            const double drawFrames = double((std::max)(nDrawFrames, 1));
+            double allDraws = 0.0, allPrimitives = 0.0, gameDraws = 0.0, gamePrimitives = 0.0;
+            for (int i = 0; i < kProfAll; ++i)
+            {
+                allDraws += drawSums[i];
+                allPrimitives += primitiveSums[i];
+                if (i >= kProfSections)
+                {
+                    gameDraws += drawSums[i];
+                    gamePrimitives += primitiveSums[i];
+                }
+            }
+            rows.push_back({ "frame", -1, profilerFrameSum / n, allDraws / drawFrames, allPrimitives / drawFrames });
             double sections = 0.0;
             for (int i = 0; i < kProfSections; ++i)
             {
                 if (kProfilerSectionInfo[i].parent >= 0 || profilerSums[i] <= 0.0)
                     continue;
-                AddProfilerSection(rows, i, 0, n);
+                AddProfilerSection(rows, i, 0, n, drawFrames);
                 sections += profilerSums[i];
             }
             const double game = (std::max)(profilerFrameSum - sections, 0.0);
-            rows.push_back({ "the game's other passes", 0, game / n });
+            rows.push_back({ "the game's other passes", 0, game / n, gameDraws / drawFrames, gamePrimitives / drawFrames });
             // By the target the game drew into, the most expensive first; what is left over is time no target
             // accounts for, such as the GPU waiting on the game.
             int order[kProfilerTargets];
@@ -257,16 +291,18 @@ namespace PostFxProfiler
                 const double t = profilerSums[kProfSections + order[i]];
                 if (t / n < 0.005)
                     continue;
-                rows.push_back({ profilerTargetNames[order[i]], 1, t / n });
+                rows.push_back({ profilerTargetNames[order[i]], 1, t / n, drawSums[kProfSections + order[i]] / drawFrames,
+                                 primitiveSums[kProfSections + order[i]] / drawFrames });
                 targets += t;
             }
             if (targets > 0.0)
                 rows.push_back({ "other", 1, (std::max)(game - targets, 0.0) / n });
 
             FusionLog::Block log("PostFx", "Profiler");
-            log.Printf("GPU milliseconds per frame, averaged over %d frames\n", nProfilerSamples);
+            log.Printf("GPU milliseconds per frame, averaged over %d frames; device draws and primitives a frame\n", nProfilerSamples);
             for (const auto& row : rows)
-                log.Printf("%*s%-*s %6.2f\n", 2 + row.depth * 2, "", 34 - row.depth * 2, row.name.c_str(), row.ms);
+                log.Printf("%*s%-*s %6.2f %7.0f %9.0f\n", 2 + row.depth * 2, "", 34 - row.depth * 2, row.name.c_str(), row.ms,
+                           row.draws, row.primitives);
             std::lock_guard lock(lastBlockMutex);
             lastBlockRows = std::move(rows);
             nLastBlockFrames = nProfilerSamples;
@@ -318,6 +354,20 @@ namespace PostFxProfiler
         std::fill(std::begin(profilerSums), std::end(profilerSums), 0.0);
         profilerFrameSum = 0.0;
         nProfilerSamples = 0;
+        std::fill(std::begin(drawSums), std::end(drawSums), 0.0);
+        std::fill(std::begin(primitiveSums), std::end(primitiveSums), 0.0);
+        nDrawFrames = 0;
+    }
+
+    static void CountDraw(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT primitives)
+    {
+        if (!bProfilerRunning)
+            return;
+        const int section = ownSectionStack.empty() ? nProfilerOpenTarget : ownSectionStack.back();
+        if (section < 0)
+            return;
+        drawSums[section] += 1.0;
+        primitiveSums[section] += double(primitives);
     }
 
     // Once a frame, as post processing begins: closes this frame's queries and opens the next.
@@ -366,6 +416,14 @@ namespace PostFxProfiler
             log.Printf("on, a block every %d frames\n", kProfilerAverage);
         }
         InstallProfilerTargetHooks();
+        static bool counting = false;
+        if (!counting)
+        {
+            DrawCapture::AddObserver(&CountDraw);
+            counting = true;
+        }
+        ++nDrawFrames;
+        ownSectionStack.clear();
         // The target section open at the frame's end is closed in this frame and opened again in the next.
         const int target = nProfilerOpenTarget;
         if (target >= 0)
@@ -428,8 +486,38 @@ namespace PostFxProfiler
         nProfilerOpenTarget = want;
     }
 
+    // The CPU time of FusionFix's own sections, as CPU scopes named "PostFx." and the section's path (render thread)
+    static void CpuMark(int section, bool begin)
+    {
+        static int ids[kProfSections];
+        static bool named = false;
+        static LARGE_INTEGER started[kProfSections];
+        if (!named)
+        {
+            for (int i = 0; i < kProfSections; ++i)
+            {
+                std::string path = kProfilerSectionInfo[i].name;
+                for (int p = kProfilerSectionInfo[i].parent; p >= 0; p = kProfilerSectionInfo[p].parent)
+                    path = std::string(kProfilerSectionInfo[p].name) + " / " + path;
+                ids[i] = CpuScopes::Id(("PostFx." + path).c_str()).index;
+            }
+            named = true;
+        }
+        if (begin)
+            QueryPerformanceCounter(&started[section]);
+        else if (started[section].QuadPart && ids[section] >= 0)
+        {
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+            CpuScopes::Add(ids[section], now.QuadPart - started[section].QuadPart);
+            started[section].QuadPart = 0;
+        }
+    }
+
     export void ProfilerMark(IDirect3DDevice9* pDevice, int section, bool begin)
     {
+        if (CpuScopes::bOn.load(std::memory_order_relaxed) && section >= 0 && section < kProfSections)
+            CpuMark(section, begin);
         if (!bEnabled || !pDevice || nProfilerFrame < 0 || section < 0)
             return;
         const bool topLevel = section < kProfSections && kProfilerSectionInfo[section].parent < 0;
@@ -439,6 +527,10 @@ namespace PostFxProfiler
             SwitchProfilerTarget(pDevice);
         }
         ProfilerStamp(pDevice, section, begin);
+        if (begin)
+            ownSectionStack.push_back(section);
+        else if (!ownSectionStack.empty() && ownSectionStack.back() == section)
+            ownSectionStack.pop_back();
         if (topLevel && !begin && nProfilerOwnSections > 0)
         {
             --nProfilerOwnSections;

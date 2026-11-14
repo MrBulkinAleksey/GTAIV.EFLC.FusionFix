@@ -57,6 +57,7 @@ export namespace RenderSkip
     bool bWaterReflectionWhenSeen = true;
     bool bFarCascadesHalfRate = true;
     bool bMidCascadeHalfRate = false;
+    bool bCascadesIntoAtlas = false;
     bool bTrace = false;
     // SunShadowsMinElevation: degrees of the sun above the horizon below which its cascades are left out, by the sky's
     // SunDirection; below -90 (or before the sky has been drawn) by the clock instead, from 22:00 to 05:00
@@ -307,7 +308,7 @@ namespace RenderSkip
     Drop drop = Drop::Nothing;
 
     // The locks of target index 0, innermost last, and what each drops
-    struct Lock { Kind kind; Drop drop; rage::grcRenderTargetPC* target; };
+    struct Lock { Kind kind; Drop drop; rage::grcRenderTargetPC* target; int8_t intoAtlas = -1; uint8_t divisor = 1; bool statesTraced = false; };
     Lock stack[16]{};
     int depth = 0;
     bool bLockHooked = false;
@@ -330,6 +331,123 @@ namespace RenderSkip
     uint32_t passSeq = 0;       // the cascades' passes, one a scene frame by day
     bool skippedInPass[4]{};
     bool bAtlasLeftOut = false;
+    int lastCascade = -1;       // the index of the cascade CascadeDrop decided last, -1 at night
+    uint32_t cascadeSide = 2048;                // CASCADE_TARGET_R32's, texels
+
+    // CascadesIntoAtlas: each cascade is drawn straight into its quarter of CASCADE_ATLAS instead of into
+    // CASCADE_TARGET_R32 and then copied there by one draw of cascadeConvert's convert pass 1 (CE 0x92cb30, some 1.5 ms
+    // on an integrated GPU for the four 2048x2048 quarters). That pass stores 0.5 - 0.0005 x of the depth x the casters
+    // write (their vertex shaders put gShadowMatrix's w column in a texcoord, the pixel shaders write it out), and the
+    // shaders that read the atlas convert their own depth the same way (c139). So for the cascades' draws the matrix's
+    // w column becomes 0.5 - 0.0005 w (in CE 0x92dd20 called from the cascade's own callback, CE 0x92dd70), the target
+    // becomes the atlas with a depth buffer of its size, the viewport moves to the quarter, the game's fill of the target
+    // with -3.4e38 (no caster, convert pass 0 in CE 0x92c740) becomes a clear to 1.0 (above any converted depth within
+    // 1000 m), and the copy is left out.
+    uintptr_t cascadeMatrixReturn = 0;      // where CE 0x92dd20 returns to in the cascade's callback
+    bool pendingIntoAtlas[4]{};             // the cascade's matrix was made for the atlas
+    rage::grcRenderTargetPC* atlasTarget = nullptr;
+    IDirect3DSurface9* atlasDepth = nullptr;
+    bool bFillPending = false;
+    uint32_t intoAtlas = 0, intoAtlasFailed = 0;
+
+    // FarCascadesResolution: drawn into the atlas, the fourth cascade (85 to 256 m) takes 1/n of the side (1024 of 2048
+    // at 2), in the corner of its quarter at its left and top edge: a quarter of the texels to fill. The third, from 30 m
+    // on, showed so on nearby walls. Its casters get a viewport of that corner (the game's window of the cascade goes
+    // into it whole), and the shaders that read it the same window onto it (ShrinkCascades); the texel of the shaders'
+    // filter stays the atlas's, so its shadows are softer by n as well as coarser.
+    uint32_t nFarDivisor = 2;
+    uint32_t wholeClears[4]{};      // the divisor each quarter was last cleared whole for
+    uint32_t shrunk = 0, shrinkMisses = 0;
+    bool bShrinkHooked = false;     // the fit's hook that reads them so is in place
+    const uint32_t* pFitIndex = nullptr;    // the copy the fit writes (CE 0x1174790), of those at frameCopies, 0x270 each
+    uintptr_t frameCopies = 0;
+
+    uint32_t DivisorFor(int index)
+    {
+        return bShrinkHooked && index == 3 && (nFarDivisor == 2 || nFarDivisor == 4) ? nFarDivisor : 1;
+    }
+
+    bool IntoAtlasReady()
+    {
+        return bCascadesIntoAtlas && atlasTarget && atlasTarget->mD3DTexture && (bCascadesAtNight || !IsNight());
+    }
+
+    // The quarter of the atlas a cascade drawn into it takes: clears and scissor go by it explicitly, as a clear by the
+    // viewport alone or a scissor rectangle the game set for its own target would land in the first quarter
+    D3DRECT Quarter(int index)
+    {
+        return { LONG(index) * LONG(cascadeSide), 0, LONG(index + 1) * LONG(cascadeSide), LONG(cascadeSide) };
+    }
+
+    // 0.5 - 0.0005 of the depth the casters write
+    void MatrixForAtlas(float* matrix)
+    {
+        matrix[3] *= -0.0005f;
+        matrix[7] *= -0.0005f;
+        matrix[11] *= -0.0005f;
+        matrix[15] = 0.5f - 0.0005f * matrix[15];
+    }
+
+    HRESULT(__stdcall* RealSetViewport)(IDirect3DDevice9*, const D3DVIEWPORT9*) = nullptr;
+    HRESULT(__stdcall* RealSetScissorRect)(IDirect3DDevice9*, const RECT*) = nullptr;
+
+    // The game's lock just bound CASCADE_TARGET_R32: the atlas and a depth buffer of its size instead
+    bool BindAtlas(IDirect3DDevice9* device, int index, uint32_t divisor)
+    {
+        IDirect3DSurface9* surface = nullptr;
+        if (!device || !atlasTarget || !atlasTarget->mD3DTexture || FAILED(atlasTarget->mD3DTexture->GetSurfaceLevel(0, &surface)))
+            return false;
+        D3DSURFACE_DESC desc{}, depthDesc{};
+        surface->GetDesc(&desc);
+        if (atlasDepth)
+        {
+            atlasDepth->GetDesc(&depthDesc);
+            if (depthDesc.Width != desc.Width || depthDesc.Height != desc.Height)
+            {
+                atlasDepth->Release();
+                atlasDepth = nullptr;
+            }
+        }
+        if (!atlasDepth)
+            device->CreateDepthStencilSurface(desc.Width, desc.Height, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, FALSE, &atlasDepth, nullptr);
+        bool fits = atlasDepth && desc.Width == cascadeSide * 4 && desc.Height == cascadeSide;
+        // Not while the atlas is still on a sampler (the lighting's s15 from the frame before): drawn into while bound
+        // for reading, DXVK took every draw as a feedback loop and the frame lost a third of its rate. Through the game's
+        // device wrapper and the device both, so the wrapper binds it again for the lighting.
+        if (fits)
+            if (auto wrapper = rage::grcDevice::GetD3DDevice())
+            {
+                static constexpr DWORD stages[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+                    D3DVERTEXTEXTURESAMPLER0, D3DVERTEXTEXTURESAMPLER1, D3DVERTEXTEXTURESAMPLER2, D3DVERTEXTEXTURESAMPLER3 };
+                for (DWORD stage : stages)
+                {
+                    IDirect3DBaseTexture9* bound = nullptr;
+                    device->GetTexture(stage, &bound);
+                    bool atlas = bound == atlasTarget->mD3DTexture ||
+                        (RageDirect3DDevice9::g_TexturesBySampler && RageDirect3DDevice9::GetTexture(stage) == atlasTarget->mD3DTexture);
+                    if (bound)
+                        bound->Release();
+                    if (atlas)
+                        RageDirect3DDevice9::SetTextureBoth(wrapper, stage, nullptr);
+                }
+            }
+        // The viewport the game's lock set for its own target (its depth range is kept)
+        D3DVIEWPORT9 viewport{};
+        device->GetViewport(&viewport);
+        bool bound = fits && SUCCEEDED(device->SetRenderTarget(0, surface)) && SUCCEEDED(device->SetDepthStencilSurface(atlasDepth));
+        surface->Release();
+        // SetRenderTarget left the viewport and the scissor on the whole atlas, and the game's device wrapper does not
+        // send again the viewport it takes as set already: the cascade was drawn over all four quarters
+        if (bound && RealSetViewport && RealSetScissorRect)
+        {
+            DWORD side = cascadeSide / divisor;
+            D3DVIEWPORT9 quarter{ DWORD(index) * cascadeSide, 0, side, side, viewport.MinZ, viewport.MaxZ };
+            RealSetViewport(device, &quarter);
+            RECT rect{ LONG(index) * LONG(cascadeSide), 0, LONG(index) * LONG(cascadeSide) + LONG(side), LONG(side) };
+            RealSetScissorRect(device, &rect);
+        }
+        return bound;
+    }
     bool bNightCascade = false;     // the cascade just locked was the night's, its draws left out
     uint32_t nightAtlasFrame = ~0u;  // the scene frame the night's atlas was last cleared in
 
@@ -346,10 +464,9 @@ namespace RenderSkip
     // of the shaders) has to stay under FoldTexels at the cascade's far edge and FoldDepth, or it is drawn.
     constexpr float FoldTexels = 0.5f;
     constexpr float FoldDepth = 0.05f;          // metres
-    constexpr float CascadeReach[4] = { 10.0f, 30.0f, 85.0f, 256.0f };  // metres from the camera, as shadows.ixx sets them
+    const float (&CascadeReach)[4] = fCascadeDistances;     // metres from the camera, as shadows.ixx sets them
     bool bFollow = false;                       // both hooks in place
     bool bMatrixTrace = false;
-    uint32_t cascadeSide = 2048;                // CASCADE_TARGET_R32's, texels
     struct CascadeLook
     {
         uint32_t seq = ~0u;
@@ -419,6 +536,7 @@ namespace RenderSkip
     Drop CascadeDrop()
     {
         bAtlasLeftOut = false;
+        lastCascade = -1;
         bCascadeAtNight = IsNight();
         bNightCascade = !bCascadesAtNight && bCascadeAtNight;
         if (bNightCascade)
@@ -433,6 +551,7 @@ namespace RenderSkip
                 s = false;
         }
         uint32_t index = cascadeCount++;
+        lastCascade = index < 4 ? int(index) : -1;
         // MidCascadeHalfRate: the second joins them, left out in the frames the fourth is drawn in
         bool farOne = bFarCascadesHalfRate && (index == 2 || index == 3);
         bool midOne = bMidCascadeHalfRate && index == 1;
@@ -550,6 +669,59 @@ namespace RenderSkip
         TraceMatrix(values, lastMatrix, passTexels, passDepth);
     }
 
+    // FarCascadesResolution, right after the fit (CE 0x928bb2, the main thread): the frame copy's scales and offsets of
+    // the far cascade go to the corner of its quarter. It has to be here: the setter (CE 0x92d7f0) runs on the main
+    // thread too, for the copy just fitted, where what it sets goes into the draw list the lighting is drawn from, and
+    // only later on the render thread for the lamps; shrunk in the render thread's setter, after the cascades were
+    // drawn, the sun's light read the whole quarter and the shadows lay elsewhere, moving with the camera. A scale and
+    // offset put the cascade's window (the bounds +0x1f0 min x, +0x200 min y, +0x210 max x, +0x220 max y, a float a
+    // cascade) onto the quarter, u = t * scale + offset, one bound at its left or top edge (u k / 4, v 0); 1/n of the
+    // side keeps that edge: u' = edge + (u - edge) / n. FollowCascades folds them like the game's.
+    void ShrinkCascades()
+    {
+        if (!bCascadesIntoAtlas || !atlasTarget || !pFitIndex || !frameCopies || DivisorFor(3) <= 1)
+            return;
+        float* frame = (float*)(frameCopies + *pFitIndex * 0x270);
+        float values[4][4];
+        for (int v = 0; v < 4; v++)
+        {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; k++)
+            {
+                sum += frame[v * 4 + k];
+                values[k][v] = sum;
+            }
+        }
+        for (int k = 3; k < 4; k++)
+        {
+            float n = float(DivisorFor(k));
+            for (int axis = 0; axis < 2; axis++)
+            {
+                float scale = values[k][axis], offset = values[k][2 + axis];
+                float a = frame[(axis ? 0x200 : 0x1f0) / 4 + k] * scale + offset;
+                float b = frame[(axis ? 0x220 : 0x210) / 4 + k] * scale + offset;
+                float edge = axis ? 0.0f : float(k) * 0.25f;
+                // No bound at the edge: read as the game has it, this once wrong, and the next ones drawn whole
+                if (std::min(std::abs(a - edge), std::abs(b - edge)) >= 0.01f)
+                {
+                    shrinkMisses++;
+                    nFarDivisor = 1;
+                    return;
+                }
+            }
+            for (int axis = 0; axis < 2; axis++)
+            {
+                float edge = axis ? 0.0f : float(k) * 0.25f;
+                values[k][axis] /= n;
+                values[k][2 + axis] = edge + (values[k][2 + axis] - edge) / n;
+            }
+            shrunk++;
+        }
+        for (int v = 0; v < 4; v++)
+            for (int k = 0; k < 4; k++)
+                frame[v * 4 + k] = values[k][v] - (k ? values[k - 1][v] : 0.0f);
+    }
+
     Drop DropFor(Kind kind)
     {
         switch (kind)
@@ -557,7 +729,8 @@ namespace RenderSkip
         case CascadeTarget: return CascadeDrop();
         case CascadeAtlas:
         {
-            // The draw that puts the cascade just drawn into its quarter; the night's quarter is cleared by LockTarget
+            // The draw that puts the cascade just drawn into its quarter (drawn there already with CascadesIntoAtlas); the
+            // night's quarter is cleared by LockTarget
             bool leftOut = bAtlasLeftOut || bNightCascade;
             bAtlasLeftOut = false;
             return leftOut ? Drop::Everything : Drop::Nothing;
@@ -627,7 +800,29 @@ namespace RenderSkip
     HRESULT(__stdcall* RealClear)(IDirect3DDevice9*, DWORD, const D3DRECT*, DWORD, D3DCOLOR, float, DWORD) = nullptr;
     HRESULT(__stdcall* RealStretchRect)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, IDirect3DSurface9*, const RECT*, D3DTEXTUREFILTERTYPE) = nullptr;
     HRESULT(__stdcall* RealColorFill)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, D3DCOLOR) = nullptr;
-    HRESULT(__stdcall* RealSetViewport)(IDirect3DDevice9*, const D3DVIEWPORT9*) = nullptr;
+
+    // The colour of a cascade drawn into the atlas. A clear goes no further than the viewport, so a far cascade's corner
+    // is all that is cleared each pass; the quarter around it, which the shaders' filter touches at the window's edge,
+    // is cleared whole once, or it would keep what was drawn there before
+    void ClearQuarter(IDirect3DDevice9* device, int index, uint32_t divisor, D3DCOLOR colour, float z, DWORD stencil)
+    {
+        auto quarter = Quarter(index);
+        if (wholeClears[index] == divisor)
+        {
+            RealClear(device, 1, &quarter, D3DCLEAR_TARGET, colour, z, stencil);
+            return;
+        }
+        wholeClears[index] = divisor;
+        D3DVIEWPORT9 saved{}, whole{ DWORD(index) * cascadeSide, 0, cascadeSide, cascadeSide, 0.0f, 1.0f };
+        DWORD scissor = FALSE;
+        device->GetViewport(&saved);
+        device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissor);
+        RealSetViewport(device, &whole);
+        device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+        RealClear(device, 1, &quarter, D3DCLEAR_TARGET, colour, z, stencil);
+        device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissor);
+        RealSetViewport(device, &saved);
+    }
 
     using LockFn = void(__thiscall*)(void*, uint32_t, rage::grcRenderTargetPC*, rage::grcRenderTargetPC*, uint32_t, bool, uint32_t);
     using UnlockFn = void(__thiscall*)(void*, uint32_t, void*, int32_t);
@@ -646,6 +841,8 @@ namespace RenderSkip
             auto kind = KindOf(target);
             if (kind == CascadeTarget && target->mWidth)
                 cascadeSide = target->mWidth;
+            if (kind == CascadeAtlas)
+                atlasTarget = target;
             stack[depth++] = { kind, DropFor(kind), target };
             ++nLocks;
             Refresh();
@@ -654,6 +851,39 @@ namespace RenderSkip
                     drop == Drop::Nothing ? "" : drop == Drop::Draws ? ", draws left out" : ", left out"));
         }
         pfnLock(factory, index, color, depthTarget, a5, a6, mip);
+        // A cascade whose matrix was made for the atlas is drawn there; one left out this frame needs no target
+        if (index == 0 && depth > 0 && stack[depth - 1].kind == CascadeTarget && lastCascade >= 0 && pendingIntoAtlas[lastCascade])
+        {
+            auto& lock = stack[depth - 1];
+            if (lock.drop == Drop::Everything)
+                bAtlasLeftOut = true;
+            else if (lock.drop != Drop::Nothing)
+                ;   // the night's: its quarter of the atlas is cleared below
+            else if (uint32_t divisor = DivisorFor(lastCascade); BindAtlas(RageDirect3DDevice9::GetRuntimeDevice(), lastCascade, divisor))
+            {
+                lock.intoAtlas = int8_t(lastCascade);
+                lock.divisor = uint8_t(divisor);
+                bAtlasLeftOut = true;
+                intoAtlas++;
+                if (Tracing())
+                {
+                    auto device = RageDirect3DDevice9::GetRuntimeDevice();
+                    DWORD scissor = 0;
+                    RECT rect{};
+                    device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissor);
+                    device->GetScissorRect(&rect);
+                    TraceEvent(std::format("cascade {} drawn into the atlas, quarter {}; scissor {} {} {} {} {}", lastCascade + 1, lastCascade,
+                        scissor ? "on" : "off", rect.left, rect.top, rect.right, rect.bottom));
+                }
+            }
+            else
+            {
+                // Its casters wrote converted depths into the target, which the copy would convert again: this frame's
+                // cascade is wrong, the next ones go the game's way
+                intoAtlasFailed++;
+                bCascadesIntoAtlas = false;
+            }
+        }
         // The night's quarter of the atlas, bound now: 1.0 in it, which the lighting takes as lit for any depth. The atlas
         // holds 0.5 - 0.0005 z of the casters (cascadeConvert) and a point is lit where that is no less than its own; the
         // cascade cleared to 1.0 and copied there as before was a caster at z 1, which shadowed everything on one side of
@@ -704,6 +934,48 @@ namespace RenderSkip
         ++nDraws;
         if (Tracing())
             traceDraws++;
+        // The game's fill of a cascade drawn into the atlas: a clear of its quarter to 1.0 instead
+        bool fill = bFillPending;
+        if (!fill && depth > 0 && stack[depth - 1].kind == CascadeTarget && !stack[depth - 1].statesTraced && Tracing())
+        {
+            // The states and the shadow matrix's depth column the first caster of a cascade is drawn with, whether into
+            // the atlas or the game's way, to tell the two apart
+            stack[depth - 1].statesTraced = true;
+            if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
+            {
+                DWORD z = 0, zWrite = 0, zFunc = 0, blend = 0, op = 0, src = 0, dst = 0, mask = 0, scissor = 0;
+                device->GetRenderState(D3DRS_ZENABLE, &z);
+                device->GetRenderState(D3DRS_ZWRITEENABLE, &zWrite);
+                device->GetRenderState(D3DRS_ZFUNC, &zFunc);
+                device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
+                device->GetRenderState(D3DRS_BLENDOP, &op);
+                device->GetRenderState(D3DRS_SRCBLEND, &src);
+                device->GetRenderState(D3DRS_DESTBLEND, &dst);
+                device->GetRenderState(D3DRS_COLORWRITEENABLE, &mask);
+                device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissor);
+                float m[16]{};
+                device->GetVertexShaderConstantF(60, m, 4);
+                D3DVIEWPORT9 vp{};
+                device->GetViewport(&vp);
+                TraceEvent(std::format("first caster{}: z {} write {} func {}, blend {} op {} {} {}, mask {:#x}, scissor {}, viewport {} {} {}x{}; "
+                    "c60-63 w {:.6g} {:.6g} {:.6g} {:.6g}, x {:.6g} {:.6g} {:.6g} {:.6g}",
+                    stack[depth - 1].intoAtlas >= 0 ? std::format(" into quarter {}", stack[depth - 1].intoAtlas) : std::string(" the game's way"),
+                    z, zWrite, zFunc, blend, op, src, dst, mask, scissor, vp.X, vp.Y, vp.Width, vp.Height,
+                    m[3], m[7], m[11], m[15], m[0], m[4], m[8], m[12]));
+            }
+        }
+        if (fill)
+        {
+            bFillPending = false;
+            if (drop == Drop::Nothing && depth > 0 && stack[depth - 1].intoAtlas >= 0 && RealClear)
+                if (auto device = RageDirect3DDevice9::GetRuntimeDevice())
+                {
+                    ClearQuarter(device, stack[depth - 1].intoAtlas, stack[depth - 1].divisor, 0xFFFFFFFF, 1.0f, 0);
+                    if (Tracing())
+                        TraceEvent(std::format("fill of quarter {} cleared to 1.0", stack[depth - 1].intoAtlas));
+                    return true;
+                }
+        }
         if (drop == Drop::Nothing)
             return false;
         dropped[stack[depth - 1].kind]++;
@@ -751,7 +1023,47 @@ namespace RenderSkip
     {
         if (Tracing())
             TraceEvent(std::format("clear flags {:#x}, {} rects, colour {:#010x}, z {}{}", flags, count, colour, z, drop == Drop::Everything ? " (left out)" : ""));
-        return drop == Drop::Everything ? D3D_OK : RealClear(device, count, rects, flags, colour, z, stencil);
+        if (drop == Drop::Everything)
+            return D3D_OK;
+        if (count == 0 && depth > 0 && stack[depth - 1].intoAtlas >= 0)
+        {
+            HRESULT result = D3D_OK;
+            // The depth all over: the other quarters' depth is never read again, and a clear of a whole surface is a
+            // fast one (one of a rectangle of the big buffer took the cascades about as long as the copy it saves)
+            if (DWORD depthFlags = flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL))
+            {
+                D3DVIEWPORT9 saved{}, whole{ 0, 0, cascadeSide * 4, cascadeSide, 0.0f, 1.0f };
+                DWORD scissor = FALSE;
+                device->GetViewport(&saved);
+                device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissor);
+                RealSetViewport(device, &whole);
+                device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+                result = RealClear(device, 0, nullptr, depthFlags, colour, z, stencil);
+                device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissor);
+                RealSetViewport(device, &saved);
+            }
+            if (flags & D3DCLEAR_TARGET)
+            {
+                ClearQuarter(device, stack[depth - 1].intoAtlas, stack[depth - 1].divisor, colour, z, stencil);
+            }
+            return result;
+        }
+        return RealClear(device, count, rects, flags, colour, z, stencil);
+    }
+
+    HRESULT __stdcall SetScissorRect(IDirect3DDevice9* device, const RECT* rect)
+    {
+        if (rect && Tracing())
+            TraceEvent(std::format("scissor {} {} {} {}", rect->left, rect->top, rect->right, rect->bottom));
+        // A cascade's own scissor, moved to its quarter like its viewport
+        if (rect && depth > 0 && stack[depth - 1].intoAtlas >= 0 && rect->right <= LONG(cascadeSide) && rect->bottom <= LONG(cascadeSide))
+        {
+            // (and to its corner, scaled down, at FarCascadesResolution)
+            LONG n = stack[depth - 1].divisor, x = LONG(stack[depth - 1].intoAtlas) * LONG(cascadeSide);
+            RECT moved{ x + rect->left / n, rect->top / n, x + (rect->right + n - 1) / n, (rect->bottom + n - 1) / n };
+            return RealSetScissorRect(device, &moved);
+        }
+        return RealSetScissorRect(device, rect);
     }
 
     HRESULT __stdcall StretchRect(IDirect3DDevice9* device, IDirect3DSurface9* source, const RECT* sourceRect, IDirect3DSurface9* target, const RECT* targetRect,
@@ -779,6 +1091,15 @@ namespace RenderSkip
         ++nViewports;
         if (viewport && Tracing())
             TraceEvent(std::format("viewport {} {} {}x{}", viewport->X, viewport->Y, viewport->Width, viewport->Height));
+        // The cascade's viewport, moved to its quarter of the atlas
+        if (viewport && depth > 0 && stack[depth - 1].intoAtlas >= 0 && viewport->X == 0 && viewport->Y == 0 && viewport->Width == cascadeSide
+            && viewport->Height == cascadeSide)
+        {
+            D3DVIEWPORT9 quarter = *viewport;
+            quarter.X = DWORD(stack[depth - 1].intoAtlas) * cascadeSide;
+            quarter.Width = quarter.Height = cascadeSide / stack[depth - 1].divisor;
+            return RealSetViewport(device, &quarter);
+        }
         return RealSetViewport(device, viewport);
     }
 
@@ -797,6 +1118,7 @@ namespace RenderSkip
         PatchVTable(vtable, 35, RealColorFill, &ColorFill);
         PatchVTable(vtable, 43, RealClear, &Clear);
         PatchVTable(vtable, 47, RealSetViewport, &SetViewport);
+        PatchVTable(vtable, 75, RealSetScissorRect, &SetScissorRect);
         PatchVTable(vtable, 81, RealDrawPrimitive, &DrawPrimitive);
         PatchVTable(vtable, 82, RealDrawIndexedPrimitive, &DrawIndexedPrimitive);
         PatchVTable(vtable, 83, RealDrawPrimitiveUP, &DrawPrimitiveUP);
@@ -957,35 +1279,94 @@ public:
                 bFarCascadesHalfRate = ini.ReadInteger("PERFORMANCE", "FarCascadesHalfRate", 1) != 0;
                 bMidCascadeHalfRate = ini.ReadInteger("PERFORMANCE", "MidCascadeHalfRate", 0) != 0;
                 fSunLowBelow = ini.ReadFloat("PERFORMANCE", "SunShadowsMinElevation", 8.0f);
+                nFarDivisor = uint32_t(std::max(1, ini.ReadInteger("SHADOWS", "FarCascadesResolution", 2)));
             });
 
-            // The cascades left out follow the camera: the setter's matrix (CE 0x92dd5d: eax the matrix, push eax for
-            // the matrix's global) and its scales and offsets (CE 0x92d856: esi the frame's copy, push esi for the first)
-            if (!bFarCascadesHalfRate && !bMidCascadeHalfRate)
-                return;
+            bCascadesIntoAtlas = reader.ReadInteger("SHADOWS", "CascadesIntoAtlas", 1) != 0;
+            nFarDivisor = uint32_t(std::max(1, reader.ReadInteger("SHADOWS", "FarCascadesResolution", 2)));
+
+            // The matrix as CE 0x92dd20 hands it to its global (CE 0x92dd5d: eax the matrix, push eax), called from the
+            // setter of the shaders' cascades (CE 0x92d856 returned to, esi the frame's copy there) and from each cascade's
+            // own callback (CE 0x92e04f returned to, its index the callback's first argument)
             auto matrix = hook::pattern("50 FF 35 ? ? ? ? E8 ? ? ? ? 83 C4 18 8B E5 5D C3");
             auto setter = hook::pattern("56 FF 35 ? ? ? ? E8 ? ? ? ? 8D 46 10 50 FF 35");
-            if (matrix.empty() || setter.empty())
+            auto cascadeMatrix = hook::pattern("F3 0F 11 04 24 50 56 E8 ? ? ? ? 83 C4 0C 5E");
+            auto fill = hook::pattern("51 56 6A 07 6A 01 51 C7 04 24 00 00 80 3F 6A 01 6A 00 6A 00 E8");
+            bool follow = (bFarCascadesHalfRate || bMidCascadeHalfRate) && !setter.empty();
+            if (cascadeMatrix.empty() || fill.empty())
+                bCascadesIntoAtlas = false;
+            if (matrix.empty() || (!follow && !bCascadesIntoAtlas))
+            {
+                bCascadesIntoAtlas = false;
                 return;
-            setterReturn = reinterpret_cast<uintptr_t>(setter.get_first(0));
+            }
+            if (follow)
+                setterReturn = reinterpret_cast<uintptr_t>(setter.get_first(0));
+            if (bCascadesIntoAtlas)
+                cascadeMatrixReturn = reinterpret_cast<uintptr_t>(cascadeMatrix.get_first(12));
             static auto MatrixHook = safetyhook::create_mid(matrix.get_first(0), [](SafetyHookContext& regs)
             {
-                // Only the setter's: the cascades' own draws set the matrix through here too
-                if (*(uintptr_t*)(regs.ebp + 4) != setterReturn)
-                    return;
-                memcpy(caughtMatrix, (const void*)regs.eax, sizeof(caughtMatrix));
-                matrixCaught = true;
+                uintptr_t from = *(uintptr_t*)(regs.ebp + 4);
+                if (from == setterReturn)
+                {
+                    memcpy(caughtMatrix, (const void*)regs.eax, sizeof(caughtMatrix));
+                    matrixCaught = true;
+                }
+                else if (from == cascadeMatrixReturn)
+                {
+                    int32_t index = *(int32_t*)(*(uintptr_t*)regs.ebp + 8);
+                    if (index >= 0 && index < 4)
+                    {
+                        pendingIntoAtlas[index] = IntoAtlasReady();
+                        if (pendingIntoAtlas[index])
+                            MatrixForAtlas((float*)regs.eax);
+                    }
+                }
             });
-            static auto SetterHook = safetyhook::create_mid(setter.get_first(0), [](SafetyHookContext& regs)
+            if (follow)
             {
-                FollowCascades((float*)regs.esi);
-            });
-            bFollow = true;
+                static auto SetterHook = safetyhook::create_mid(setter.get_first(0), [](SafetyHookContext& regs)
+                {
+                    FollowCascades((float*)regs.esi);
+                });
+                bFollow = true;
+            }
+            // Right after the fit (CE 0x928bb2, xor esi, esi) and its copies (CE 0x928a90: index [0x1174790], copies at
+            // 0x11a1c50); without them the far cascades are drawn whole
+            auto fitCopy = hook::pattern("8B 0D ? ? ? ? 69 C9 70 02 00 00 81 C1 ? ? ? ? 51 8D 41 60 C7 04 24 00 00 00 00 50 51 E8");
+            auto afterFit = hook::pattern("83 C4 08 E8 ? ? ? ? 33 F6 89 74 24 10 EB");
+            if (bCascadesIntoAtlas && !fitCopy.empty() && !afterFit.empty())
+            {
+                pFitIndex = *fitCopy.get_first<const uint32_t*>(2);
+                frameCopies = *fitCopy.get_first<uintptr_t>(14);
+                static auto FitHook = safetyhook::create_mid(afterFit.get_first(8), [](SafetyHookContext&) { ShrinkCascades(); });
+                bShrinkHooked = true;
+            }
+            if (bCascadesIntoAtlas)
+            {
+                static auto FillHook = safetyhook::create_mid(fill.get_first(0), [](SafetyHookContext&)
+                {
+                    bFillPending = true;
+                });
+            }
+        };
+
+        // The atlas's depth buffer goes with the device's other default-pool resources; the targets are found anew
+        FusionFix::onBeforeReset() += []()
+        {
+            if (atlasDepth)
+                atlasDepth->Release();
+            atlasDepth = nullptr;
+            atlasTarget = nullptr;
+            for (auto& p : pendingIntoAtlas)
+                p = false;
+            for (auto& divisor : wholeClears)
+                divisor = 0;
         };
 
         FusionFix::onGameInitEvent() += []()
         {
-            if (bCascadesAtNight && !bReflectionsHalfRate && !bWaterReflectionWhenSeen && !bFarCascadesHalfRate && !bMidCascadeHalfRate && !bTrace)
+            if (bCascadesAtNight && !bReflectionsHalfRate && !bWaterReflectionWhenSeen && !bFarCascadesHalfRate && !bMidCascadeHalfRate && !bCascadesIntoAtlas && !bTrace)
                 return;
             bool installed = Install();
             FusionLog::Write("RenderSkip", "Settings", "%s: cascades %s, the far ones by day %s, reflections %s, the water's %s\n",
@@ -994,6 +1375,8 @@ public:
                 bFarCascadesHalfRate ? (bFollow ? "in turns, following the camera" : "in turns while the camera keeps still") : "every frame",
                 bReflectionsHalfRate ? "every other frame" : "every frame",
                 bWaterReflectionWhenSeen ? "only while water is seen" : "whenever the game draws it");
+            FusionLog::Write("RenderSkip", "Settings", "cascades %s, the farthest at 1/%u of the side\n",
+                bCascadesIntoAtlas ? "drawn straight into the atlas" : "copied into the atlas", DivisorFor(3));
         };
 
         // The queries are not kept over a reset (released on the render thread)
@@ -1007,7 +1390,9 @@ public:
         {
             static uint32_t frames = 0;
             ++frames;
-            if (bTrace && !traceFrom && frames == 1200)
+            // In a frame the cascades are drawn in: a save is loaded at night before the clock is set to day, so with
+            // CascadesIntoAtlas it waits for them however long it takes, otherwise until frame 6000
+            if (bTrace && !traceFrom && frames >= 1200 && (cascadeFrame + 2 >= TemporalAA::SceneFrame || (!bCascadesIntoAtlas && frames >= 6000)))
             {
                 traceFrom = TemporalAA::SceneFrame + 2;
                 traceUntil = traceFrom + 2;
@@ -1037,6 +1422,12 @@ public:
                     folded, FoldTexels, FoldDepth, misses, largestTexels, largestDepth);
             folded = misses = 0;
             largestTexels = largestDepth = 0.0f;
+            if (intoAtlas || intoAtlasFailed)
+                text += std::format("cascades drawn into the atlas: {}{}; ", intoAtlas, intoAtlasFailed ? ", then could not bind it and stopped" : "");
+            if (shrunk || shrinkMisses)
+                text += std::format("far cascade read in its quarter's corner: {}{}; ", shrunk,
+                    shrinkMisses ? std::format(", {} with no bound at the edge (then drawn whole)", shrinkMisses) : std::string());
+            intoAtlas = shrunk = shrinkMisses = 0;
             for (int kind = CascadeTarget; kind < Kinds; kind++)
                 if (dropped[kind] || halfRates[kind].skipped || halfRates[kind].kept)
                     text += std::format("{}: {} calls left out, {} frames left out, {} drawn; ", KindNames[kind], dropped[kind],

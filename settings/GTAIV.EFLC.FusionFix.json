@@ -1152,13 +1152,33 @@
       "page": "advanced", "group": "@group.performance", "visibility": "file"
     },
     {
-      "id": "PERFORMANCE.FarPropInstancing", "type": "int", "default": 2, "min": 0, "max": 2,
+      "id": "PERFORMANCE.FarPropInstancing", "type": "int", "default": 3, "min": 0, "max": 3,
       "label": "@PERFORMANCE.FarPropInstancing", "description": "@PERFORMANCE.FarPropInstancing.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.FragmentInstancing", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.FragmentInstancing", "description": "@PERFORMANCE.FragmentInstancing.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.CascadeInstancing", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.CascadeInstancing", "description": "@PERFORMANCE.CascadeInstancing.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
+      "id": "PERFORMANCE.ShadowMeshMerge", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.ShadowMeshMerge", "description": "@PERFORMANCE.ShadowMeshMerge.description",
       "page": "advanced", "group": "@group.performance", "visibility": "file"
     },
     {
       "id": "DEBUG.FarPropInstancingLog", "type": "bool", "default": 0,
       "label": "@DEBUG.FarPropInstancingLog", "description": "@DEBUG.FarPropInstancingLog.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.ShadowMeshMergeLog", "type": "bool", "default": 0,
+      "label": "@DEBUG.ShadowMeshMergeLog", "description": "@DEBUG.ShadowMeshMergeLog.description",
       "page": "debug", "group": "@group.debug", "visibility": "file"
     },
     {
@@ -1299,6 +1319,16 @@
     {
       "id": "PROCEDURAL.GpuGrassDensity", "type": "float", "default": 1.0, "min": 0.1, "max": 1.0,
       "label": "@PROCEDURAL.GpuGrassDensity",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GpuGrassClumps", "type": "int", "default": 80, "min": 8, "max": 160,
+      "label": "@PROCEDURAL.GpuGrassClumps", "description": "@PROCEDURAL.GpuGrassClumps.description",
+      "page": "advanced", "group": "@group.procedural", "visibility": "file"
+    },
+    {
+      "id": "PROCEDURAL.GpuGrassCrossed", "type": "bool", "default": 0,
+      "label": "@PROCEDURAL.GpuGrassCrossed", "description": "@PROCEDURAL.GpuGrassCrossed.description",
       "page": "advanced", "group": "@group.procedural", "visibility": "file"
     },
     {
@@ -1512,6 +1542,11 @@
       "page": "advanced", "group": "@group.performance", "visibility": "file"
     },
     {
+      "id": "PERFORMANCE.FarFadeOpaque", "type": "bool", "default": 1,
+      "label": "@PERFORMANCE.FarFadeOpaque", "description": "@PERFORMANCE.FarFadeOpaque.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
       "id": "PROCEDURAL.ProceduralConeFullAngle", "type": "float", "default": 75.0, "min": 30.0, "max": 120.0,
       "label": "@PROCEDURAL.ProceduralConeFullAngle",
       "page": "advanced", "group": "@group.procedural", "visibility": "file"
@@ -1622,6 +1657,16 @@
       "page": "advanced", "group": "@group.performance", "visibility": "file"
     },
     {
+      "id": "SHADOWS.CascadesIntoAtlas", "type": "bool", "default": 1,
+      "label": "@SHADOWS.CascadesIntoAtlas", "description": "@SHADOWS.CascadesIntoAtlas.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "SHADOWS.FarCascadesResolution", "type": "int", "default": 2, "min": 1, "max": 4,
+      "label": "@SHADOWS.FarCascadesResolution", "description": "@SHADOWS.FarCascadesResolution.description",
+      "page": "advanced", "group": "@group.performance", "visibility": "file"
+    },
+    {
       "id": "DEBUG.RenderSkipTrace", "type": "bool", "default": 0,
       "label": "@DEBUG.RenderSkipTrace", "description": "@DEBUG.RenderSkipTrace.description",
       "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
@@ -1655,6 +1700,16 @@
       "id": "DEBUG.SkyMoonPass", "type": "bool", "default": 1,
       "label": "@DEBUG.SkyMoonPass",
       "page": "debug", "group": "@group.debug", "visibility": "file", "apply": "restart"
+    },
+    {
+      "id": "DEBUG.MoonLog", "type": "bool", "default": 0,
+      "label": "@DEBUG.MoonLog", "description": "@DEBUG.MoonLog.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
+    },
+    {
+      "id": "DEBUG.MoonOnScreenTest", "type": "bool", "default": 1,
+      "label": "@DEBUG.MoonOnScreenTest", "description": "@DEBUG.MoonOnScreenTest.description",
+      "page": "debug", "group": "@group.debug", "visibility": "file"
     },
     {
       "id": "LIGHTING.SSROcclusionStrength", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0,
@@ -2079,6 +2134,11 @@
     {
       "id": "NIGHTSHADOWS.LampShadowsInDaylight", "type": "bool", "default": 0,
       "label": "@NIGHTSHADOWS.LampShadowsInDaylight", "description": "@NIGHTSHADOWS.LampShadowsInDaylight.description",
+      "page": "advanced", "group": "@group.night shadows", "visibility": "file"
+    },
+    {
+      "id": "NIGHTSHADOWS.CarLightShadowsInDaylight", "type": "bool", "default": 0,
+      "label": "@NIGHTSHADOWS.CarLightShadowsInDaylight", "description": "@NIGHTSHADOWS.CarLightShadowsInDaylight.description",
       "page": "advanced", "group": "@group.night shadows", "visibility": "file"
     },
     {
@@ -2697,7 +2757,7 @@
       "page": "advanced", "group": "@group.reflections", "visibility": "file"
     },
     {
-      "id": "REFLECTIONS.SSRNeighbourFillMinDistance", "type": "float", "default": 3.0, "min": 0.0, "max": 50.0,
+      "id": "REFLECTIONS.SSRNeighbourFillMinDistance", "type": "float", "default": 8.0, "min": 0.0, "max": 50.0,
       "label": "@REFLECTIONS.SSRNeighbourFillMinDistance",
       "page": "advanced", "group": "@group.reflections", "visibility": "file"
     },
@@ -2857,13 +2917,33 @@
       "page": "advanced", "group": "@group.weather", "visibility": "file"
     },
     {
-      "id": "WEATHER.VolumetricCloudsMinLight", "type": "float", "default": 0.25, "min": 0.0, "max": 0.9,
+      "id": "WEATHER.VolumetricCloudsMinLight", "type": "float", "default": 0.1, "min": 0.0, "max": 0.9,
       "label": "@WEATHER.VolumetricCloudsMinLight",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsScatterTail", "type": "bool", "default": 1,
+      "label": "@WEATHER.VolumetricCloudsScatterTail", "description": "@WEATHER.VolumetricCloudsScatterTail.description",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsLightJitter", "type": "bool", "default": 1,
+      "label": "@WEATHER.VolumetricCloudsLightJitter",
       "page": "advanced", "group": "@group.weather", "visibility": "file"
     },
     {
       "id": "WEATHER.VolumetricCloudsSkyMatch", "type": "float", "default": 2.0, "min": 0.0, "max": 20.0,
       "label": "@WEATHER.VolumetricCloudsSkyMatch",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsPerlinWorley", "type": "bool", "default": 1,
+      "label": "@WEATHER.VolumetricCloudsPerlinWorley", "description": "@WEATHER.VolumetricCloudsPerlinWorley.description",
+      "page": "advanced", "group": "@group.weather", "visibility": "file"
+    },
+    {
+      "id": "WEATHER.VolumetricCloudsLumps", "type": "float", "default": 50.0, "min": 0.0, "max": 1000.0,
+      "label": "@WEATHER.VolumetricCloudsLumps",
       "page": "advanced", "group": "@group.weather", "visibility": "file"
     },
     {

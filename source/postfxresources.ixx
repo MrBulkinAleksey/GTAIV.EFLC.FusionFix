@@ -576,10 +576,21 @@ public:
     float fVolumetricCloudsSkyLight = 0.5f;
     // The least of the sun's light any part of a cloud keeps, however deep in its shadow: lighter,
     // airier bases than the light's march alone gives.
-    float fVolumetricCloudsMinLight = 0.25f;
+    float fVolumetricCloudsMinLight = 0.1f;
+    // [WEATHER] VolumetricCloudsScatterTail: the light scattered many times inside a cloud in four octaves at a
+    // fifth of the extinction each (Wrenninge's, as al-ro's clouds have it), which reach deep and fall off
+    // smoothly; 0: three at half each, as before, spent 0.3 of the layer in, with VolumetricCloudsMinLight 0.25.
+    bool bVolumetricCloudsScatterTail = true;
+    // [WEATHER] VolumetricCloudsLightJitter: the steps towards the sun slid per pixel and frame, so a cloud's body
+    // shades smoothly instead of in layers copying its top (Clouds.fx's fLightJitter). Hidden, live.
+    bool bVolumetricCloudsLightJitter = true;
     // The clouds' sunlit side against the sky behind them, in times its brightness.
     float fVolumetricCloudsSkyMatch = 2.0f;
     bool bVolumetricCloudsWeather = true;
+    // [DEBUG] MoonOnScreenTest: the moon pass also needs the box round the moon's centre on the screen (0: only the
+    // centre in front of the camera); MoonLog: each change of that decision to GTAIV.EFLC.FusionFix.Moon.log.
+    bool bMoonOnScreenTest = true;
+    bool bMoonLog = false;
     // [WEATHER] PbrSkyHorizonHue: the Physical Sky takes the timecycle's hue (fPalette of it) down to the horizon, as
     // before; off, only its brightness within 10 degrees of the horizon, and the hue there is the air's own.
     bool bPbrSkyHorizonHue = false;
@@ -637,6 +648,8 @@ public:
     // How far the wind has carried the coverage and the detail, in tiles, and how far the detail
     // has drifted up through itself; summed frame by frame, as the wind changes with the weather.
     double fCloudDrift = 0.0, fCloudDetailDrift = 0.0, fCloudEvolution = 0.0, fCloudLastSeconds = -1.0;
+    // The debug server's freeze: the drift, the evolution and the morph stand still, so two frames can be compared
+    bool bCloudsHeld = false;
     // The coverage map's slow morph (Clouds.fx's Morph): its phase in radians, which moves on by
     // VolumetricCloudsEvolution at 0.03 a second, kept within 10 pi, where both its waves repeat.
     double fCloudMorph = 0.0;
@@ -738,6 +751,14 @@ public:
     uint32_t nCloudAccumFrame = 0; // FrameHistory::Frame() of the accumulation, 0 if none
     IDirect3DVolumeTexture9* CloudDetailTexture = nullptr;
     IDirect3DVolumeTexture9* CloudDetailTex();
+    // [WEATHER] VolumetricCloudsPerlinWorley: the detail volume as Perlin-Worley noise (Perlin lifted by the
+    // Worley billows, as in Horizon Zero Dawn's clouds): billows joined by wisps and ragged plumes instead of
+    // round billows alone. Off, the plain Worley billows. The texture is built again when it changes.
+    bool bVolumetricCloudsPerlinWorley = true;
+    // [WEATHER] VolumetricCloudsLumps: how far, in metres either way, the clouds' outline bulges and dents by
+    // billows, so the sides and tops seen from afar are lumpy rather than smooth (Clouds.fx's fLump). 0: off.
+    float fVolumetricCloudsLumps = 50.0f;
+    bool bCloudDetailPerlinWorley = false; // what CloudDetailTexture was built with
     // Volumetric Clouds in the graphics menu (PREF_VOLUMETRIC_CLOUDS, the same VolumetricClouds key)
     // turns them on and off at once; the game's flat clouds and the cloud shadows follow.
     bool VolumetricCloudsEnabled() const
@@ -918,7 +939,7 @@ public:
     bool bVehicleBoxShadowsBlend = true; // VehicleBoxShadowsBlend, read with the others
     uint32_t nVehicleBoxShadowSlotFadeMs = 600;
     uint32_t nVehicleBoxShadowFadeInMs = 300, nVehicleBoxShadowFadeOutMs = 300, nVehicleBoxShadowSizeFadeMs = 300;
-    float fVehicleBoxShadowsMaxDistance = 200.0f; // metres from the camera to a lamp's light past which it has no boxes
+    float fVehicleBoxShadowsMaxDistance = 150.0f; // metres from the camera to a lamp's light past which it has no boxes
     int32_t nVehicleBoxShadowsPerLamp = 3; // cars a lamp shadows as boxes, up to five; each costs its lit pixels about as much again
     int32_t nVehicleBoxShadowsPerCar = 2;  // lamps that may shadow one car as a box, the strongest on it; 0 any number
     float fVehicleBoxShadowsMinLight = 0.04f; // the least share of a lamp's light at the car, (1 - distance / radius)^2, for a box
@@ -1046,7 +1067,7 @@ public:
     // from past what hid the ray, to tell which one smeared a reflection into copies around it.
     float fSSRNeighbourFill = 0.8f;
     // SSRNeighbourFillMinDistance (m): hits nearer than this along their ray fill no misses around them (0: all do)
-    float fSSRNeighbourFillMinDistance = 3.0f;
+    float fSSRNeighbourFillMinDistance = 8.0f;
     // deferred_lighting draws SSR's colour, the scene's own light, through the game's reflection scale meant for its
     // parabolic map: 10 times globalScalars.w (c39.w, read in BindLightingInputs, 0 until then) times 2 x specular times
     // its Fresnel. On car bodies, whose clean paint takes SSR in full by its gloss, SSR_PS divides that 10 x c39.w back
@@ -2019,6 +2040,8 @@ public:
             IniFlag("NIGHTSHADOWS", "VehicleBoxShadowsLive", &PostFxResource::bVehicleBoxShadowsLive, 0),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsLeadFrames", &PostFxResource::fVehicleBoxShadowLeadFrames, -1.0f, -3.0f, 5.0f),
             IniFlag("DEBUG", "VehicleBoxShadowsLog", &PostFxResource::bVehicleBoxShadowsLog, 0),
+            IniFlag("DEBUG", "MoonOnScreenTest", &PostFxResource::bMoonOnScreenTest, 1),
+            IniFlag("DEBUG", "MoonLog", &PostFxResource::bMoonLog, 0),
             IniFlag("NIGHTSHADOWS", "PedCapsuleShadows", &PostFxResource::bPedCapsuleShadows, 1),
             IniFloat("NIGHTSHADOWS", "PedCapsuleRadius", &PostFxResource::fPedCapsuleRadius, 0.25f, 0.05f, 1.0f),
             IniFloat("NIGHTSHADOWS", "PedCapsuleHeight", &PostFxResource::fPedCapsuleHeight, 1.75f, 0.5f, 3.0f),
@@ -2048,7 +2071,7 @@ public:
             IniInt("NIGHTSHADOWS", "VehicleBoxShadowsPerLamp", &PostFxResource::nVehicleBoxShadowsPerLamp, 3, 1, 5),
             IniInt("NIGHTSHADOWS", "VehicleBoxShadowsPerCar", &PostFxResource::nVehicleBoxShadowsPerCar, 2, 0, 8),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsMinLight", &PostFxResource::fVehicleBoxShadowsMinLight, 0.04f, 0.0f, 1.0f),
-            IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsMaxDistance", &PostFxResource::fVehicleBoxShadowsMaxDistance, 200.0f, 0.0f, 1000.0f),
+            IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsMaxDistance", &PostFxResource::fVehicleBoxShadowsMaxDistance, 150.0f, 0.0f, 1000.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsFollowLight", &PostFxResource::fVehicleBoxShadowFollowLight, 1.0f, 0.0f, 1.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsLowLightNarrow", &PostFxResource::fVehicleBoxShadowLowLightNarrow, 1.0f, 0.2f, 1.0f),
             IniFloat("NIGHTSHADOWS", "VehicleBoxShadowsLowLightHeight", &PostFxResource::fVehicleBoxShadowLowLightHeight, 0.6f, 0.2f, 1.0f),
@@ -2073,7 +2096,7 @@ public:
             IniFloat("REFLECTIONS", "SSRTemporal", &PostFxResource::fSSRTemporalBlend, 0.85f, 0.0f, 0.97f),
             IniFloat("REFLECTIONS", "SSRFallback", &PostFxResource::fSSRFallback, 0.8f, 0.0f, 1.0f),
             IniFloat("REFLECTIONS", "SSRNeighbourFill", &PostFxResource::fSSRNeighbourFill, 0.8f, 0.0f, 1.0f),
-            IniFloat("REFLECTIONS", "SSRNeighbourFillMinDistance", &PostFxResource::fSSRNeighbourFillMinDistance, 3.0f, 0.0f, 50.0f),
+            IniFloat("REFLECTIONS", "SSRNeighbourFillMinDistance", &PostFxResource::fSSRNeighbourFillMinDistance, 8.0f, 0.0f, 50.0f),
             IniFloat("LIGHTING", "GGXSoft", &PostFxResource::fLightsGGXSoft, 0.0f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "GGXStretchView", &PostFxResource::fLightsGGXStretchView, 1.0f, 0.0f, 1.0f),
             IniFloat("LIGHTING", "GGXGlints", &PostFxResource::fLightsGGXGlints, 1.0f, 0.0f, 8.0f),
@@ -2106,9 +2129,13 @@ public:
             IniFloat("WEATHER", "VolumetricCloudsSunTint", &PostFxResource::fVolumetricCloudsSunTint, 0.6f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsMoonlight", &PostFxResource::fVolumetricCloudsMoonlight, 0.2f, 0.0f, 2.0f),
             IniFloat("WEATHER", "VolumetricCloudsSkyLight", &PostFxResource::fVolumetricCloudsSkyLight, 0.5f, 0.0f, 1.0f),
-            IniFloat("WEATHER", "VolumetricCloudsMinLight", &PostFxResource::fVolumetricCloudsMinLight, 0.25f, 0.0f, 0.9f),
+            IniFloat("WEATHER", "VolumetricCloudsMinLight", &PostFxResource::fVolumetricCloudsMinLight, 0.1f, 0.0f, 0.9f),
+            IniFlag("WEATHER", "VolumetricCloudsScatterTail", &PostFxResource::bVolumetricCloudsScatterTail, 1),
+            IniFlag("WEATHER", "VolumetricCloudsLightJitter", &PostFxResource::bVolumetricCloudsLightJitter, 1),
             IniFloat("WEATHER", "VolumetricCloudsSkyMatch", &PostFxResource::fVolumetricCloudsSkyMatch, 2.0f, 0.0f, 20.0f),
             IniFlag("WEATHER", "VolumetricCloudsWeather", &PostFxResource::bVolumetricCloudsWeather, 1),
+            IniFlag("WEATHER", "VolumetricCloudsPerlinWorley", &PostFxResource::bVolumetricCloudsPerlinWorley, 1),
+            IniFloat("WEATHER", "VolumetricCloudsLumps", &PostFxResource::fVolumetricCloudsLumps, 50.0f, 0.0f, 1000.0f),
             IniFlag("WEATHER", "PbrSkyHorizonHue", &PostFxResource::bPbrSkyHorizonHue, 0),
             IniFloat("WEATHER", "VolumetricCloudsVanilla", &PostFxResource::fVolumetricCloudsVanilla, 0.0f, 0.0f, 1.0f),
             IniFloat("WEATHER", "VolumetricCloudsTranslucency", &PostFxResource::fVolumetricCloudsTranslucency, 0.25f, 0.0f, 0.9f),
@@ -2417,14 +2444,20 @@ IDirect3DTexture9* PostFxResource::CloudNoiseTex()
 
 // The volumetric clouds' detail: 64 x 64 x 64, tiling, three octaves of inverted Worley noise
 // (4, 8 and 16 cells a tile), which reads as round billows when it erodes a cloud's edge, in two
-// channels from different points. Managed, so it survives device resets.
+// channels from different points. Managed, so it survives device resets. With
+// VolumetricCloudsPerlinWorley, Perlin-Worley noise in its place (below).
 IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
 {
-    if (CloudDetailTexture)
+    if (CloudDetailTexture && bCloudDetailPerlinWorley == bVolumetricCloudsPerlinWorley)
         return CloudDetailTexture;
     auto pDevice = rage::grcDevice::GetD3DDevice();
     if (!pDevice)
-        return nullptr;
+        return CloudDetailTexture;
+    if (CloudDetailTexture)
+    {
+        CloudDetailTexture->Release();
+        CloudDetailTexture = nullptr;
+    }
 
     constexpr int size = 64;
     auto hash = [](int x, int y, int z, int seed) {
@@ -2475,6 +2508,55 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
         const float minValue = *lo, range = (std::max)(*hi - *lo, 1e-5f);
         for (auto& v : value[channel])
             v = (v - minValue) / range;
+
+        if (!bVolumetricCloudsPerlinWorley)
+            continue;
+        // Perlin-Worley: three octaves of tiling Perlin noise (4, 8 and 16 cells a tile, as the Worley's),
+        // lifted by the Worley billows, remap(perlin, 0, 1, worley, 1): where the Perlin is high the gaps
+        // between billows fill in, so the billows join up into plumes with wisps between them. Then given
+        // the Worley's own spread of values, rank for rank, so the clouds' erosion eats as much as before
+        // and only its shape changes.
+        std::vector<float> lifted(value[channel].size());
+        for (int z = 0; z < size; ++z)
+            for (int y = 0; y < size; ++y)
+                for (int x = 0; x < size; ++x)
+                {
+                    float perlin = 0.0f, amplitude = 1.0f, total = 0.0f;
+                    for (int octave = 0; octave < 3; ++octave, amplitude *= 0.5f)
+                    {
+                        const int cells = cellCounts[octave];
+                        const float cell = static_cast<float>(size) / cells;
+                        const float fx = (x + 0.5f) / cell, fy = (y + 0.5f) / cell, fz = (z + 0.5f) / cell;
+                        const int cx = static_cast<int>(fx), cy = static_cast<int>(fy), cz = static_cast<int>(fz);
+                        const float tx = fx - cx, ty = fy - cy, tz = fz - cz;
+                        // One of the cube's twelve edge directions at each corner.
+                        auto corner = [&](int dx, int dy, int dz) {
+                            static constexpr int8_t kGradients[12][3] = { { 1, 1, 0 }, { -1, 1, 0 }, { 1, -1, 0 }, { -1, -1, 0 },
+                                                                          { 1, 0, 1 }, { -1, 0, 1 }, { 1, 0, -1 }, { -1, 0, -1 },
+                                                                          { 0, 1, 1 }, { 0, -1, 1 }, { 0, 1, -1 }, { 0, -1, -1 } };
+                            const auto& g = kGradients[hash((cx + dx) % cells, (cy + dy) % cells, (cz + dz) % cells, seeds[channel] + 100 + octave) % 12];
+                            return g[0] * (tx - dx) + g[1] * (ty - dy) + g[2] * (tz - dz);
+                        };
+                        auto fade = [](float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); };
+                        auto mix = [](float a, float b, float t) { return a + (b - a) * t; };
+                        const float ux = fade(tx), uy = fade(ty), uz = fade(tz);
+                        const float n = mix(mix(mix(corner(0, 0, 0), corner(1, 0, 0), ux), mix(corner(0, 1, 0), corner(1, 1, 0), ux), uy),
+                                            mix(mix(corner(0, 0, 1), corner(1, 0, 1), ux), mix(corner(0, 1, 1), corner(1, 1, 1), ux), uy), uz);
+                        perlin += amplitude * (0.5f + 0.5f * n);
+                        total += amplitude;
+                    }
+                    perlin = std::clamp(perlin / total, 0.0f, 1.0f);
+                    const size_t i = (z * size + y) * size + x;
+                    lifted[i] = value[channel][i] + perlin * (1.0f - value[channel][i]);
+                }
+        std::vector<float> spread = value[channel];
+        std::sort(spread.begin(), spread.end());
+        std::vector<int> order(lifted.size());
+        for (size_t i = 0; i < order.size(); ++i)
+            order[i] = static_cast<int>(i);
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return lifted[a] < lifted[b]; });
+        for (size_t rank = 0; rank < order.size(); ++rank)
+            value[channel][order[rank]] = spread[rank];
     }
 
     // 16 bits a channel for the same reason as the coverage; 8 where G16R16 volumes are missing.
@@ -2513,6 +2595,7 @@ IDirect3DVolumeTexture9* PostFxResource::CloudDetailTex()
             }
         CloudDetailTexture->UnlockBox(0);
     }
+    bCloudDetailPerlinWorley = bVolumetricCloudsPerlinWorley;
     return CloudDetailTexture;
 }
 
@@ -2582,7 +2665,7 @@ void PostFxResource::UpdateCloudLayer(double seconds)
     // The drift moves on by this frame's time at this frame's wind; across a jump of the clock (a
     // load, a cutscene) it stays where it was.
     double dt = fCloudLastSeconds >= 0.0 ? seconds - fCloudLastSeconds : 0.0;
-    if (dt < 0.0 || dt > 0.25)
+    if (dt < 0.0 || dt > 0.25 || bCloudsHeld)
         dt = 0.0;
     fCloudLastSeconds = seconds;
     const double wind = fCloudShadowsWind * Cloud.wind;

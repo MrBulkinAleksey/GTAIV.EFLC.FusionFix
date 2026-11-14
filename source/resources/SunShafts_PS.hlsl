@@ -212,18 +212,9 @@ float3 SunFlare(float2 uv)
     }
     if (shown <= 0.0f)
         return 0.0f;
-    // Only a sun that stands out as a disc: the frame a twentieth of the height around it against the frame at it.
-    // Through an overcast sheet the sky at the sun is a broad glow, a little brighter there than around it, and with
-    // the exposure up in the rain the flare made of it a star and rings in any weather.
-    float2 ring = float2(0.05f / AspectRatio.x, 0.05f);
-    float3 lumaW = float3(0.2126f, 0.7152f, 0.0722f);
-    float around = 0.25f * (dot(tex2Dlod(HDRSampler, float4(sun + float2(ring.x, 0.0f), 0, 0)).rgb, lumaW)
-                          + dot(tex2Dlod(HDRSampler, float4(sun - float2(ring.x, 0.0f), 0, 0)).rgb, lumaW)
-                          + dot(tex2Dlod(HDRSampler, float4(sun + float2(0.0f, ring.y), 0, 0)).rgb, lumaW)
-                          + dot(tex2Dlod(HDRSampler, float4(sun - float2(0.0f, ring.y), 0, 0)).rgb, lumaW));
-    float atSun = dot(tex2Dlod(HDRSampler, float4(sun, 0, 0)).rgb, lumaW);
-    float disc = smoothstep(0.3f, 0.8f, 1.0f - around / max(atSun, 1e-4f));
-    light *= (1.0f / 9.0f) * onScreen * FlareIntensity * disc;
+    // Under an overcast sheet the flare is out by the weather (FlareIntensity, shaders.ixx): there the sky at the sun
+    // is a broad glow, and with the exposure up in the rain the flare made a star and rings of it
+    light *= (1.0f / 9.0f) * onScreen * FlareIntensity;
     #if USE_HORIZON_FADE
         light *= VolumetricFog == 1.0f ? HorizonFade() : 1.0f;
     #endif

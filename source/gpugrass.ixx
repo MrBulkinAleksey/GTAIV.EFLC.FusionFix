@@ -5,6 +5,7 @@ module;
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <condition_variable>
 #include <cmath>
@@ -21,12 +22,14 @@ module;
 export module gpugrass;
 
 import common;
+import cpuscopes;
 import comvars;
 import d3dx9_43;
 import settings;
 import inireload;
 import framehistory;
 import temporal;
+import renderscale;
 import postfxresources;
 import postfxprofiler;
 import postfxpass;
@@ -59,7 +62,7 @@ using namespace PostFxProfiler;
 // grass between them (kPlantGroundShare). Lawns of the grassy
 // materials (GRASS, SHORT_GRASS, GRASS_PATCHY, GRASS_LONG) whose tag has no props, which the manager gathers for us (GatherGrassSurfaces), grow grass of their own
 // (LookOf). The triangles are cut into pieces of at most kPieceArea square metres
-// when the set changes; each frame the pieces in view within the range take a share of the mesh's kCards cards
+// when the set changes; each frame the pieces in view within the range take a share of the mesh's clumps (GpuGrassClumps)
 // (BladeShare: all up to kDenseRange, half at GpuGrassFullRange, where far cards are fewer and wider, none at
 // GpuGrassRange), and go to the instance buffer: one instanced draw for them all.
 // The blades take a little of their colour from the ground under them: _DEFERRED_GBUFFER_0_ is copied first (into Wet Ground's
@@ -86,12 +89,15 @@ using namespace PostFxProfiler;
 // Their colours: hidden [PROCEDURAL] GpuGrassGreen, GpuGrassTip, GpuGrassDry ("r, g, b", 0..1, live): the greenest
 // patches, the tips, dry blades and patches.
 //
+// [PROCEDURAL] GpuGrassClumps (live, 8..160, kCards by default): clumps per piece of ground (a piece is up to kPieceArea
+// square metres); GpuGrassCrossed (live): 0 each clump a flat card, 1 a cross of two cards, the second turned a quarter at
+// the same root (twice the quads of flat ones: 40 crosses cost what 80 cards do).
 // [PROCEDURAL] GpuGrassRange (100 m; the manager gathers ground that far ahead, less behind: ProceduralGround::GatherAhead), GpuGrassFullRange (22 m), GpuGrassDensity (0.1..1). GpuGrassDebug (Graphics >
 // Debug) colours the blades by their surface's tag. GpuGrassLog = 1 ([DEBUG]) writes the triangles, pieces and blades
 // to GTAIV.EFLC.FusionFix.GpuGrass.log every 600 frames.
 namespace GpuGrass
 {
-    constexpr int kCards = 80;              // per piece of ground
+    constexpr int kCards = 80;              // clumps per piece of ground, GpuGrassClumps' default
     constexpr int kVertsPerCard = 6;        // three pairs up the card
     constexpr int kIndicesPerCard = 12;     // four triangles
     constexpr float kPieceArea = 1.5f;      // square metres: up to 53 cards, some 1300 blades a square metre
@@ -126,17 +132,39 @@ namespace GpuGrass
 
     struct Instance { float corner[4]; float edge1[4]; float edge2[4]; float kinds[4]; };
 
-    // Main thread: the manager's triangles by their record
+    // The manager's triangles by their record, under groundMutex. The main thread only notes each one added or let go
+    // (groundEvents); the render thread puts them into `ground` when it makes the pieces, or the main thread itself
+    // once kGroundEventsMax wait (GPU grass off: nobody takes them). Each one into the map at once cost the main thread
+    // 3% (profile at Firefly Island, 2026-10-28)
     std::mutex groundMutex;
     std::unordered_map<const void*, ProceduralGround::Triangle> ground;
+    struct GroundEvent { const void* key; bool added; ProceduralGround::Triangle triangle; };
+    std::vector<GroundEvent> groundEvents;
+    constexpr size_t kGroundEventsMax = 32768;
     uint32_t groundVersion = 0;
+
+    // groundMutex held
+    void ApplyGroundEvents()
+    {
+        for (const auto& e : groundEvents)
+        {
+            if (e.added)
+                ground[e.key] = e.triangle;
+            else
+                ground.erase(e.key);
+        }
+        groundEvents.clear();
+    }
 
     // Settings
     bool bLog = false;
     bool bHideProps = true;
+    int nClumps = kCards;                   // GpuGrassClumps
+    bool bCrossed = false;                  // GpuGrassCrossed
     float fRange = 100.0f, fFullRange = 22.0f, fDensity = 1.0f;
     float fGroundTint = 0.5f;
-    float green[3] = { 0.30f, 0.38f, 0.11f }, tip[3] = { 0.62f, 0.60f, 0.26f }, dry[3] = { 0.46f, 0.39f, 0.20f };
+    float fUpscalerLodBias = -1.0f;         // [ANTIALIASING] UpscalerLodBias, as texturequality reads it
+    float green[3] = { 0.25f, 0.33f, 0.14f }, tip[3] = { 0.45f, 0.50f, 0.30f }, dry[3] = { 0.38f, 0.36f, 0.25f };
     constexpr float kGroundTintColour[3] = { 0.45f, 0.55f, 0.3f };   // what the ground is multiplied towards
 
     // Render thread
@@ -144,6 +172,12 @@ namespace GpuGrass
     struct Look { float share; float kinds[4]; float tag; };
     struct Piece { float corner[3], edge1[3], edge2[3]; float centre[3]; float radius; float share; float seed; Look look; };
     std::vector<Piece> pieces;
+    // The pieces by kCullCell cells of the world (MakePieces sorts them so): each cell's sphere round its pieces and
+    // their range, so the frame's test leaves out whole cells beyond the range or out of view before their pieces (tens
+    // of thousands, each tested every frame before)
+    constexpr float kCullCell = 16.0f;
+    struct Cell { float centre[3]; float radius; uint32_t first, count; };
+    std::vector<Cell> cells;
     uint32_t piecesVersion = ~0u;
     uint32_t piecesCoversVersion = ~0u;
     std::array<float, 256> tagShare{};
@@ -159,6 +193,9 @@ namespace GpuGrass
     bool effectTried = false;
     IDirect3DVertexBuffer9* meshVB = nullptr;
     IDirect3DIndexBuffer9* meshIB = nullptr;
+    int meshKey = -1;                       // the GpuGrassClumps and GpuGrassCrossed the mesh was made for
+    int meshQuads = kCards;                 // quads in the mesh
+    int meshPlaces = kCards;                // clumps on a piece, a card or a cross each: what a piece's share counts
     IDirect3DVertexBuffer9* instanceVB = nullptr;
     IDirect3DVertexDeclaration9* declaration = nullptr;
     IDirect3DTexture9* cardTexture = nullptr;
@@ -221,8 +258,11 @@ namespace GpuGrass
         fRange = std::clamp(reader.ReadFloat("PROCEDURAL", "GpuGrassRange", 100.0f), 5.0f, 150.0f);
         fFullRange = std::clamp(reader.ReadFloat("PROCEDURAL", "GpuGrassFullRange", 22.0f), 0.0f, fRange - 1.0f);
         bHideProps = reader.ReadInteger("PROCEDURAL", "GpuGrassHideProps", 1) != 0;
+        nClumps = std::clamp(reader.ReadInteger("PROCEDURAL", "GpuGrassClumps", kCards), 8, 160);
+        bCrossed = reader.ReadInteger("PROCEDURAL", "GpuGrassCrossed", 0) != 0;
         fDensity = std::clamp(reader.ReadFloat("PROCEDURAL", "GpuGrassDensity", 1.0f), 0.1f, 1.0f);
         fGroundTint = std::clamp(reader.ReadFloat("PROCEDURAL", "GpuGrassGroundTint", 0.5f), 0.0f, 1.0f);
+        fUpscalerLodBias = std::clamp(reader.ReadFloat("ANTIALIASING", "UpscalerLodBias", -1.0f), -2.0f, 0.0f);
         bLog = reader.ReadInteger("DEBUG", "GpuGrassLog", 0) != 0;
         const auto colour = [&](const char* key, float* rgb, const float* fallback)
         {
@@ -232,7 +272,7 @@ namespace GpuGrass
             for (int k = 0; k < 3; ++k)
                 rgb[k] = read ? std::clamp(v[k], 0.0f, 1.0f) : fallback[k];
         };
-        static constexpr float kGreen[3] = { 0.30f, 0.38f, 0.11f }, kTip[3] = { 0.62f, 0.60f, 0.26f }, kDry[3] = { 0.46f, 0.39f, 0.20f };
+        static constexpr float kGreen[3] = { 0.25f, 0.33f, 0.14f }, kTip[3] = { 0.45f, 0.50f, 0.30f }, kDry[3] = { 0.38f, 0.36f, 0.25f };
         colour("GpuGrassGreen", green, kGreen);
         colour("GpuGrassTip", tip, kTip);
         colour("GpuGrassDry", dry, kDry);
@@ -486,9 +526,43 @@ namespace GpuGrass
         std::vector<ProceduralGround::Cover> covers;
         float camera[3] = {};
         std::vector<Piece> pieces;
+        std::vector<Cell> cells;
         std::vector<float> edgeField;
         float edgeOrigin[2] = {};
     };
+
+    // build.pieces sorted by their kCullCell cell, and the cells round them
+    void MakeCells(Build& build)
+    {
+        auto& list = build.pieces;
+        const auto cellOf = [](const Piece& p)
+        {
+            return uint64_t(uint32_t(int32_t(std::floor(p.centre[0] / kCullCell)))) << 32 | uint32_t(int32_t(std::floor(p.centre[1] / kCullCell)));
+        };
+        std::sort(list.begin(), list.end(), [&](const Piece& a, const Piece& b) { return cellOf(a) < cellOf(b); });
+        build.cells.clear();
+        for (size_t first = 0; first < list.size();)
+        {
+            const uint64_t key = cellOf(list[first]);
+            size_t end = first;
+            float low[3] = { 1e30f, 1e30f, 1e30f }, high[3] = { -1e30f, -1e30f, -1e30f };
+            for (; end < list.size() && cellOf(list[end]) == key; ++end)
+                for (int k = 0; k < 3; ++k)
+                {
+                    low[k] = std::min(low[k], list[end].centre[k]);
+                    high[k] = std::max(high[k], list[end].centre[k]);
+                }
+            Cell cell{ { (low[0] + high[0]) * 0.5f, (low[1] + high[1]) * 0.5f, (low[2] + high[2]) * 0.5f }, 0.0f, uint32_t(first), uint32_t(end - first) };
+            for (size_t i = first; i < end; ++i)
+            {
+                const auto& c = list[i].centre;
+                const float dx = c[0] - cell.centre[0], dy = c[1] - cell.centre[1], dz = c[2] - cell.centre[2];
+                cell.radius = std::max(cell.radius, std::sqrt(dx * dx + dy * dy + dz * dz) + list[i].radius);
+            }
+            build.cells.push_back(cell);
+            first = end;
+        }
+    }
 
     // The pieces of `build.grassy` and the edge field round `build.camera`
     void MakePieces(Build& build)
@@ -594,6 +668,7 @@ namespace GpuGrass
             }
         build.edgeOrigin[0] = originX;
         build.edgeOrigin[1] = originY;
+        MakeCells(build);
     }
 
     // The builder's thread: one Build at a time, handed over and taken back under its mutex
@@ -628,6 +703,7 @@ namespace GpuGrass
         if (busy && done)
         {
             pieces.swap(build.pieces);
+            cells.swap(build.cells);
             edgeField.swap(build.edgeField);
             edgeOrigin[0] = build.edgeOrigin[0];
             edgeOrigin[1] = build.edgeOrigin[1];
@@ -640,6 +716,7 @@ namespace GpuGrass
             return;
         {
             std::lock_guard groundLock(groundMutex);
+            ApplyGroundEvents();
             const uint32_t coversVersion = ProceduralGround::CoversVersion();
             if (piecesVersion == groundVersion && piecesCoversVersion == coversVersion)
                 return;
@@ -725,8 +802,9 @@ namespace GpuGrass
     // and fine, sparser and longer), one of weeds and broad leaves, one of grass with a few flowers. Not colours: each
     // texel holds its blade's shade (r: 0..0.9, flower heads 1), how far up the blade (g), where across it (b, 0..1),
     // coverage (a). The mips are averaged, then their coverage scaled so as many texels pass the shader's clip at a
-    // half as at the full size: averaged alone, thin blades faded away with distance.
-    constexpr int kCardColumn = 256, kCardHeight = 512, kCardColumns = 4, kCardMips = 7;
+    // half as at the full size: averaged alone, thin blades faded away with distance. 512 × 1024 a clump: a card near the
+    // camera covers hundreds of pixels, and at 256 × 512 its blades were wide straight-sided triangles there.
+    constexpr int kCardColumn = 512, kCardHeight = 1024, kCardColumns = 4, kCardMips = 8;
 
     bool MakeCardTexture(IDirect3DDevice9* real)
     {
@@ -735,7 +813,9 @@ namespace GpuGrass
         uint32_t state = 0x2545F491u;
         const auto next = [&]() { state ^= state << 13; state ^= state >> 17; state ^= state << 5; return (state & 0xFFFFFF) / float(0x1000000); };
         // One blade: its root across the column (0..1), height (0..1 of the card), how far its tip goes across, its
-        // width at the root (texels), its shade; leaves widest in the middle
+        // width at the root (texels), its shade; leaves widest in the middle. A blade of grass keeps nearly its width
+        // most of the way up, then narrows to its point along curved sides, as a real one does (a straight taper from
+        // the root made each blade a long triangle)
         const auto blade = [&](int column, float root, float height, float lean, float rootWidth, float shade, bool leaf)
         {
             const int rows = (std::max)(int(height * kCardHeight), 2);
@@ -743,13 +823,14 @@ namespace GpuGrass
             {
                 const float t = float(row) / float(rows - 1);
                 const float centre = (root + lean * std::pow(t, 1.6f)) * kCardColumn;
+                const float point = t < 0.55f ? 1.0f : 1.0f - std::pow((t - 0.55f) / 0.45f, 1.6f);
                 const float half = 0.5f * (leaf ? rootWidth * (0.25f + std::sin(t * 3.1415927f) * 0.9f) * (1.0f - t * 0.5f)
-                                                : rootWidth * std::pow(1.0f - t, 0.7f) + 0.35f);
+                                                : rootWidth * (1.0f - 0.2f * t) * point + 0.3f);
                 const int y = kCardHeight - 1 - row;
                 for (int x = int(std::floor(centre - half - 1.0f)); x <= int(std::ceil(centre + half + 1.0f)); ++x)
                 {
-                    // Blades stay three texels clear of the column's sides, which the filter would carry over
-                    if (x < 3 || x >= kCardColumn - 3)
+                    // Blades stay six texels clear of the column's sides, which the filter would carry over
+                    if (x < 6 || x >= kCardColumn - 6)
                         continue;
                     const float offset = float(x) + 0.5f - centre;
                     const float cover = std::clamp(half + 0.5f - std::abs(offset), 0.0f, 1.0f);
@@ -779,21 +860,22 @@ namespace GpuGrass
                 blade(column, root, height, tipAt - root, rootWidth * (0.75f + 0.5f * next()), next() * 0.9f, leaves);
             }
         };
-        clump(0, 46, 0.45f, 0.9f, 5.0f, false);
-        clump(1, 30, 0.6f, 1.3f, 6.0f, false);
-        clump(2, 9, 0.5f, 1.4f, 26.0f, true);
-        clump(2, 10, 0.4f, 1.0f, 6.0f, false);
-        clump(3, 32, 0.4f, 0.9f, 5.0f, false);
+        // Widths in texels of the 512 column: blades about a third thinner than at 256 and more of them
+        clump(0, 70, 0.45f, 0.9f, 7.0f, false);
+        clump(1, 46, 0.6f, 1.3f, 8.0f, false);
+        clump(2, 9, 0.5f, 1.4f, 52.0f, true);
+        clump(2, 15, 0.4f, 1.0f, 8.0f, false);
+        clump(3, 48, 0.4f, 0.9f, 7.0f, false);
         // Flowers: a thin stalk, its head a disc at the top (shade 1)
         for (int i = 0; i < 4; ++i)
         {
             const float root = 0.15f + 0.7f * next(), height = 0.82f + 0.15f * next(), lean = (next() - 0.5f) * 0.2f;
-            blade(3, root, height, lean, 2.5f, 0.5f, false);
-            const float cx = (root + lean) * kCardColumn, cy = float(kCardHeight) * (1.0f - height), radius = 6.0f + 3.0f * next();
+            blade(3, root, height, lean, 4.0f, 0.5f, false);
+            const float cx = (root + lean) * kCardColumn, cy = float(kCardHeight) * (1.0f - height), radius = 12.0f + 6.0f * next();
             for (int y = int(cy - radius - 1.0f); y <= int(cy + radius + 1.0f); ++y)
                 for (int x = int(cx - radius - 1.0f); x <= int(cx + radius + 1.0f); ++x)
                 {
-                    if (x < 3 || x >= kCardColumn - 3 || y < 1 || y >= kCardHeight)
+                    if (x < 6 || x >= kCardColumn - 6 || y < 1 || y >= kCardHeight)
                         continue;
                     const float d = std::sqrt((float(x) + 0.5f - cx) * (float(x) + 0.5f - cx) + (float(y) + 0.5f - cy) * (float(y) + 0.5f - cy) * 1.6f);
                     const float cover = std::clamp(radius + 0.5f - d, 0.0f, 1.0f);
@@ -945,37 +1027,51 @@ namespace GpuGrass
             if (FAILED(real->CreateVertexDeclaration(elements, &declaration)))
                 return false;
         }
+        // GpuGrassClumps or GpuGrassCrossed changed (live): the mesh made again
+        if (const int key = nClumps * 2 + (bCrossed ? 1 : 0); meshKey != key)
+        {
+            SAFE_RELEASE(meshVB);
+            SAFE_RELEASE(meshIB);
+            meshKey = key;
+            meshPlaces = nClumps;
+            meshQuads = nClumps * (bCrossed ? 2 : 1);
+        }
         if (!meshVB)
         {
-            // kCards cards, each at its own random place on the piece, turned and sized at random; the order is
-            // random too, so a piece keeping its first cards keeps them spread over it
-            if (FAILED(real->CreateVertexBuffer(kCards * kVertsPerCard * sizeof(MeshVertex), D3DUSAGE_WRITEONLY, 0, D3DPOOL_MANAGED, &meshVB, nullptr)))
+            // meshPlaces places, each at its own random spot on the piece, turned and sized at random, a card there or a
+            // cross of two (the second turned a quarter and mirrored, the same root, kind and share, so they come and go
+            // together; each leans its own way); the order is random too, so a piece keeping its first places keeps them
+            // spread over it
+            if (FAILED(real->CreateVertexBuffer(meshQuads * kVertsPerCard * sizeof(MeshVertex), D3DUSAGE_WRITEONLY, 0, D3DPOOL_MANAGED, &meshVB, nullptr)))
                 return false;
             MeshVertex* v = nullptr;
             if (FAILED(meshVB->Lock(0, 0, reinterpret_cast<void**>(&v), 0)))
                 return false;
             uint32_t state = 0x9E3779B9u;
             const auto next = [&]() { state ^= state << 13; state ^= state >> 17; state ^= state << 5; return (state & 0xFFFFFF) / float(0x1000000); };
-            for (int b = 0; b < kCards; ++b)
+            const int perPlace = meshQuads / meshPlaces;
+            for (int b = 0; b < meshPlaces; ++b)
             {
                 const float u = next(), w = next(), turn = next() * 6.2831853f, height = next(), random = next();
-                const float place = (b + 0.5f) / kCards;
+                const float place = (b + 0.5f) / meshPlaces;
                 // A row in the middle, so the wind bends the card
                 static constexpr float kUp[kVertsPerCard] = { 0.0f, 0.0f, 0.5f, 0.5f, 1.0f, 1.0f };
                 static constexpr float kAcross[kVertsPerCard] = { -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f };
-                for (int k = 0; k < kVertsPerCard; ++k)
-                    v[b * kVertsPerCard + k] = { { u, w, turn, height }, { kUp[k], kAcross[k], place, random } };
+                for (int q = 0; q < perPlace; ++q)
+                    for (int k = 0; k < kVertsPerCard; ++k)
+                        v[(b * perPlace + q) * kVertsPerCard + k] = { { u, w, turn + q * 1.5707963f, height },
+                                                                       { kUp[k], q ? -kAcross[k] : kAcross[k], place, random } };
             }
             meshVB->Unlock();
         }
         if (!meshIB)
         {
-            if (FAILED(real->CreateIndexBuffer(kCards * kIndicesPerCard * sizeof(uint16_t), D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_MANAGED, &meshIB, nullptr)))
+            if (FAILED(real->CreateIndexBuffer(meshQuads * kIndicesPerCard * sizeof(uint16_t), D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_MANAGED, &meshIB, nullptr)))
                 return false;
             uint16_t* i = nullptr;
             if (FAILED(meshIB->Lock(0, 0, reinterpret_cast<void**>(&i), 0)))
                 return false;
-            for (int b = 0; b < kCards; ++b)
+            for (int b = 0; b < meshQuads; ++b)
             {
                 const uint16_t o = uint16_t(b * kVertsPerCard);
                 uint16_t list[kIndicesPerCard];
@@ -1138,15 +1234,20 @@ export namespace GpuGrass
     }
 
     // The instances of this frame with `technique`: the ground's colour copy on s0 (or none), the cards' texture on s7,
-    // the trample grid on the vertex sampler s1, the edges on s2; the samplers and the streams' frequencies put back
+    // the trample grid on the vertex sampler s1, the edges on s2; the samplers and the streams' frequencies put back.
+    // The cards anisotropic, with the render scale's mip bias as the game's textures get it (texturequality): cards
+    // stand upright and are seen from above, so a linear mip picked by their squeezed height blurred the blades
+    // across, and the coverage kept on the coarse mip made each one a wide leaf, the more so the lower the resolution
     void DrawBlades(IDirect3DDevice9* pDevice, D3DXHANDLE technique, IDirect3DBaseTexture9* ground, int count)
     {
         static constexpr D3DSAMPLERSTATETYPE kSamplerStates[] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER,
-                                                                  D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE };
-        static constexpr DWORD kSamplerValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, FALSE };
-        static constexpr DWORD kTrampleValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE };
-        static constexpr DWORD kEdgeValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE };
-        static constexpr DWORD kCardValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_LINEAR, FALSE };
+                                                                  D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE, D3DSAMP_MAXANISOTROPY, D3DSAMP_MIPMAPLODBIAS };
+        static constexpr DWORD kSamplerValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_NONE, FALSE, 1, 0 };
+        static constexpr DWORD kTrampleValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE, 1, 0 };
+        static constexpr DWORD kEdgeValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_LINEAR, D3DTEXF_NONE, FALSE, 1, 0 };
+        const float cardBias = (std::min)(std::log2(RenderScale::GetScale()) + (RenderScale::IsUpscalerAntialiasing() ? fUpscalerLodBias : 0.0f), 0.0f);
+        const DWORD cardValues[] = { D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP, D3DTEXF_LINEAR, D3DTEXF_ANISOTROPIC, D3DTEXF_LINEAR, FALSE, 16,
+                                      std::bit_cast<DWORD>(cardBias) };
         static constexpr DWORD kSamplers[4] = { 0, D3DVERTEXTEXTURESAMPLER1, D3DVERTEXTEXTURESAMPLER2, 7 };
         IDirect3DBaseTexture9* oldTexture[4] = {};
         DWORD oldSampler[4][std::size(kSamplerStates)] = {};
@@ -1176,12 +1277,12 @@ export namespace GpuGrass
         SetTextureBoth(pDevice, 7, cardTexture);
         for (size_t i = 0; i < std::size(kSamplerStates); ++i)
         {
-            SetSamplerStateBoth(pDevice, 7, kSamplerStates[i], kCardValues[i]);
+            SetSamplerStateBoth(pDevice, 7, kSamplerStates[i], cardValues[i]);
             SetSamplerStateBoth(pDevice, 0, kSamplerStates[i], kSamplerValues[i]);
             SetSamplerStateBoth(pDevice, D3DVERTEXTEXTURESAMPLER1, kSamplerStates[i], kTrampleValues[i]);
             SetSamplerStateBoth(pDevice, D3DVERTEXTEXTURESAMPLER2, kSamplerStates[i], kEdgeValues[i]);
         }
-        pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, kCards * kVertsPerCard, 0, kCards * kIndicesPerCard / 3);
+        pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, meshQuads * kVertsPerCard, 0, meshQuads * kIndicesPerCard / 3);
         effect->EndPass();
         effect->End();
 
@@ -1202,6 +1303,8 @@ export namespace GpuGrass
     // the G-buffer.
     void Render(IDirect3DDevice9* pDevice)
     {
+        static const CpuScopes::Id kCpuScope("GpuGrass.Render");
+        CpuScopes::Scope cpuScope(kCpuScope);
         static auto pref = FusionFixSettings.GetRef("PREF_GPU_GRASS");
         static auto debugPref = FusionFixSettings.GetRef("PREF_GPU_GRASS_DEBUG");
         // GpuGrassLog: the last 600 frames, with how the last one went
@@ -1210,7 +1313,7 @@ export namespace GpuGrass
             size_t held;
             {
                 std::lock_guard lock(groundMutex);
-                held = ground.size();
+                held = ground.size() + groundEvents.size();
             }
             FusionLog::Write("GpuGrass", "Stats", "%zu triangles held, %zu grassy, %zu pieces; per frame: %.0f pieces drawn, %.0f cards, CPU %.3f ms; last: %s\n",
                 held, logGrassTriangles, pieces.size(), double(logInstances) / logFrames, double(logBlades) / logFrames, logCpuMs / logFrames, status);
@@ -1267,26 +1370,39 @@ export namespace GpuGrass
             return void(status = "instance buffer lock failed");
         int count = 0;
         double blades = 0.0;
-        for (const auto& p : pieces)
+        // Within the range and in view, a sphere round `centre`
+        const auto seen = [&](const float* centre, float radius, float& distance)
         {
-            const float dx = p.centre[0] - eye[0], dy = p.centre[1] - eye[1], dz = p.centre[2] - eye[2];
-            const float distance = std::sqrt(dx * dx + dy * dy + dz * dz) - p.radius;
+            const float dx = centre[0] - eye[0], dy = centre[1] - eye[1], dz = centre[2] - eye[2];
+            distance = std::sqrt(dx * dx + dy * dy + dz * dz) - radius;
             if (distance > fRange)
+                return false;
+            for (int i = 0; i < 5; ++i)
+                if (planes[i][0] * centre[0] + planes[i][1] * centre[1] + planes[i][2] * centre[2] + planes[i][3] < -radius * planeLength[i])
+                    return false;
+            return true;
+        };
+        for (size_t c = 0; c < cells.size() && count < kMaxInstances; ++c)
+        {
+            float cellDistance;
+            if (!seen(cells[c].centre, cells[c].radius, cellDistance))
                 continue;
-            bool inside = true;
-            for (int i = 0; i < 5 && inside; ++i)
-                inside = planes[i][0] * p.centre[0] + planes[i][1] * p.centre[1] + planes[i][2] * p.centre[2] + planes[i][3] >= -p.radius * planeLength[i];
-            if (!inside)
-                continue;
-            const float share = p.share * fDensity * BladeShare(distance);
-            if (share * kCards < 0.5f)
-                continue;
-            const auto& k = p.look.kinds;
-            out[count] = { { p.corner[0], p.corner[1], p.corner[2], p.seed }, { p.edge1[0], p.edge1[1], p.edge1[2], share },
-                           { p.edge2[0], p.edge2[1], p.edge2[2], p.look.tag }, { k[0], k[1], RiseScale(distance, p.share * fDensity), k[3] } };
-            blades += share * kCards;
-            if (++count >= kMaxInstances)
-                break;
+            for (uint32_t i = cells[c].first, end = cells[c].first + cells[c].count; i < end; ++i)
+            {
+                const auto& p = pieces[i];
+                float distance;
+                if (!seen(p.centre, p.radius, distance))
+                    continue;
+                const float share = p.share * fDensity * BladeShare(distance);
+                if (share * meshPlaces < 0.5f)
+                    continue;
+                const auto& k = p.look.kinds;
+                out[count] = { { p.corner[0], p.corner[1], p.corner[2], p.seed }, { p.edge1[0], p.edge1[1], p.edge1[2], share },
+                               { p.edge2[0], p.edge2[1], p.edge2[2], p.look.tag }, { k[0], k[1], RiseScale(distance, p.share * fDensity), k[3] } };
+                blades += share * meshQuads;
+                if (++count >= kMaxInstances)
+                    break;
+            }
         }
         instanceVB->Unlock();
         if (bLog)
@@ -1542,8 +1658,10 @@ public:
         ProceduralGround::OnAdded = [](const void* key, const ProceduralGround::Triangle& triangle)
         {
             std::lock_guard lock(GpuGrass::groundMutex);
-            GpuGrass::ground[key] = triangle;
+            GpuGrass::groundEvents.push_back({ key, true, triangle });
             ++GpuGrass::groundVersion;
+            if (GpuGrass::groundEvents.size() >= GpuGrass::kGroundEventsMax)
+                GpuGrass::ApplyGroundEvents();
         };
         ProceduralGround::GatherGrassSurfaces = true;
         ProceduralGround::HideGrass = [](uint16_t model, float distance, float keep)
@@ -1558,8 +1676,10 @@ public:
         ProceduralGround::OnRemoved = [](const void* key)
         {
             std::lock_guard lock(GpuGrass::groundMutex);
-            if (GpuGrass::ground.erase(key))
-                ++GpuGrass::groundVersion;
+            GpuGrass::groundEvents.push_back({ key, false, {} });
+            ++GpuGrass::groundVersion;
+            if (GpuGrass::groundEvents.size() >= GpuGrass::kGroundEventsMax)
+                GpuGrass::ApplyGroundEvents();
         };
     }
 } GpuGrassInit;

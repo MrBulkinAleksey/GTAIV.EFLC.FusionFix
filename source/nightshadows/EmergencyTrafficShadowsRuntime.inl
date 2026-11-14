@@ -115,9 +115,23 @@ namespace EmergencyTrafficShadows
         }
 
         // CE 1.9: a page the working set reports valid needs no VirtualQuery; the rest still use it.
+        // Each of those is a system call (under Wine with a debug line as well), several for every signal's light and
+        // every pool free: 9% of the main thread at Firefly Island (profile 2026-10-28). A page found readable is taken
+        // as readable for the rest of the frame, by its slot of a small table per thread.
         static bool Readable(uintptr_t address, size_t size) noexcept
         {
-            return traffic_signal::fresh_page::Readable(address, size, EmergencyTrafficShadows::Readable);
+            struct Seen { uintptr_t page; uint32_t frame; };
+            static thread_local Seen seen[64]{};
+            const uintptr_t page = address >> 12;
+            const bool onePage = address >= 0x10000 && size && address <= UINTPTR_MAX - size && page == (address + size - 1) >> 12;
+            const uint32_t frame = Frame();
+            auto& slot = seen[page & 63];
+            if (onePage && slot.page == page && slot.frame == frame)
+                return true;
+            const bool readable = traffic_signal::fresh_page::Readable(address, size, EmergencyTrafficShadows::Readable);
+            if (readable && onePage)
+                slot = { page, frame };
+            return readable;
         }
 
         struct Match { traffic_signal::Identity identity; uint32_t kind; };

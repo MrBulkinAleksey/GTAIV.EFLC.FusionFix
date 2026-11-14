@@ -20,6 +20,8 @@ namespace NightShadowAdmission
         admissionHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
         {
             static auto extra = FusionFixSettings.GetRef("PREF_EXTRANIGHTSHADOWS");
+            if ((regs.eax & rage::LF_VEHICLE) && CarLightShadowsOffBySun())
+                return_to(skip);
             if (extra->get())
             {
                 if ((regs.eax & 6) != 0) return;

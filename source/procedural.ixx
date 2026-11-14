@@ -17,6 +17,7 @@ module;
 export module procedural;
 
 import common;
+import cpuscopes;
 import comvars;
 import settings;
 import inireload;
@@ -78,6 +79,11 @@ import entityclass;
 //    price of a draw, 5-9 us each for the posts, some 1.5 ms of a 6 ms G-buffer looking over a park.
 //    Taken where the entity goes into the phases' lists (CE 0xae43a0): the render lists' hooks above miss most
 //    objects (a log: CJ_MH_CP_POST1 kept 30 cascade draws a frame 75 m out).
+//  - FarFadeOpaque ([PERFORMANCE]): the same entities that FarFadeCull keeps in that fade are given their whole alpha
+//    (255) where the fade loop writes it (CE 0xae7d46), so they draw as they do nearer and leave at their own point. An object with
+//    fragments (a bench, a street lamp) under 255 is drawn by the game in the forward pass with blending, every part,
+//    not in the G-buffer: at night six benches 150 m out took 310 draws there, Far Prop Instancing never saw them
+//    (a test with the fade loop's write at CE 0xae7d46 made 255: the forward pass's props went from 557 draws to 29).
 //  - ProceduralGroundCovers: grass that runs on under a road or a pavement grows no props there, nor GPU grass
 //    (Procedural::UnderCover).
 //
@@ -156,6 +162,7 @@ namespace Procedural
     bool bSmallFarCull = true;
     bool bHeavyPropCull = true;
     bool bFarFadeCull = true;
+    bool bFarFadeOpaque = true;
     constexpr float kFadeCullRadius = 8.0f;        // entities under this radius
     constexpr float kFadeCullFrom = 50.0f;         // further than this
     constexpr uint32_t kFadeCullAlpha = 128;       // leave once their fade's alpha is under their share of this
@@ -287,7 +294,83 @@ namespace Procedural
     // The props that are out, for the render lists, with their model's radius and the share of the way past
     // SmallFarThinFrom they keep being drawn at (from the hash of their place)
     struct PropInfo { float radius; float keep; };
-    std::unordered_map<uintptr_t, PropInfo> props;
+    // By entity, open addressing (linear probing, at most half full): the render lists ask for every prop of every
+    // list, tens of thousands a frame, and an unordered_map's node was a cache miss each (2.6% of the main thread,
+    // profile at Firefly Island 2026-10-28)
+    struct PropTable
+    {
+        struct Slot { uintptr_t entity; PropInfo info; };
+        std::vector<Slot> slots = std::vector<Slot>(size_t(1) << 16);
+        size_t count = 0;
+
+        size_t Mask() const { return slots.size() - 1; }
+        size_t Home(uintptr_t entity) const
+        {
+            uint32_t h = uint32_t(entity >> 4) * 0x9E3779B1u;
+            return (h ^ (h >> 16)) & Mask();
+        }
+        const PropInfo* Find(uintptr_t entity) const
+        {
+            for (size_t i = Home(entity);; i = (i + 1) & Mask())
+            {
+                if (slots[i].entity == entity)
+                    return &slots[i].info;
+                if (!slots[i].entity)
+                    return nullptr;
+            }
+        }
+        void Set(uintptr_t entity, PropInfo info)
+        {
+            if ((count + 1) * 2 > slots.size())
+                Grow();
+            for (size_t i = Home(entity);; i = (i + 1) & Mask())
+            {
+                if (slots[i].entity == entity)
+                    return void(slots[i].info = info);
+                if (!slots[i].entity)
+                {
+                    slots[i] = { entity, info };
+                    ++count;
+                    return;
+                }
+            }
+        }
+        void Erase(uintptr_t entity)
+        {
+            size_t hole = Home(entity);
+            for (; slots[hole].entity != entity; hole = (hole + 1) & Mask())
+                if (!slots[hole].entity)
+                    return;
+            // The run after it moves back into the hole where its home lets it, so no lookup stops short at a gap
+            for (size_t j = (hole + 1) & Mask(); slots[j].entity; j = (j + 1) & Mask())
+            {
+                const size_t home = Home(slots[j].entity);
+                const bool between = hole <= j ? (home > hole && home <= j) : (home > hole || home <= j);
+                if (!between)
+                {
+                    slots[hole] = slots[j];
+                    hole = j;
+                }
+            }
+            slots[hole] = {};
+            --count;
+        }
+        void Clear()
+        {
+            std::fill(slots.begin(), slots.end(), Slot{});
+            count = 0;
+        }
+        void Grow()
+        {
+            auto old = std::move(slots);
+            slots.assign(old.size() * 2, Slot{});
+            count = 0;
+            for (const auto& s : old)
+                if (s.entity)
+                    Set(s.entity, s.info);
+        }
+    };
+    PropTable props;
     SRWLOCK propsLock = SRWLOCK_INIT;
     uintptr_t modelInfos = 0;           // CE 0x1295cd8, model infos by index
 
@@ -295,8 +378,8 @@ namespace Procedural
     PropInfo FindProp(uintptr_t entity)
     {
         AcquireSRWLockShared(&propsLock);
-        auto it = props.find(entity);
-        PropInfo info = it != props.end() ? it->second : PropInfo{ -1.0f, 0.0f };
+        const auto found = props.Find(entity);
+        PropInfo info = found ? *found : PropInfo{ -1.0f, 0.0f };
         ReleaseSRWLockShared(&propsLock);
         return info;
     }
@@ -316,6 +399,12 @@ namespace Procedural
     float fConeTurnLead = 0.3f;             // seconds
     constexpr size_t ParkedLimit = 65536;   // positions kept at most, past it new ones are made at once
     std::vector<uint8_t> parked;
+    // A share of the parked positions asked each update whether they are wanted again, all of them over
+    // ParkedWalkUpdates: they are all more than ProceduralConeBack behind, and a turning camera is led by
+    // ProceduralConeTurnLead, so a few frames later doesn't show; asking all of them every frame (tens of thousands,
+    // copied into a new store each time) cost as much as ReleaseOutsideCone did
+    constexpr size_t ParkedWalkUpdates = 4;
+    size_t parkedCursor = 0;
 
     // The cone of one pass over the queue
     struct Cone
@@ -330,6 +419,8 @@ namespace Procedural
 
     void UpdateCone()
     {
+        static const CpuScopes::Id kCpuScope("Procedural.UpdateCone");
+        CpuScopes::Scope cpuScope(kCpuScope);
         cone.active = cone.turning = false;
         if (fConeBack <= 0.0f || !pCamera)
             return;
@@ -418,9 +509,26 @@ namespace Procedural
     bool bConeRelease = true;
     constexpr float ReleaseSlack = 25.0f;
     constexpr uint32_t ReleasesPerUpdate = 256;
-    struct MadeFrom { uint8_t entry[QueueEntrySize]; };
-    std::unordered_map<uint8_t*, MadeFrom> madeFrom;
+    // Dense, so ReleaseOutsideCone's walk reads one array (it was the nodes of an unordered_map, a cache miss each);
+    // a removed one's place is taken by the last, its index kept by record in madeAt
+    struct Made
+    {
+        uint8_t* record;
+        uint8_t entry[QueueEntrySize];
+    };
+    std::vector<Made> made;
+    std::unordered_map<uint8_t*, uint32_t> madeAt;
+    size_t madeCursor = 0;                  // where ReleaseOutsideCone's next share starts
+    // Made since ReleaseOutsideCone last ran, looked at all of them there: grass props near the camera the game made in
+    // spite of GPU grass stood for up to ConeWalkUpdates updates before the share came to them, and blinked
+    std::vector<uint8_t*> madeFresh;
     uint32_t nConeReleased = 0;
+
+    Made* FindMade(uint8_t* record)
+    {
+        auto it = madeAt.find(record);
+        return it == madeAt.end() ? nullptr : &made[it->second];
+    }
 
     // ProceduralGroundCovers (below): on, and the covers' version; the props made from the queue by the cell of their
     // entry, so new covers find those under them without a walk of them all
@@ -434,10 +542,11 @@ namespace Procedural
 
     void ForgetMade(uint8_t* record)
     {
-        auto it = madeFrom.find(record);
-        if (it == madeFrom.end())
+        auto it = madeAt.find(record);
+        if (it == madeAt.end())
             return;
-        if (auto cell = madeCells.find(CoverCellAt((const float*)it->second.entry)); cell != madeCells.end())
+        const uint32_t index = it->second;
+        if (auto cell = madeCells.find(CoverCellAt((const float*)made[index].entry)); cell != madeCells.end())
         {
             auto& records = cell->second;
             if (auto at = std::find(records.begin(), records.end(), record); at != records.end())
@@ -448,13 +557,22 @@ namespace Procedural
             if (records.empty())
                 madeCells.erase(cell);
         }
-        madeFrom.erase(it);
+        madeAt.erase(it);
+        if (index + 1 != made.size())
+        {
+            made[index] = made.back();
+            madeAt[made[index].record] = index;
+        }
+        made.pop_back();
     }
 
     void ForgetAllMade()
     {
-        madeFrom.clear();
+        made.clear();
+        madeAt.clear();
         madeCells.clear();
+        madeCursor = 0;
+        madeFresh.clear();
     }
 
     // Statistics for the log
@@ -462,7 +580,7 @@ namespace Procedural
     uint32_t nCandidatesCapped = 0, nEntitiesCapped = 0;
     uint32_t nQueueMax = 0, nWaitingMax = 0, nDropped = 0;
     uint32_t nGrassHidden = 0;
-    uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0, nHeavyCascades = 0, nHeavyScene = 0, nFadeCulled = 0;
+    uint32_t nReflectionsSkipped = 0, nSmallFarCulled = 0, nHeavyCascades = 0, nHeavyScene = 0, nFadeCulled = 0, nFadeOpaque = 0;
     uint32_t nConeFull = 0, nParkedNow = 0;
     uint32_t nUpdates = 0;
     double fUpdateMs = 0.0, fUpdateMaxMs = 0.0;
@@ -511,12 +629,13 @@ namespace Procedural
         nCarried = 0;
         waiting.clear();
         parked.clear();
+        parkedCursor = 0;
         ForgetAllMade();
         coneLastTime = 0;
         queuedAt.clear();
         Trace(std::format("I {} generator init, records {}", When(), Records()));
         AcquireSRWLockExclusive(&propsLock);
-        props.clear();
+        props.Clear();
         ReleaseSRWLockExclusive(&propsLock);
         auto extra = Records() - VanillaRecords;
         if (extra && ListPush)
@@ -633,6 +752,7 @@ namespace Procedural
         bSmallFarCull = reader.ReadInteger("PROCEDURAL", "ProceduralSmallFarCull", 1) != 0;
         bHeavyPropCull = reader.ReadInteger("PERFORMANCE", "HeavyPropCull", 1) != 0;
         bFarFadeCull = reader.ReadInteger("PERFORMANCE", "FarFadeCull", 1) != 0;
+        bFarFadeOpaque = reader.ReadInteger("PERFORMANCE", "FarFadeOpaque", 1) != 0;
         fConeFullCos = std::cos(std::clamp(reader.ReadFloat("PROCEDURAL", "ProceduralConeFullAngle", 75.0f), 30.0f, 120.0f) * 0.01745329f);
         fConeTurnLead = std::clamp(reader.ReadInteger("PROCEDURAL", "ProceduralConeTurnLead", 300), 0, 1000) / 1000.0f;
         bConeRelease = reader.ReadInteger("PROCEDURAL", "ProceduralConeRelease", 1) != 0;
@@ -745,7 +865,10 @@ namespace Procedural
             if (queue && entry >= queue && entry < queue + size_t(*(uint32_t*)(pGenerator + 0x5220)) * QueueEntrySize)
             {
                 ForgetMade(record);
-                memcpy(madeFrom[record].entry, entry, QueueEntrySize);
+                madeAt[record] = uint32_t(made.size());
+                made.push_back({ record });
+                memcpy(made.back().entry, entry, QueueEntrySize);
+                madeFresh.push_back(record);
                 madeCells[CoverCellAt((const float*)entry)].push_back(record);
             }
         }
@@ -761,7 +884,7 @@ namespace Procedural
                 const float keep = CEntity::GetPosition(uintptr_t(entity), place) ?
                     float((PositionKey(place) >> 12) & 0xFFFFFF) / float(0x1000000) : 0.0f;
                 AcquireSRWLockExclusive(&propsLock);
-                props[uintptr_t(entity)] = { radius, keep };
+                props.Set(uintptr_t(entity), { radius, keep });
                 ReleaseSRWLockExclusive(&propsLock);
 
                 // Drawn while its own distance times the phase's multiplier (about 1) plus Detail Quality's extra
@@ -801,7 +924,7 @@ namespace Procedural
             if (bTrace && CEntity::GetPosition(entity, position))
                 Trace(std::format("R {} model={}{}", When(), *(int16_t*)(entity + 0x2E), Where(position)));
             AcquireSRWLockExclusive(&propsLock);
-            props.erase(entity);
+            props.Erase(entity);
             ReleaseSRWLockExclusive(&propsLock);
         }
         shRelease.unsafe_fastcall(generator, edx, record, list);
@@ -1167,10 +1290,10 @@ namespace Procedural
                     continue;
                 for (auto record : made->second)
                 {
-                    auto from = madeFrom.find(record);
-                    if (from == madeFrom.end())
+                    auto from = FindMade(record);
+                    if (!from)
                         continue;
-                    const auto entry = from->second.entry;
+                    const auto entry = from->entry;
                     const auto provider = *(uint8_t* const*)(entry + 0x1C);
                     if (!*(uintptr_t*)(record + 8) || *(uint8_t**)(record + 0xC) != provider)
                         continue;
@@ -1193,27 +1316,65 @@ namespace Procedural
     // (CE 0xc0a920, from the list of their procedural.dat record, +0x38 of the record the entry's +0xc points to), and
     // their entries are parked
     constexpr float GrassReleaseSlack = 5.0f;
+    // A share of the made props each update, all of them over ConeWalkUpdates: one going a few frames later doesn't
+    // show (it is ReleaseSlack outside, or GrassReleaseSlack into GPU grass), and the walk over all of them every
+    // frame (tens of thousands where grass is) took a tenth of the main thread (profile at Firefly Island, 2026-10-28)
+    constexpr size_t ConeWalkUpdates = 8;
     void ReleaseOutsideCone(uint8_t* generator)
     {
-        std::vector<std::pair<uint8_t*, MadeFrom>> outside;
-        for (auto& [record, from] : madeFrom)
+        static const CpuScopes::Id kCpuScope("Procedural.ReleaseOutsideCone");
+        CpuScopes::Scope cpuScope(kCpuScope);
+        std::vector<Made> outside;
+        const auto full = [&] { return outside.size() >= ReleasesPerUpdate || parked.size() + (outside.size() + 1) * QueueEntrySize > ParkedLimit * QueueEntrySize; };
+        const auto going = [](const Made& m)
         {
-            if (outside.size() >= ReleasesPerUpdate || parked.size() + (outside.size() + 1) * QueueEntrySize > ParkedLimit * QueueEntrySize)
-                break;
+            // Its own copy first; the game's record, another cache line, only for one going
+            if (!((bConeRelease && !InCone((const float*)m.entry, ReleaseSlack)) || GrassGivesWay(m.entry, GrassReleaseSlack)))
+                return false;
             // The game's own removal clears the provider before it lets a record go
-            if (!*(uintptr_t*)(record + 8) || *(uintptr_t*)(record + 0xC) != *(uintptr_t*)(from.entry + 0x1C))
-                continue;
-            if ((bConeRelease && !InCone((float*)from.entry, ReleaseSlack)) || GrassGivesWay(from.entry, GrassReleaseSlack))
-                outside.emplace_back(record, from);
-        }
-        for (auto& [record, from] : outside)
+            return *(uintptr_t*)(m.record + 8) && *(uintptr_t*)(m.record + 0xC) == *(uintptr_t*)(m.entry + 0x1C);
+        };
+        // Release takes them out of `made` (ForgetMade), so they go from the copies
+        const auto release = [&]
         {
-            if (bTrace)
-                Trace(std::format("B {}{}", When(), Where((float*)from.entry)));
-            Release(generator, nullptr, record, *(uint8_t**)(from.entry + 0xC) + 0x38);
-            parked.insert(parked.end(), from.entry, from.entry + QueueEntrySize);
-            nConeReleased++;
+            for (auto& m : outside)
+            {
+                if (bTrace)
+                    Trace(std::format("B {}{}", When(), Where((const float*)m.entry)));
+                Release(generator, nullptr, m.record, *(uint8_t**)(m.entry + 0xC) + 0x38);
+                parked.insert(parked.end(), m.entry, m.entry + QueueEntrySize);
+                nConeReleased++;
+            }
+            outside.clear();
+        };
+
+        // Those made since the last time, all of them (those past a full update wait for the next), let go before the
+        // share so it can't take one of them twice
+        size_t waitingFresh = 0;
+        for (auto record : madeFresh)
+        {
+            if (full())
+                madeFresh[waitingFresh++] = record;
+            else if (auto m = FindMade(record); m && going(*m))
+                outside.push_back(*m);
         }
+        madeFresh.resize(waitingFresh);
+        release();
+
+        const size_t count = made.size();
+        if (!count)
+            return;
+        const size_t share = std::min(count, std::max<size_t>((count + ConeWalkUpdates - 1) / ConeWalkUpdates, 256));
+        if (madeCursor >= count)
+            madeCursor = 0;
+        for (size_t n = 0; n < share && !full(); ++n)
+        {
+            const Made& m = made[madeCursor];
+            madeCursor = madeCursor + 1 == count ? 0 : madeCursor + 1;
+            if (going(m))
+                outside.push_back(m);
+        }
+        release();
     }
 
     // Before the queue's props are made (the game's lock held, the providers it removed already done)
@@ -1277,31 +1438,58 @@ namespace Procedural
         {
             if (bConeRelease || ProceduralGround::HideGrass)
                 ReleaseOutsideCone(generator);
+            else
+                madeFresh.clear();
             uint32_t capacity = *(uint32_t*)(generator + 0x5220);
-            std::vector<uint8_t> keep;
-            keep.reserve(parked.size());
-            for (size_t offset = 0; offset < parked.size(); offset += QueueEntrySize)
+            // A parked one goes by its last's place taken
+            const auto take = [](size_t index)
             {
-                auto entry = parked.data() + offset;
-                bool removed = false;
-                if (removals)
+                const size_t last = parked.size() - QueueEntrySize;
+                if (index * QueueEntrySize != last)
+                    memcpy(parked.data() + index * QueueEntrySize, parked.data() + last, QueueEntrySize);
+                parked.resize(last);
+            };
+            // Positions of a provider removed this update go, all of them (seldom any)
+            if (removals && removalCount)
+            {
+                for (size_t i = 0; i < parked.size() / QueueEntrySize;)
                 {
-                    auto provider = *(uintptr_t*)(entry + 0x1C);
+                    auto provider = *(uintptr_t*)(parked.data() + i * QueueEntrySize + 0x1C);
+                    bool removed = false;
                     for (uint32_t j = 0; j < removalCount && !removed; j++)
                         removed = *(uintptr_t*)(removals + size_t(j) * 8) == provider;
-                }
-                if (removed)
-                {
+                    if (!removed)
+                    {
+                        i++;
+                        continue;
+                    }
                     nDropped++;
-                    continue;
+                    take(i);
                 }
-                if (count < capacity && Wanted(entry))
+            }
+            // This update's share: those wanted again go to the queue while it has room
+            {
+                size_t total = parked.size() / QueueEntrySize;
+                size_t share = std::min(total, std::max<size_t>((total + ParkedWalkUpdates - 1) / ParkedWalkUpdates, 512));
+                if (parkedCursor >= total)
+                    parkedCursor = 0;
+                for (; share && count < capacity; --share)
                 {
-                    memcpy(queue + size_t(count) * QueueEntrySize, entry, QueueEntrySize);
-                    count++;
-                    continue;
+                    auto entry = parked.data() + parkedCursor * QueueEntrySize;
+                    if (Wanted(entry))
+                    {
+                        memcpy(queue + size_t(count) * QueueEntrySize, entry, QueueEntrySize);
+                        count++;
+                        // The last one comes here: looked at next, unless it was the last
+                        take(parkedCursor);
+                        if (--total == 0)
+                            break;
+                        if (parkedCursor >= total)
+                            parkedCursor = 0;
+                        continue;
+                    }
+                    parkedCursor = parkedCursor + 1 == total ? 0 : parkedCursor + 1;
                 }
-                keep.insert(keep.end(), entry, entry + QueueEntrySize);
             }
             uint32_t write = 0;
             for (uint32_t i = 0; i < count; i++)
@@ -1309,9 +1497,9 @@ namespace Procedural
                 auto entry = queue + size_t(i) * QueueEntrySize;
                 if (!Wanted(entry))
                 {
-                    if (keep.size() < ParkedLimit * QueueEntrySize)
+                    if (parked.size() < ParkedLimit * QueueEntrySize)
                     {
-                        keep.insert(keep.end(), entry, entry + QueueEntrySize);
+                        parked.insert(parked.end(), entry, entry + QueueEntrySize);
                         continue;
                     }
                     nConeFull++;
@@ -1322,9 +1510,10 @@ namespace Procedural
             }
             carriedLeft = std::min(carriedLeft, write);
             count = uint16_t(write);
-            parked.swap(keep);
             nParkedNow = uint32_t(parked.size() / QueueEntrySize);
         }
+        else
+            madeFresh.clear();
         nQueueMax = std::max<uint32_t>(nQueueMax, count);
         lastQueue = count;
         lastNew = count - carriedLeft;
@@ -1472,6 +1661,30 @@ namespace Procedural
             return phases;
         nFadeCulled++;
         return phases & ~scene;
+    }
+
+    // FarFadeOpaque: the alpha the fade loop is about to write for an entity (CE 0xae7d46, esi the entity, xmm2 the alpha,
+    // xmm4 its distance): whole for the small ones FarFadeCull would keep, as they are where it leaves them out
+    float OpaqueFade(uintptr_t entity, float alpha, float distance)
+    {
+        if (!(alpha < 255.0f) || !(distance > kFadeCullFrom) || !modelInfos || *(uintptr_t*)(entity + 0x4c))
+            return alpha;
+        const auto info = *(uintptr_t*)(modelInfos + *(uint16_t*)(entity + 0x2e) * 4);
+        const float radius = info ? *(float*)(info + 0x1c) : 0.0f;
+        if (!(radius > 0.0f && radius < kFadeCullRadius))
+            return alpha;
+        const auto kind = EntityClass::OfEntity((void*)entity);
+        if (kind == EntityClass::Kind::Vehicle || kind == EntityClass::Kind::Ped)
+            return alpha;
+        if (bFarFadeCull && alpha < float(kFadeCullAlpha))
+        {
+            float place[3];
+            const float keep = CEntity::GetPosition(entity, place) ? float((PositionKey(place) >> 12) & 0xFFFFFF) / float(0x1000000) : 0.0f;
+            if (alpha < keep * float(kFadeCullAlpha))
+                return alpha;   // left out of the scene where it goes into the lists (DropFaded)
+        }
+        nFadeOpaque++;
+        return 255.0f;
     }
 
     // Far Prop Instancing takes the entity's commands: its model is drawn in batches and the entity has no matrix of its
@@ -2111,6 +2324,19 @@ public:
                 }
             }
 
+            // FarFadeOpaque: the fade loop's write of an entity's alpha (CE 0xae7d46: movzx eax, byte [esi+63] / movd xmm0, eax /
+            // cvtdq2ps xmm0, xmm0 / comiss xmm0, xmm2 / ja / movaps xmm2, xmm0 / cvttss2si eax, xmm2 / mov [esi+63], al). The
+            // lists are made before it for some entities (a bench's object at 150 m kept the loop's alpha over one written as
+            // it went into them), so it is taken here
+            if (auto fade = hook::pattern("0F B6 46 63 66 0F 6E C0 0F 5B C0 0F 2F C2 77 03 0F 28 D0 F3 0F 2C C2 88 46 63"); !fade.empty())
+            {
+                static auto FadeHook = safetyhook::create_mid(fade.get_first(19), [](SafetyHookContext& regs)
+                {
+                    if (bFarFadeOpaque && regs.esi)
+                        regs.xmm2.f32[0] = OpaqueFade(regs.esi, regs.xmm2.f32[0], regs.xmm4.f32[0]);
+                });
+            }
+
             FusionFixSettings.SetCallback("PREF_PROCEDURAL_DISTANCE", [](int32_t value)
             {
                 fDistance = DistanceFromPref(value);
@@ -2147,17 +2373,17 @@ public:
             if (!nUpdates)
                 return;
             AcquireSRWLockShared(&propsLock);
-            auto alive = props.size();
+            auto alive = props.count;
             ReleaseSRWLockShared(&propsLock);
             Log("Stats", std::format("update {:.3f} ms on average, {:.3f} at most, over {}; props out {}, records in use {} (most {} of {}); "
-                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, grass left to GPU grass {}, heavy out of cascades {}, heavy left out {}, faded far left out {}; under covers not queued {}, let go {}, covers kept {}; box full {}, candidates capped {}",
+                "queue at most {}, held over at most {}, dropped {}; parked {}, made with the cone full {}, let go behind {}; reflections skipped {}, small far left out {}, grass left to GPU grass {}, heavy out of cascades {}, heavy left out {}, faded far left out {}, faded far drawn whole {}; under covers not queued {}, let go {}, covers kept {}; box full {}, candidates capped {}",
                 fUpdateMs / nUpdates, fUpdateMaxMs, nUpdates, alive, UsedRecords(), nUsedMax, Records(),
-                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nGrassHidden, nHeavyCascades, nHeavyScene, nFadeCulled, nCoverSkipped, nCoverReleased, covers.size(), nEntitiesCapped, nCandidatesCapped));
+                nQueueMax, nWaitingMax, nDropped, nParkedNow, nConeFull, nConeReleased, nReflectionsSkipped, nSmallFarCulled, nGrassHidden, nHeavyCascades, nHeavyScene, nFadeCulled, nFadeOpaque, nCoverSkipped, nCoverReleased, covers.size(), nEntitiesCapped, nCandidatesCapped));
             nCoverSkipped = nCoverReleased = 0;
             fUpdateMs = fUpdateMaxMs = 0.0;
             nUpdates = 0;
             nQueueMax = nWaitingMax = 0;
-            nReflectionsSkipped = nSmallFarCulled = nGrassHidden = nHeavyCascades = nHeavyScene = nFadeCulled = 0;
+            nReflectionsSkipped = nSmallFarCulled = nGrassHidden = nHeavyCascades = nHeavyScene = nFadeCulled = nFadeOpaque = 0;
             nConeFull = 0;
             nConeReleased = 0;
         };
