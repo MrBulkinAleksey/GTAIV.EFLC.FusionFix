@@ -38,6 +38,7 @@ private:
     };
 
     static inline BackBufferInfo backBufferInfo{};
+    static inline D3DXVECTOR4 screenSize{};
 
     static inline rage::grcRenderTargetPC* pSceneRT = nullptr;
     static inline IDirect3DTexture9* pSceneTex = nullptr;
@@ -45,6 +46,7 @@ private:
     static inline ID3DXEffect* pEffect = nullptr;
 
     static inline D3DXHANDLE hInputTex2D = nullptr;
+    static inline D3DXHANDLE hGlobalScreenSize = nullptr;
     static inline D3DXHANDLE hGammaTechnique = nullptr;
     static inline D3DXHANDLE hTechniqueBlitXenonGamma = nullptr;
     static inline D3DXHANDLE hTechniqueBlitCellGamma = nullptr;
@@ -116,9 +118,10 @@ private:
         }
 
         hInputTex2D = pEffect->GetParameterByName(nullptr, "InputTex2D");
+        hGlobalScreenSize = pEffect->GetParameterByName(nullptr, "globalScreenSize");
         hTechniqueBlitXenonGamma = pEffect->GetTechniqueByName("BlitXenonGamma");
         hTechniqueBlitCellGamma = pEffect->GetTechniqueByName("BlitCellGamma");
-        if (!hInputTex2D || !hTechniqueBlitXenonGamma || !hTechniqueBlitCellGamma)
+        if (!hInputTex2D || !hGlobalScreenSize || !hTechniqueBlitXenonGamma || !hTechniqueBlitCellGamma)
         {
             SafeRelease(pEffect);
 
@@ -151,6 +154,8 @@ private:
         backBufferInfo.width = backBufferDesc.Width;
         backBufferInfo.height = backBufferDesc.Height;
         backBufferInfo.format = backBufferDesc.Format;
+
+        screenSize = D3DXVECTOR4((float)backBufferInfo.width, (float)backBufferInfo.height, 1.0f / backBufferInfo.width, 1.0f / backBufferInfo.height);
 
         backBuffer->Release();
 
@@ -235,27 +240,39 @@ private:
 
             return;
         }
+        currentRenderTarget->Release();
 
+        IDirect3DSurface9* backBuffer = GetRealBackBuffer(device);
+        if (!backBuffer)
+            return;
+
+        IDirect3DSurface9* oldRenderTarget = nullptr;
+        IDirect3DSurface9* oldDepthStencilSurface = nullptr;
         IDirect3DVertexBuffer9* oldVertexBuffer = nullptr;
         IDirect3DVertexDeclaration9* oldVertexDecl = nullptr;
-
+        IDirect3DBaseTexture9* oldTexture = nullptr;
         UINT oldOffset = 0, oldStride = 0;
         DWORD oldFVF = 0;
 
+        device->GetRenderTarget(0, &oldRenderTarget);
+        device->GetDepthStencilSurface(&oldDepthStencilSurface);
         device->GetStreamSource(0, &oldVertexBuffer, &oldOffset, &oldStride);
         device->GetVertexDeclaration(&oldVertexDecl);
         device->GetFVF(&oldFVF);
+        device->GetTexture(0, &oldTexture);
 
+        device->SetRenderTarget(0, nullptr);
+        device->SetDepthStencilSurface(nullptr);
+        device->SetRenderTarget(0, backBuffer);
         device->SetStreamSource(0, nullptr, 0, 0);
         device->SetVertexDeclaration(nullptr);
         device->SetFVF(kScreenVertexFVF);
 
         pEffect->SetTexture(hInputTex2D, pSceneTex);
         pEffect->SetTechnique(hGammaTechnique);
-        pEffect->CommitChanges();
+        pEffect->SetVector(hGlobalScreenSize, &screenSize);
 
-        D3DXVECTOR4 screenSize((float)backBufferInfo.width, (float)backBufferInfo.height, 1.0f / backBufferInfo.width, 1.0f / backBufferInfo.height);
-        pEffect->SetVector(pEffect->GetParameterByName(nullptr, "globalScreenSize"), &screenSize);
+        pEffect->CommitChanges();
 
         UINT passes = 0;
         if (SUCCEEDED(pEffect->Begin(&passes, 0)))
@@ -272,14 +289,19 @@ private:
             pEffect->End();
         }
 
+        device->SetRenderTarget(0, oldRenderTarget);
+        device->SetDepthStencilSurface(oldDepthStencilSurface);
         device->SetStreamSource(0, oldVertexBuffer, oldOffset, oldStride);
         device->SetVertexDeclaration(oldVertexDecl);
         device->SetFVF(oldFVF);
+        device->SetTexture(0, oldTexture);
 
+        SafeRelease(oldRenderTarget);
+        SafeRelease(oldDepthStencilSurface);
         SafeRelease(oldVertexBuffer);
         SafeRelease(oldVertexDecl);
-
-        currentRenderTarget->Release();
+        SafeRelease(oldTexture);
+        SafeRelease(backBuffer);
     }
 
 public:
@@ -301,6 +323,7 @@ private:
         ReleaseSceneTexture();
 
         hInputTex2D = nullptr;
+        hGlobalScreenSize = nullptr;
         hGammaTechnique = nullptr;
         hTechniqueBlitXenonGamma = nullptr;
         hTechniqueBlitCellGamma = nullptr;
@@ -322,6 +345,11 @@ public:
             FusionFix::onEndScene() += []()
             {
                 ConsoleGamma::Render(rage::grcDevice::GetD3DDevice());
+            };
+
+            FusionFix::onBeforeRenderTargetReset() += []()
+            {
+                ConsoleGamma::Shutdown();
             };
 
             FusionFix::onBeforeReset() += []()

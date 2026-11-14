@@ -786,6 +786,22 @@ private:
     static inline float* rowHeight = nullptr;
     static inline SafetyHookMid sliderDrawRow;
     static inline SafetyHookMid sliderMouseRow;
+    static inline SafetyHookMid resolutionTextPosition;
+
+    // The resolution slider's own text is normally printed on a second line. Match the position used by
+    // numeric slider values, immediately after the bar, while retaining the game's selected mode and color.
+    static void PositionResolutionText(SafetyHookContext& regs, bool legacy)
+    {
+        auto stack = reinterpret_cast<uint8_t*>(regs.esp);
+        auto read = [stack](size_t offset) { float value; std::memcpy(&value, stack + offset, sizeof(value)); return value; };
+        const size_t x = legacy ? 0x2C : 0x28, y = legacy ? 0x30 : 0x2C;
+        const size_t width = legacy ? 0x40 : 0x38, height = legacy ? 0x44 : 0x3C, padding = legacy ? 0x54 : 0x50;
+        float positionX = read(x) + read(width) + 3.0f * read(padding);
+        float positionY = read(y) - 0.5f * read(height);
+        std::memcpy(stack, &positionX, sizeof(positionX));
+        std::memcpy(stack + sizeof(float), &positionY, sizeof(positionY));
+    }
+
 
     static SettingsTables::Option* AppendOption(SettingsTables::Array<SettingsTables::Option>* array)
     {
@@ -1264,7 +1280,6 @@ private:
             std::memcpy(instance + 0x3448, highlights.data(), highlights.size());
         if (auto categories = GetActiveCategories(); categories && handle == menuHandles[0] && layoutMenu && layoutMenu == GetMenu())
             DrawCategories(*categories);
-        DrawBreadcrumb(handle);
         DrawDescription(handle);
         NoteHdrPage(handle);
     }
@@ -1940,10 +1955,7 @@ private:
             {
                 if (auto page = FindPage(dynamicOptions[button].submenu))
                 {
-                    // The row's text has room for 59 characters, the mark of rows that open a page included
-                    std::wstring name = GetPageName(*page);
-                    name = name.substr(0, 59 - std::wcslen(SubmenuMark)) + SubmenuMark;
-                    wcsncpy_s(text, 60, name.c_str(), _TRUNCATE);
+                    wcsncpy_s(text, 60, GetPageName(*page), _TRUNCATE);
                     return nullptr;
                 }
             }
@@ -2080,23 +2092,22 @@ private:
             auto info = hook::pattern("8D 44 24 40 6A 08 50 E8 ? ? ? ? 8D 44 24 58 50 E8 ? ? ? ? F3 0F 10 00 83 C4 0C 8D 44 24 50 6A 16 50");
             auto infoWidth = hook::pattern("50 E8 ? ? ? ? F3 0F 10 00 83 C4 04 8D 44 24 28 6A 00 50 6A 00 6A 02");
             auto infoRow = hook::pattern("83 C4 04 83 F8 A4 0F 84 ? ? ? ? 83 F8 0B 0F 87");
-            if (!info.empty() && !infoWidth.empty() && !infoRow.empty())
+            getInfoPosition = reinterpret_cast<decltype(getInfoPosition)>(branch(info.get_first<uint8_t>(0x11)));
+            setFontDropShadow = reinterpret_cast<decltype(setFontDropShadow)>(branch(info.get_first<uint8_t>(0x7E)));
+            getInfoLabelWidth = reinterpret_cast<decltype(getInfoLabelWidth)>(branch(infoWidth.get_first<uint8_t>(1)));
+            infoTextRow = safetyhook::create_mid(infoRow.get_first(), InfoTextRow);
+            infoTextTop = safetyhook::create_mid(info.get_first(0x34), [](SafetyHookContext& regs)
             {
-                getInfoPosition = reinterpret_cast<decltype(getInfoPosition)>(branch(info.get_first<uint8_t>(0x11)));
-                setFontDropShadow = reinterpret_cast<decltype(setFontDropShadow)>(branch(info.get_first<uint8_t>(0x7E)));
-                getInfoLabelWidth = reinterpret_cast<decltype(getInfoLabelWidth)>(branch(infoWidth.get_first<uint8_t>(1)));
-                infoTextRow = safetyhook::create_mid(infoRow.get_first(), InfoTextRow);
-            }
+                if (IsGraphicsList() && rowHeight)
+                    regs.xmm0.f32[0] += *rowHeight;
+            });
             categoriesEnabled = true;
 
             // The language: FillMenu hides its row of Display (9, 10 in TLAD) and of the title menu's Display (6)
             auto language = hook::pattern("83 F9 08 75 19 83 3D ? ? ? ? 01 B8 09 00 00 00 B9 0A 00 00 00 0F 44 C1 6A 01 50 EB 09 83 F9 3D 75 18");
-            if (!language.empty())
-            {
-                // jnz over the Display check -> jmp past both checks
-                injector::WriteMemory<uint8_t>(language.get_first<uint8_t>(3), 0xEB, true);
-                injector::WriteMemory<uint8_t>(language.get_first<uint8_t>(4), 0x36, true);
-            }
+            // jnz over the Display check -> jmp past both checks
+            injector::WriteMemory<uint8_t>(language.get_first<uint8_t>(3), 0xEB, true);
+            injector::WriteMemory<uint8_t>(language.get_first<uint8_t>(4), 0x36, true);
         }
         setTabScale = reinterpret_cast<decltype(setTabScale)>(branch(scaleCalls[0]));
 
@@ -2171,22 +2182,20 @@ private:
             menuHandles = *reinterpret_cast<int32_t**>(process + 0x21);
             menuInstances = *hook::pattern("8B 80 1C 36 00 00 C3 33 C0").get_first<uint8_t**>(-0x11);
             rowHeight = *hook::pattern("F3 0F 10 15 ? ? ? ? 0F 2F 4C 24 18").get_first<float*>(4);
+            resolutionTextPosition = safetyhook::create_mid(hook::pattern("8D 94 24 F8 00 00 00 52 83 EC 08 F3 0F 11 44 24 04 D9 1C 24 E8 ? ? ? ? E9").get_first(20), [](SafetyHookContext& regs) { PositionResolutionText(regs, true); });
             sliderDrawRow = safetyhook::create_mid(hook::pattern("6A 00 E8 ? ? ? ? 83 C4 04 84 C0 53 6A 3D").get_first(), [](SafetyHookContext& regs) { AdjustSliderRow(regs, true); });
             sliderMouseRow = safetyhook::create_mid(hook::pattern("8D 54 24 30 6A 0F 52 E8").get_first(), [](SafetyHookContext& regs) { AdjustSliderRow(regs, false); });
             fillMenu = safetyhook::create_inline(hook::pattern("83 EC 40 A1 ? ? ? ? 53 8D 04 40 55 0F B7 2C C5").get_first(), FillMenu);
             scrollMenu = safetyhook::create_inline(scroll, ScrollMenu);
             selectOption = safetyhook::create_inline(hook::pattern("83 EC 10 57 8B 7C 24 1C 85 FF 0F 8C ? ? ? ? 8B 0D").get_first(), SelectOption);
             processMenu = safetyhook::create_inline(process, ProcessMenu);
-            // The game's warning screen for its own questions (1.1.2.0, 1.0.8.0)
-            if (auto warning = hook::pattern("8B 44 24 04 50 C7 05 ? ? ? ? 01 00 00 00 E8 ? ? ? ? 8B 4C 24 0C 51 E8"); !warning.empty())
-            {
-                setWarningMessage = reinterpret_cast<decltype(setWarningMessage)>(warning.get_first());
-                warningState = *warning.get_first<int32_t*>(7);
-            }
+            // The game's warning screen for its own questions
+            auto warning = hook::pattern("8B 44 24 04 50 C7 05 ? ? ? ? 01 00 00 00 E8 ? ? ? ? 8B 4C 24 0C 51 E8");
+            setWarningMessage = reinterpret_cast<decltype(setWarningMessage)>(warning.get_first());
+            warningState = *warning.get_first<int32_t*>(7);
             // The number of MENU_DISPLAY_VALUE_SLIDERBAR is printed from a buffer at esp+0xF0, the row offset is in EDI
             auto valueText = hook::pattern("83 C4 0C 6A FF 6A FF 8D 8C 24 F8 00 00 00 51 E9");
-            if (!valueText.empty())
-                valueTextHook = safetyhook::create_mid(valueText.get_first(3), [](SafetyHookContext& regs) { SetValueText(regs.edi, regs.esp + 0xF0); });
+            valueTextHook = safetyhook::create_mid(valueText.get_first(3), [](SafetyHookContext& regs) { SetValueText(regs.edi, regs.esp + 0xF0); });
             InitializeTabs();
             return;
         }
@@ -2198,6 +2207,7 @@ private:
         menuHandles = *hook::pattern("C7 05 ? ? ? ? FF FF FF 7F FF 34 BD").get_first<int32_t*>(0x0D);
         menuInstances = *hook::pattern("8B 81 1C 36 00 00 C3 33 C0").get_first<uint8_t**>(-0x11);
         rowHeight = *hook::pattern("F3 0F 10 1D ? ? ? ? 0F 2F C2").get_first<float*>(4);
+        resolutionTextPosition = safetyhook::create_mid(hook::pattern("F3 0F 10 44 24 1C 50 83 EC 08 F3 0F 11 4C 24 04 F3 0F 11 04 24 E9 ? ? ? ?").get_first(21), [](SafetyHookContext& regs) { PositionResolutionText(regs, false); });
         sliderDrawRow = safetyhook::create_mid(hook::pattern("84 C0 57 6A 3D 8D").get_first(-0x0C), [](SafetyHookContext& regs) { AdjustSliderRow(regs, true); });
         sliderMouseRow = safetyhook::create_mid(hook::pattern("8D 44 24 24 6A 0F 50").get_first(), [](SafetyHookContext& regs) { AdjustSliderRow(regs, false); });
         fillMenu = safetyhook::create_inline(hook::pattern("8D 04 40 BA 84 00 00 00").get_first(-0x10), FillMenu);
@@ -2205,15 +2215,12 @@ private:
         selectOption = safetyhook::create_inline(hook::pattern("0F B7 3C D5 ? ? ? ? 3B F7").get_first(-0x25), SelectOption);
         processMenu = safetyhook::create_inline(hook::pattern("C7 05 ? ? ? ? FF FF FF 7F FF 34 BD").get_first(-0x1E), ProcessMenu);
         // The game's warning screen for its own questions: title (not shown), text key, keys (0x48: yes and no), ...
-        if (auto warning = hook::pattern("FF 74 24 04 C7 05 ? ? ? ? 01 00 00 00 E8 ? ? ? ? FF 74 24 0C E8"); !warning.empty())
-        {
-            setWarningMessage = reinterpret_cast<decltype(setWarningMessage)>(warning.get_first());
-            warningState = *warning.get_first<int32_t*>(6);
-        }
+        auto warning = hook::pattern("FF 74 24 04 C7 05 ? ? ? ? 01 00 00 00 E8 ? ? ? ? FF 74 24 0C E8");
+        setWarningMessage = reinterpret_cast<decltype(setWarningMessage)>(warning.get_first());
+        warningState = *warning.get_first<int32_t*>(6);
         // The number of MENU_DISPLAY_VALUE_SLIDERBAR is printed from a buffer at esp+0xF0, the row offset is in EBX
         auto valueText = hook::pattern("83 C4 0C 8D 84 24 F0 00 00 00 6A FF 6A FF 50 E9");
-        if (!valueText.empty())
-            valueTextHook = safetyhook::create_mid(valueText.get_first(3), [](SafetyHookContext& regs) { SetValueText(regs.ebx, regs.esp + 0xF0); });
+        valueTextHook = safetyhook::create_mid(valueText.get_first(3), [](SafetyHookContext& regs) { SetValueText(regs.ebx, regs.esp + 0xF0); });
         InitializeTabs();
     }
 
@@ -2252,7 +2259,7 @@ private:
     void InitializeTables()
     {
         auto prefPattern = hook::pattern("FF 34 FD ? ? ? ? 56 E8 ? ? ? ? 83 C4 08 85 C0 0F 84 ? ? ? ? 47 81 FF");
-        legacyExecutable = prefPattern.empty();
+        legacyExecutable = prefPattern.empty(); // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
         if (legacyExecutable)
             prefPattern = hook::pattern("8B 04 F5 ? ? ? ? 50 57 E8 ? ? ? ? 83 C4 08 85 C0 74 ? 83 C6 01 81 FE");
         auto prefNames = prefPattern.get_first<uint8_t>();
@@ -2510,6 +2517,7 @@ public:
             { "PREF_CAMERASHAKE",            "MAIN.CameraShake" },
             { "PREF_TURNINDICATORS",         "MISC.TurnIndicators" },
             { "PREF_EXTRANIGHTSHADOWS",      "SHADOWS.ExtraNightShadows" },
+            { "PREF_DISTANTLIGHTS",          "MISC.DistantLights" },
             { "PREF_GRAPHICSAPI",            "MAIN.GraphicsAPI" },
             { "PREF_BULLETTRACES",           "MISC.AlwaysShowBulletTraces" },
             { "PREF_AUTOEXPOSURE",           "MISC.ConsoleAutoExposure" },
@@ -2570,13 +2578,16 @@ public:
             { "PREF_GPU_GRASS_DEBUG",     "DEBUG.GpuGrassDebug" },
             { "PREF_GRASS_WIND_DEBUG",    "DEBUG.GrassWindDebug" },
             { "PREF_CAR_MIRRORS",         "MISC.CarMirrors" },
+            { "PREF_JUMPRAGDOLL",            "MISC.PlayerJumpRagdollControl" },
+            { "PREF_LADDERCAMTILT",          "MISC.LadderCameraTilt" },
+            { "PREF_AUTOCENTERCAMERA",       "MISC.AutoCenterCamera" },
         };
 
         for (auto& [name, id] : arr)
             RegisterPreference(name, id);
 
-        // The graphics API is MAIN.GraphicsAPI, applied by the plugin at its init (graphicsapi.ixx, FusionFixUtils
-        // upscaler/graphics_api.h; no d3d9.dll proxy, no d3d9.cfg). Vulkan needs DXVK as vulkan.dll next to the exe (the
+        // The graphics API is MAIN.GraphicsAPI, applied by the plugin at its init (graphicsapi.ixx,
+        // source/upscaler/graphics_api.h; no d3d9.dll proxy, no d3d9.cfg). Vulkan needs DXVK as vulkan.dll next to the exe (the
         // build FusionFixHub installs or the player's own), DirectX 12 Fusion Fix's own D3D9On12 driver next to the exe (FusionFixHub
         // installs it), never Windows' slow one. When the API didn't start, the next start falls back to DirectX 9 and
         // sets this back (the crash guard of graphics_api.h).
@@ -2597,6 +2608,8 @@ public:
     void RegisterMenuRows()
     {
         constexpr uint8_t NotTLAD = 1 | 4;
+        AddMenuText("MO_KBOPT", [] { return OwnText("@ff.keyboard_mouse"); });
+        AddMenuText("MO_GUIDE", [] { return OwnText("@ff.launcher"); });
 
         // The number next to the reach sliders is the reach in feet, 0 keeps the game's own; Grass & Props Distance
         // shows how far it goes. Before the rows: AddSetting gives them the value slider
@@ -2618,54 +2631,36 @@ public:
                 RemoveOption(screen, "MO_VOUT", "PREF_VOICE_OUTPUT");
         }
 
-        // Game: the pause menu before Exit Game, the title menu at the end. The Plugins page follows them: one entry per
+        // Game: the window mode on the tab, Fusion Fix's own options on a page, then the Plugins page: one entry per
         // plugin, Fusion Fix first with its Preset row (its settings are on the game's tabs), then the other plugins
-        // (FindOtherPlugins). A preset of all plugins is FusionFixHub's.
+        // (FindOtherPlugins). A preset of all plugins is FusionFixHub's. No update check: fusionfix.io and FusionFixHub
+        // offer upstream's builds, which would replace this one.
         for (auto [screen, before] : { std::pair{ MenuScreen::Game, "MO_EXITGAM" }, std::pair{ MenuScreen::TitleGame, "" } })
         {
-            if (screen == MenuScreen::TitleGame)
-                AddEmptyLine(screen, before);
-            AddSetting(screen, "MAIN.SkipIntro", before);
-            AddSetting(screen, "MAIN.SkipMenu", before);
-            AddEmptyLine(screen, before);
-            AddSetting(screen, "MISC.CutsceneBorders", before);
-            AddSetting(screen, "MISC.TransparentMapMenu", before);
-            AddSetting(screen, "FRAMELIMIT.DisplayFpsCounter", before);
-            AddEmptyLine(screen, before);
             AddSetting(screen, "MAIN.WindowMode", before);
-            AddSetting(screen, "MAIN.BlockOnLostFocus", before);
-            AddEmptyLine(screen, before);
-            AddSetting(screen, "MISC.LightSyncRGB", before);
-            AddSetting(screen, "MISC.TimedEvents", before);
-            AddEmptyLine(screen, before);
-            // No update check: fusionfix.io and FusionFixHub offer upstream's builds, which would replace this one
+            auto advanced = AddPage(screen, "@ff.page.advanced", before);
+            for (auto id : { "MAIN.SkipIntro", "MAIN.SkipMenu", "MAIN.BlockOnLostFocus", "MISC.TimedEvents", "FRAMELIMIT.DisplayFpsCounter",
+                             "MISC.ExtraInfo" })
+                AddSetting(advanced, id);
             pluginsBefore[static_cast<int32_t>(screen)] = before;
             if (auto own = AddCategory(PluginsPage(screen), MenuKey(ownPlugin, ownPlugin.file.description.name)); own != MenuScreen::Invalid)
                 AddPresetRow(own, ownPlugin);
-            // Exit Game apart from the Plugins row, like the groups above
-            if (screen == MenuScreen::Game)
+            if (*before)
                 AddEmptyLine(screen, before);
         }
 
-        // Controls, at the end. TLAD has no wardrobe.
+        // Controls: an Advanced page at the end. TLAD has no wardrobe.
         for (auto screen : { MenuScreen::Controls, MenuScreen::TitleControls })
         {
-            AddEmptyLine(screen);
-            AddSetting(screen, "MISC.AlwaysRun");
-            AddSetting(screen, "MISC.ZoomedMovement");
-            AddSetting(screen, "MISC.ExtendedSniperControls");
-            AddEmptyLine(screen);
-            AddSetting(screen, "MAIN.CameraShake");
-            AddSetting(screen, "MISC.CenteredVehCam");
-            AddSetting(screen, "MISC.CenteredFootCam");
-            AddSetting(screen, "MISC.StuntJumpCamera");
-            AddSetting(screen, "MISC.ActionCamera");
-            AddEmptyLine(screen);
-            AddSetting(screen, "MISC.TurnIndicators");
-            AddSetting(screen, "MISC.AlwaysShowBulletTraces");
-            AddSetting(screen, "MISC.DisableWardrobeTransition", {}, NotTLAD);
-            AddSetting(screen, "MISC.InstantStopTaxi");
-            AddSetting(screen, "MISC.AutoClimbLadders");
+            auto advanced = AddPage(screen, "@ff.page.advanced");
+            for (auto id : { "MISC.AlwaysRun", "MISC.ZoomedMovement", "MISC.ExtendedSniperControls" }) AddSetting(advanced, id);
+            AddEmptyLine(advanced);
+            for (auto id : { "MISC.TurnIndicators", "MISC.AutoClimbLadders", "MISC.PlayerJumpRagdollControl", "MISC.AlwaysShowBulletTraces" }) AddSetting(advanced, id);
+            AddEmptyLine(advanced);
+            AddSetting(advanced, "MISC.DisableWardrobeTransition", {}, NotTLAD);
+            AddSetting(advanced, "MISC.InstantStopTaxi");
+            AddEmptyLine(advanced);
+            AddSetting(advanced, "MISC.LightSyncRGB");
         }
 
         // Keyboard options: 21 steps of mouse sensitivity, the camera settings before Remap Keyboard
@@ -2687,6 +2682,7 @@ public:
             if (screen == MenuScreen::ControllerOptions)
             {
                 AddEmptyLine(screen, sensitivity);
+                AddSetting(screen, "MISC.AutoCenterCamera", sensitivity);
                 AddSetting(screen, "MISC.DelayBeforeCenteringCameraPad", sensitivity);
                 AddSetting(screen, "MISC.DelayBeforeCenteringCameraPadInCar", sensitivity);
                 AddSetting(screen, "MISC.CameraTurnSpeedPadInCar", sensitivity);
@@ -2695,60 +2691,55 @@ public:
             RemoveOption(screen, "MO_SENS", sensitivity);
         }
 
-        // Audio: no microphone, the options at the end
+        // Audio: no microphone, an Advanced page at the end
         for (auto screen : { MenuScreen::Audio, MenuScreen::TitleAudio })
         {
             RemoveOption(screen, "MO_VMIC");
-            AddEmptyLine(screen);
-            AddSetting(screen, "MISC.AltDialogue");
+            AddEmptyLine(screen, "ME_IND_FM_17");
+            auto advanced = AddPage(screen, "@ff.page.advanced");
+            AddSetting(advanced, "MISC.AltDialogue");
+            AddSetting(advanced, "MISC.DeathMusic");
         }
 
-        // Display: an Advanced page before Restore Defaults with Fusion Fix's image and lighting options, then the HDR
-        // page, whose rows HDR adds (GetHdrScreens). The game's own options stay as they are.
+        // Display: the field of view on the tab; Camera, Advanced and HDR pages before Restore Defaults (HDR's rows are
+        // added by HDR, GetHdrScreens). The game's own options stay as they are.
         for (auto screen : { MenuScreen::Display, MenuScreen::TitleDisplay })
         {
-            auto advanced = AddPage(screen, "@FF_ADVANCED", "MO_DEF");
-            AddSetting(advanced, "MISC.FieldOfView");
-            AddEmptyLine(advanced);
-            AddSetting(advanced, "MAIN.Definition");
-            AddSetting(advanced, "MISC.ConsoleGamma");
-            AddSetting(advanced, "MISC.ConsoleAutoExposure");
-            AddSetting(advanced, "MAIN.MotionBlur");
-            AddSetting(advanced, "MISC.DepthOfField");
-            AddSetting(advanced, "MISC.TreeLighting");
-            AddSetting(advanced, "MISC.TreeAlpha");
+            AddSetting(screen, "MISC.FieldOfView", "MO_SUB");
+            auto camera = AddPage(screen, "@ff.page.camera", "MO_DEF", true);
+            for (auto id : { "MAIN.CameraShake", "MISC.CenteredVehCam", "MISC.CenteredFootCam", "MISC.StuntJumpCamera", "MISC.ActionCamera", "MISC.LadderCameraTilt" }) AddSetting(camera, id);
+            auto advanced = AddPage(screen, "@ff.page.advanced", "MO_DEF", true);
+            for (auto id : { "MISC.ConsoleGamma", "MISC.ToneMapping", "MISC.ScreenFilter", "MISC.ConsoleAutoExposure", "MISC.TreeLighting", "MISC.TreeAlpha" }) AddSetting(advanced, id);
             // Grass and procedural props go further by a quarter of the game's distance a step (procedural.ixx)
             AddSetting(advanced, "PROCEDURAL.ProceduralDistance");
             AddEmptyLine(advanced);
-            AddSetting(advanced, "MAIN.Bloom");
-            AddSetting(advanced, "MISC.ScreenFilter");
+            AddSetting(advanced, "MISC.CutsceneBorders");
+            AddSetting(advanced, "MISC.TransparentMapMenu");
             hdrScreens.push_back(AddPage(screen, "@ff.page.hdr", "MO_DEF", true, [] { return SettingValueText(ownPlugin, "HDR.HDR"); }));
-            AddEmptyLine(screen, "MO_DEF");
         }
 
-        // Graphics: after VSync, before Graphics Analyzer
+        // Graphics: the frame limit and the graphics API on the tab, before Graphics Analyzer; then the Advanced,
+        // Lighting, Textures and Debug pages
         for (auto screen : { MenuScreen::Graphics, MenuScreen::TitleGraphics })
         {
-            // Definition is in Display
+            // Definition is on the Advanced page
             RemoveOption(screen, "MO_DOF", "PREF_DOF");
+            AddSetting(screen, "FRAMELIMIT.FpsLimitPreset", "MO_ANALYZER");
+            AddSetting(screen, "MAIN.GraphicsAPI", "MO_ANALYZER");
 
-            // Advanced: Fusion Fix's options of the frame, before the Lighting, Textures and Debug pages
-            auto advanced = AddPage(screen, "@FF_ADVANCED", "MO_ANALYZER");
-            AddSetting(advanced, "FRAMELIMIT.FpsLimitPreset");
+            // Advanced: Fusion Fix's options of the frame. With DLAA and FSR: the scene below the screen size (applied
+            // with a device reset), AMD frame generation
+            auto advanced = AddPage(screen, "@ff.page.advanced", "MO_ANALYZER", true);
+            AddSetting(advanced, "MAIN.Definition");
             AddSetting(advanced, "MISC.Antialiasing");
-            // With DLAA and FSR: the scene below the screen size (applied with a device reset), AMD frame generation
             AddSetting(advanced, "ANTIALIASING.UpscalerQuality");
             AddSetting(advanced, "ANTIALIASING.FrameGeneration");
+            for (auto id : { "MAIN.Bloom", "MAIN.MotionBlur", "MISC.DepthOfField" }) AddSetting(advanced, id);
             AddEmptyLine(advanced);
-            AddSetting(advanced, "FOG.VolumetricFog");
-            AddSetting(advanced, "MISC.SunShafts");
-            AddSetting(advanced, "MISC.UnclampLighting");
-            AddSetting(advanced, "MISC.ToneMapping");
-            AddSetting(advanced, "MISC.AmbientOcclusion");
-            AddSetting(advanced, "SHADOWS.ShadowFilter");
-            // With a warning in the help line while it's on
-            AddSetting(advanced, "SHADOWS.ExtraNightShadows");
-            AddSetting(advanced, "MAIN.GraphicsAPI");
+            // Extra Night Shadows with a warning in the help line while it's on
+            for (auto id : { "FOG.VolumetricFog", "MISC.SunShafts", "MISC.UnclampLighting", "MISC.ConsoleCarReflectionsAndDirt", "EXPERIMENTAL.ReflectionMSAAQuality",
+                             "MISC.AmbientOcclusion", "SHADOWS.ShadowFilter", "SHADOWS.ExtraNightShadows", "MISC.DistantLights" })
+                AddSetting(advanced, id);
 
             // Lighting: the screen space effects, the sky and the night shadows
             auto lighting = AddPage(screen, "@FF_LIGHTING", "MO_ANALYZER");
@@ -4002,7 +3993,7 @@ private:
         if (auto it = pluginsPages.find(static_cast<int32_t>(screen)); it != pluginsPages.end())
             return it->second;
         auto& before = pluginsBefore[static_cast<int32_t>(screen)];
-        auto page = AddPage(screen, "@ff.plugins", before);
+        auto page = AddPage(screen, "@ff.plugins", before, true);
         pluginsPages[static_cast<int32_t>(screen)] = page;
         return page;
     }
@@ -4243,6 +4234,22 @@ private:
         return FormatText("@ff.page.contains", labels);
     }
 
+    // Video Mode's one-line resolution text occupies part of the normal graphics-help area.
+    // Graphics itself, not one of its pages: its info text starts a row lower, below the Video Mode value
+    static bool IsGraphicsList()
+    {
+        return currentScreen && (*currentScreen == 49 || *currentScreen == 62) && activePage == -1;
+    }
+
+    static bool IsVideoModeSelected()
+    {
+        if (!currentScreen || (*currentScreen != 49 && *currentScreen != 62) || activePage != -1)
+            return false;
+        auto& options = screens[*currentScreen].options;
+        auto row = CMenu::getSelectedItem();
+        return options.data && row >= 0 && row < options.count && std::strcmp(options.data[row].label, "MO_VM") == 0;
+    }
+
     // The info text of the selected row of Fusion Fix or another plugin: its description and at most one note below
     // it. Empty for rows of the game.
     static std::wstring DescriptionText()
@@ -4254,6 +4261,8 @@ private:
         if (!options.data || row < 0 || row >= options.count)
             return {};
         auto& option = options.data[row];
+        if (getInfoPosition && IsVideoModeSelected())
+            return CText::getText("GRPH_VID_MODE");
         std::string description, note;
         if (auto button = FindButton(row); button >= 0 && dynamicOptions[button].submenu != -1)
             description = PageHelp(dynamicOptions[button].submenu);
@@ -4282,8 +4291,6 @@ private:
         return lines;
     }
 
-    static constexpr const wchar_t* SubmenuMark = L" >";
-
     // Render thread, before the menu draws its rows: rows that open a page show the page's value. Rows keep the
     // menu's own colours (idle, hovered, selected); their labels are never changed, so they don't flicker.
     static void StyleRows(int32_t handle)
@@ -4307,45 +4314,13 @@ private:
         }
     }
 
-    // The way to the page shown above its rows: "GAME > STARTUP AND WINDOW"
-    static void DrawBreadcrumb(int32_t handle)
-    {
-        auto instance = handle >= 0 ? menuInstances[handle] : nullptr;
-        auto page = ShownPage();
-        if (!instance || handle != menuHandles[0] || !page || activeHost != *currentScreen || !tabState || hasTabModal() != 0 || confirming)
-            return;
-        auto root = GetRootScreen(activePage);
-        if (root < 0 || root >= 73)
-            return;
-        auto text = ToGameText(Upper(FromGameText(CText::getText(screens[root].header)) + " > " + FromGameText(GetPageName(*page))));
-        auto position = reinterpret_cast<float*>(instance + 0x35D0);
-        auto scaleX = *reinterpret_cast<float*>(instance + 0x35DC) * *reinterpret_cast<float*>(instance + 0x35E4);
-        auto scaleY = *reinterpret_cast<float*>(instance + 0x35E0) * *reinterpret_cast<float*>(instance + 0x35E8);
-        auto font = fontStates + getFontContext() * 0x48;
-        std::array<uint8_t, 0x48> saved;
-        std::memcpy(saved.data(), font, saved.size());
-        font[0x14] = 0;
-        font[0x15] = 0;
-        font[0x16] = 1;
-        font[0x1A] = 255;
-        setFontOrientation(1);
-        setFontStyle(*reinterpret_cast<int32_t*>(instance + 0x35D8));
-        setTabScale(scaleX * 0.6f, scaleY * 0.6f);
-        setFontEdge(*reinterpret_cast<float*>(instance + 0x3608));
-        setFontEdgeColor(uint32_t(instance[0x363C]) << 24);
-        auto x = GetActiveCategories() ? bodyPosition[0] : position[0];
-        setFontWrap(x - 0.02f, x + 1.0f);
-        setTabColor(*reinterpret_cast<uint32_t*>(instance + 0x3630));
-        printTab(x, position[1] + 0.019f, (L"~m~" + text).c_str(), -1, -1);
-        std::memcpy(font, saved.data(), saved.size());
-    }
-
     // The menu's info text at the top right (Graphics: the video memory and what the selected row affects), for rows
     // of Fusion Fix and other plugins on every tab: at the place, in the font and the colour of the game's
     static inline float* (__cdecl* getInfoPosition)(float*) = nullptr;
     static inline float* (__cdecl* getInfoLabelWidth)(float*) = nullptr;
     static inline void(__cdecl* setFontDropShadow)(float) = nullptr;
     static inline SafetyHookMid infoTextRow;
+    static inline SafetyHookMid infoTextTop;
     static inline std::array<std::vector<std::string>, 2> graphicsLabels;  // rows of the XML of Graphics, title Graphics
 
     static void DrawDescription(int32_t handle)
@@ -4384,7 +4359,7 @@ private:
         setFontWrap(left, right[0]);
         uint32_t colour = 0;
         setTabColor(*getHudColour(&colour, 59));
-        printTab(left, position[1] + 0.04f, text.c_str(), -1, -1);
+        printTab(left, position[1] + 0.04f + (IsGraphicsList() && rowHeight ? *rowHeight : 0.0f), text.c_str(), -1, -1);
         std::memcpy(font, saved.data(), saved.size());
     }
 
@@ -4402,7 +4377,12 @@ private:
             if (options.data[row].action == 127 || options.data[row].preference >= firstCustomID)
                 return;
         for (int32_t row = 0; row < options.count; ++row)
+        {
             graphicsLabels[slot].emplace_back(options.data[row].label, strnlen(options.data[row].label, sizeof(options.data[row].label)));
+            // The native help switch uses the original XML indices, including the removed Video Mode spacer.
+            if (std::strcmp(options.data[row].label, "MO_VM") == 0)
+                graphicsLabels[slot].emplace_back();
+        }
     }
 
     static void InfoTextRow(SafetyHookContext& regs)
@@ -4420,6 +4400,12 @@ private:
             return;
         }
         auto& option = options.data[row];
+        // Draw this help below the resolution text, using the game's translated string.
+        if (getInfoPosition && std::strcmp(option.label, "MO_VM") == 0)
+        {
+            regs.eax = None;
+            return;
+        }
         auto& labels = graphicsLabels[slot];
         auto found = std::find(labels.begin(), labels.end(), std::string(option.label, strnlen(option.label, sizeof(option.label))));
         regs.eax = option.action == 127 || option.preference >= firstCustomID || found == labels.end() ? None :
@@ -4438,12 +4424,18 @@ private:
         return options.data[row].preference;
     }
 
-    // Del on the keyboard, X on the gamepad: the selected row of Fusion Fix or another plugin goes back to its default
+    // Del on the keyboard, X on the gamepad: the selected row of Fusion Fix or another plugin goes back to its default.
+    // The menu's input for the gamepad's X is also Space on the keyboard, Graphics' Apply: Space doesn't reset.
     static void ResetSelectedRow()
     {
         static bool deleteDown = false;
         auto down = IsKeyboardKeyPressed(VK_DELETE);
-        auto pressed = (down && !deleteDown) || queryInput.ccall<uint8_t>(9, uint8_t(0), uint8_t(0), uint8_t(0), uint8_t(0), uint8_t(0), uint8_t(0)) != 0;
+        static ULONGLONG spaceTime = 0;
+        if (GetAsyncKeyState(VK_SPACE) & 0x8000)
+            spaceTime = GetTickCount64();
+        auto padX = queryInput.ccall<uint8_t>(9, uint8_t(0), uint8_t(0), uint8_t(0), uint8_t(0), uint8_t(0), uint8_t(0)) != 0 &&
+            GetTickCount64() - spaceTime > 500;
+        auto pressed = (down && !deleteDown) || padX;
         deleteDown = down;
         auto preference = SelectedSettingPreference();
         if (!pressed || preference < firstCustomID)
@@ -4935,11 +4927,8 @@ public:
                 if (limit >= 0 && limit <= 23)
                 {
                     auto pattern = hook::pattern("0F B6 35 ? ? ? ? 85 F6");
-                    if (!pattern.empty())
-                    {
-                        static int stationsLimit = limit;
-                        injector::WriteMemory(pattern.get_first(3), &stationsLimit, true);
-                    }
+                    static int stationsLimit = limit;
+                    injector::WriteMemory(pattern.get_first(3), &stationsLimit, true);
                 }
             }
         };
@@ -5064,7 +5053,7 @@ public:
             injector::MakeNOP(pattern.get_first(), 2);
 
             pattern = hook::pattern("83 F8 03 0F 44 CE");
-            if (!pattern.empty())
+            if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
             {
                 struct MenuHook
                 {
@@ -5074,21 +5063,19 @@ public:
                     }
                 }; injector::MakeInline<MenuHook>(pattern.get_first(0), pattern.get_first(6));
             }
-            else
+            else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
             {
                 pattern = hook::pattern("75 02 B3 01 57 E8");
-                if (!pattern.empty())
-                    injector::MakeNOP(pattern.get_first(), 2);
+                injector::MakeNOP(pattern.get_first(), 2);
             }
 
             pattern = hook::pattern("7E 4E 8A 1D ? ? ? ? 8B 35");
-            if (!pattern.empty())
+            if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
                 injector::WriteMemory<uint8_t>(pattern.get_first(0), 0xEB, true);
-            else
+            else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
             {
                 pattern = hook::pattern("83 F8 03 7F 06");
-                if (!pattern.empty())
-                    injector::MakeNOP(pattern.get_first(3), 2);
+                injector::MakeNOP(pattern.get_first(3), 2);
             }
 
             // Same but for the camera options of the Controls tab. The Graphics tab shows the game anyway (Extra Night
@@ -5103,7 +5090,7 @@ public:
             };
 
             pattern = hook::pattern("83 FE ? 75 ? FF 35 ? ? ? ? E8 ? ? ? ? 83 C4 ? 85 C0 79");
-            if (!pattern.empty())
+            if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
             {
                 static auto loc_5C27AD = resolve_displacement(pattern.get_first(3)).value();
                 struct MenuBackgroundHook1
@@ -5117,7 +5104,7 @@ public:
                     }
                 }; injector::MakeInline<MenuBackgroundHook1>(pattern.get_first(0));
             }
-            else
+            else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
             {
                 pattern = hook::pattern("83 3D ? ? ? ? ? 75 13 8B 0D ? ? ? ? 51 E8 ? ? ? ? 83 C4 04 85 C0 7D 21");
                 static auto loc_5C27AD = resolve_displacement(pattern.get_first(7)).value();
@@ -5149,7 +5136,7 @@ public:
 
             // And for map tab
             pattern = hook::pattern("83 3D ? ? ? ? ? 75 ? 83 FE ? 74 ? C6 05 ? ? ? ? ? E8 ? ? ? ? 83 3D");
-            if (!pattern.empty())
+            if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
             {
                 static auto loc_5A8557 = resolve_displacement(pattern.get_first(7)).value();
                 struct MenuBackgroundHook3
@@ -5163,7 +5150,7 @@ public:
                     }
                 }; injector::MakeInline<MenuBackgroundHook3>(pattern.get_first(0), pattern.get_first(9));
             }
-            else
+            else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
             {
                 pattern = hook::pattern("39 05 ? ? ? ? 75 12 39 44 24 14 74 2B C6 05 ? ? ? ? ? E8 ? ? ? ? B8 ? ? ? ? 39 05 ? ? ? ? 75 12");
                 static auto loc_5A8557 = resolve_displacement(pattern.get_first(6)).value();
@@ -5196,7 +5183,7 @@ public:
 
             // TLAD
             pattern = hook::pattern("8D 83 ? ? ? ? 50 8D 84 24 ? ? ? ? EB ? 8D 83 ? ? ? ? 50 8D 84 24 ? ? ? ? EB ? 8D 83 ? ? ? ? 50 8D 84 24 ? ? ? ? EB ? 8D 83");
-            if (!pattern.empty())
+            if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
             {
                 struct MenuBackgroundHook5
                 {
@@ -5209,7 +5196,7 @@ public:
                     }
                 }; injector::MakeInline<MenuBackgroundHook5>(pattern.get_first(0), pattern.get_first(6));
             }
-            else
+            else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
             {
                 pattern = hook::pattern("8D 8D ? ? ? ? 51 52 E8 ? ? ? ? 8B 08 89 4C 24 18");
                 struct MenuBackgroundHook5
@@ -5275,7 +5262,7 @@ public:
 
             // FOG
             pattern = find_pattern("F3 0F 10 05 ? ? ? ? F3 0F 5C C1 F3 0F 59 C2 F3 0F 58 C1 F3 0F 11 05 ? ? ? ? F3 0F 10 05");
-            if (!pattern.empty())
+            if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
             {
                 static float* farClipMultiplier = *pattern.get_first<float*>(4);
                 injector::MakeNOP(pattern.get_first(), 8);
@@ -5294,7 +5281,7 @@ public:
                     }
                 });
             }
-            else
+            else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
             {
                 pattern = find_pattern("F3 0F 10 15 ? ? ? ? F3 0F 5C D1 F3 0F 59 D0 F3 0F 58 D1 F3 0F 11 15 ? ? ? ? F3 0F 10 15");
                 static float* farClipMultiplier = *pattern.get_first<float*>(4);
@@ -5316,7 +5303,7 @@ public:
             }
 
             pattern = find_pattern("F3 0F 10 05 ? ? ? ? F3 0F 5C C1 F3 0F 59 C2 F3 0F 58 C1 F3 0F 11 05 ? ? ? ? 8B E5");
-            if (!pattern.empty())
+            if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
             {
                 static float* nearFogMultiplier = *pattern.get_first<float*>(4);
                 injector::MakeNOP(pattern.get_first(), 8);
@@ -5329,7 +5316,7 @@ public:
                         regs.xmm0.f32[0] = *nearFogMultiplier;
                 });
             }
-            else
+            else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
             {
                 pattern = find_pattern("F3 0F 10 15 ? ? ? ? F3 0F 5C D1 F3 0F 59 D0 F3 0F 58 D1 F3 0F 11 15 ? ? ? ? 8B E5");
                 static float* nearFogMultiplier = *pattern.get_first<float*>(4);
@@ -5354,9 +5341,11 @@ public:
                     return shGetUserLanguage.call<int>();
                 };
 
-                auto pattern = hook::pattern("83 EC ? A1 ? ? ? ? 33 C4 89 44 24 ? A1 ? ? ? ? 8B 0D ? ? ? ? 53 55 56 33 ED 57 33 FF 85 C0 0F 45 E8");
-                if (!pattern.empty())
-                    shGetUserLanguage = safetyhook::create_inline(pattern.get_first(0), static_cast<int(*)()>(GetUserLanguage));
+                auto pattern = find_pattern(
+                    "83 EC ? A1 ? ? ? ? 33 C4 89 44 24 ? A1 ? ? ? ? 8B 0D ? ? ? ? 53 55 56 33 ED 57 33 FF 85 C0 0F 45 E8",  // 1.2.0.43, 1.2.0.59
+                    "83 EC 74 A1 ? ? ? ? 33 C4 89 44 24 70 A1 ? ? ? ? 53 55 56 57 33 FF 33 ED 85 C0",                        // 1.2.0.32
+                    "56 33 F6 FF 15 ? ? ? ? 25 FF 03 00 00 83 C0 F9 83 F8 12 77");                                           // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
+                shGetUserLanguage = safetyhook::create_inline(pattern.get_first(0), static_cast<int(*)()>(GetUserLanguage));
             }
 
             // Shadows setting
@@ -5652,14 +5641,14 @@ public:
 
             static bool bRmb = false;
             pattern = find_pattern("F6 C1 01 0F 84 ? ? ? ? 80 BC 16");
-            if (!pattern.empty())
+            if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
             {
                 static auto GetRMBClick = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
                 {
                     bRmb = (*(uint8_t*)&regs.ecx & 2) != 0;
                 });
             }
-            else
+            else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
             {
                 pattern = find_pattern("F6 C2 01 0F 84 ? ? ? ? 80 BC 08");
                 static auto GetRMBClick = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
@@ -5687,7 +5676,7 @@ public:
                 CTimer::hbIsUserPaused.fun = injector::MakeCALL(pattern.get_first(0), CTimer::IsCameraBaseProcessingUserPaused).get();
 
                 pattern = hook::pattern("0A 05 ? ? ? ? 0A 05 ? ? ? ? 74 12");
-                if (!pattern.empty())
+                if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
                 {
                     injector::MakeNOP(pattern.get_first(0), 6, true);
                     static auto CCam__BaseProcess_Hook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
@@ -5702,7 +5691,7 @@ public:
                         }
                     });
                 }
-                else
+                else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
                 {
                     pattern = hook::pattern("E8 ? ? ? ? 84 C0 74 ? 80 3D ? ? ? ? ? 75 ? 80 3D ? ? ? ? ? 74 ? 84 DB");
                     CTimer::hbIsGamePaused.fun = injector::MakeCALL(pattern.get_first(0), CTimer::IsCameraBaseProcessingGamePaused).get();
@@ -5712,7 +5701,7 @@ public:
             // Make timecycle changes visible in menus
             {
                 pattern = hook::pattern("0A 05 ? ? ? ? 0A 05 ? ? ? ? 0F 85 ? ? ? ? E8 ? ? ? ? 84 C0 0F 85 ? ? ? ? F3 0F 10 05 ? ? ? ? F3 0F 11 04 24");
-                if (!pattern.empty())
+                if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
                 {
                     injector::MakeNOP(pattern.get_first(0), 6, true);
                     static auto CVisualEffects__Update_Hook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
@@ -5727,14 +5716,14 @@ public:
                         }
                     });
                 }
-                else
+                else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
                 {
                     pattern = hook::pattern("E8 ? ? ? ? 84 C0 5F 0F 85");
                     CTimer::hbIsGamePaused.fun = injector::MakeCALL(pattern.get_first(0), CTimer::AreVisualEffectUpdatesGamePaused).get();
                 }
 
                 pattern = hook::pattern("0A 05 ? ? ? ? 0A 05 ? ? ? ? 74 ? 8B 0D");
-                if (!pattern.empty())
+                if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
                 {
                     injector::MakeNOP(pattern.get_first(0), 6, true);
                     static auto TimeCycle__UpdateFinalize_Hook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
@@ -5749,7 +5738,7 @@ public:
                         }
                     });
                 }
-                else
+                else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
                 {
                     pattern = hook::pattern("E8 ? ? ? ? 84 C0 74 ? A1 ? ? ? ? 69 C0");
                     CTimer::hbIsGamePaused.fun = injector::MakeCALL(pattern.get_first(0), CTimer::AreVisualEffectUpdatesGamePaused).get();

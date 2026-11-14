@@ -171,10 +171,14 @@ public:
         if (getNativeAddress)
             return reinterpret_cast<ncall>(getNativeAddress(Hash));
 
-        auto ms_pNatives = *rage::scrEngine::ms_pNatives;
-        auto ms_dwNativeTableSize = *rage::scrEngine::ms_dwNativeTableSize;
+        // The size first: it is zero while the game makes the table (ScriptTableInit)
+        auto ms_dwNativeTableSize = std::atomic_ref(*rage::scrEngine::ms_dwNativeTableSize).load(std::memory_order_acquire);
+        auto ms_pNatives = std::atomic_ref(*rage::scrEngine::ms_pNatives).load(std::memory_order_acquire);
 
-        if (ms_dwNativeTableSize == 0 || Hash == 0)
+        // and again after the pointer: a table being made in between is not used
+        auto sizeAfter = std::atomic_ref(*rage::scrEngine::ms_dwNativeTableSize).load(std::memory_order_acquire);
+
+        if (ms_dwNativeTableSize == 0 || sizeAfter != ms_dwNativeTableSize || !ms_pNatives || Hash == 0)
             return nullptr;
 
         auto nativeIndex = Hash % ms_dwNativeTableSize;
@@ -6401,28 +6405,29 @@ export namespace GameCamera
 export class NativeOverride
 {
 public:
-    static auto Register(auto hash, auto fn, std::string_view dest_pattern_str, size_t fn_size)
+    // The call or jump inside the native's handler, the first fn_size bytes
+    static auto FindCall(auto hash, std::string_view dest_pattern_str, size_t fn_size)
     {
         auto nativeHash = std::to_underlying(hash);
         // push offset handler; push hash: the hash's bytes can also turn up inside relocated operands at some exe bases,
-        // the handler pointer before a real one is relocated
+        // the handler pointer before a real one is relocated. Nothing found: an empty range
         uintptr_t addr = 0;
         hook::pattern(pattern_str(0x68, to_bytes(nativeHash))).for_each_result([&](hook::pattern_match match)
         {
             if (!addr && IsRelocatedDword(match.get<void>(-4)))
                 addr = *match.get<uintptr_t>(-4);
         });
-        if (!addr)
+        return hook::range_pattern(addr, addr ? addr + fn_size : addr, dest_pattern_str);
+    }
+
+    static auto Register(auto hash, auto fn, std::string_view dest_pattern_str, size_t fn_size)
+    {
+        auto range = FindCall(hash, dest_pattern_str, fn_size);
+        if (range.empty())
             return injector::auto_pointer(nullptr);
-        auto range = hook::range_pattern(addr, addr + fn_size, dest_pattern_str);
-        if (!range.empty())
-        {
-            if (dest_pattern_str.starts_with("E8"))
-                return injector::MakeCALL(range.get_first(0), fn, true).get();
-            else if (dest_pattern_str.starts_with("E9"))
-                return injector::MakeJMP(range.get_first(0), fn, true).get();
-        }
-        return injector::auto_pointer(nullptr);
+        if (dest_pattern_str.starts_with("E9"))
+            return injector::MakeJMP(range.get_first(0), fn, true).get();
+        return injector::MakeCALL(range.get_first(0), fn, true).get();
     }
 
     static inline std::unordered_map<std::string_view, std::pair<std::function<void()>, int>> customCheatHandlers;
@@ -6460,3 +6465,88 @@ public:
         hbNATIVE_STOP_MOBILE_PHONE_RINGING.fun = Register(Natives::NativeHashes::STOP_MOBILE_PHONE_RINGING, NATIVE_STOP_MOBILE_PHONE_RINGING, "E9", 5);
     }
 } CheatOverride;
+
+// The script engine's two hash tables (its natives, and the one next to it) are made by one function that stores the
+// size first, then allocates the table and clears it. Anything that looks a native up in between, from another thread
+// (a plugin calling natives while the game starts or starts a new session), gets a size with a table that is null,
+// still the old one or not cleared yet. The size is now zero while the table is made and set once it is ready.
+namespace ScriptTableInit
+{
+    template<size_t I>
+    struct Table
+    {
+        static inline int32_t* pSize = nullptr;
+        static inline int32_t* pCount = nullptr;
+    };
+
+    template<size_t I>
+    struct Unpublish
+    {
+        void operator()(injector::reg_pack& regs)
+        {
+            std::atomic_ref(*Table<I>::pSize).store(0, std::memory_order_release);
+        }
+    };
+
+    // Both ends of the function: the count, then the size
+    template<size_t I, uintptr_t SafetyHookContext::* Capacity>
+    struct PublishEmpty
+    {
+        void operator()(injector::reg_pack& regs)
+        {
+            *Table<I>::pCount = 0;
+            std::atomic_ref(*Table<I>::pSize).store(static_cast<int32_t>(regs.*Capacity), std::memory_order_release);
+        }
+    };
+
+    template<size_t I, uintptr_t SafetyHookContext::* Capacity, uintptr_t SafetyHookContext::* Count>
+    struct Publish
+    {
+        void operator()(injector::reg_pack& regs)
+        {
+            *Table<I>::pCount = static_cast<int32_t>(regs.*Count);
+            std::atomic_ref(*Table<I>::pSize).store(static_cast<int32_t>(regs.*Capacity), std::memory_order_release);
+        }
+    };
+
+    class ScriptTableInit
+    {
+    public:
+        ScriptTableInit()
+        {
+            FusionFix::onInitEvent() += []()
+            {
+                auto pattern = hook::pattern("64 A1 2C 00 00 00 53 8B 00 8B 5C 24 08 56 8B 70 08 33 C9 8B C3 BA 08 00 00 00 F7 E2 0F 90 C1 57 6A 00 6A 10 89 1D");
+                if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59: capacity in ebx; mov [size], ebx at +0x24, mov [count], 0 at +0x56, mov [count], ecx at +0x66
+                {
+                    auto apply = []<size_t I>(uint8_t* fn)
+                    {
+                        Table<I>::pSize = *reinterpret_cast<int32_t**>(fn + 0x26);
+                        Table<I>::pCount = *reinterpret_cast<int32_t**>(fn + 0x58);
+                        injector::MakeInline<Unpublish<I>>(fn + 0x24, fn + 0x24 + 6);
+                        injector::MakeInline<PublishEmpty<I, &SafetyHookContext::ebx>>(fn + 0x56, fn + 0x56 + 10);
+                        injector::MakeInline<Publish<I, &SafetyHookContext::ebx, &SafetyHookContext::ecx>>(fn + 0x66, fn + 0x66 + 6);
+                    };
+                    pattern.count(2);
+                    apply.template operator()<0>(pattern.get(0).get<uint8_t>(0));
+                    apply.template operator()<1>(pattern.get(1).get<uint8_t>(0));
+                }
+                else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0: capacity in esi; mov [size], esi at +0x1D, mov [count], 0 at +0x54, mov [count], eax at +0x5F
+                {
+                    pattern = hook::pattern("64 A1 2C 00 00 00 8B 08 53 57 8B 79 08 33 C9 8B C6 BA 08 00 00 00 F7 E2 0F 90 C1 6A 00 89 35");
+                    auto apply = []<size_t I>(uint8_t* fn)
+                    {
+                        Table<I>::pSize = *reinterpret_cast<int32_t**>(fn + 0x1F);
+                        Table<I>::pCount = *reinterpret_cast<int32_t**>(fn + 0x56);
+                        injector::MakeInline<Unpublish<I>>(fn + 0x1D, fn + 0x1D + 6);
+                        injector::MakeInline<PublishEmpty<I, &SafetyHookContext::esi>>(fn + 0x54, fn + 0x54 + 10);
+                        injector::MakeInline<Publish<I, &SafetyHookContext::esi, &SafetyHookContext::eax>>(fn + 0x5F, fn + 0x5F + 5);
+                    };
+                    pattern.count(2);
+                    apply.template operator()<0>(pattern.get(0).get<uint8_t>(0));
+                    apply.template operator()<1>(pattern.get(1).get<uint8_t>(0));
+                }
+            };
+        }
+    } ScriptTableInit;
+}

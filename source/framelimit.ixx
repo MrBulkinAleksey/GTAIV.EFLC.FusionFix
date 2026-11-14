@@ -2,8 +2,7 @@ module;
 
 #include <common.hxx>
 #include <regex>
-#include <mmsystem.h>
-#pragma comment(lib, "winmm.lib") // needed for timeBeginPeriod()/timeEndPeriod()
+#include <atomic>
 
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
@@ -16,133 +15,77 @@ import comvars;
 import settings;
 import natives;
 
-int32_t nFrameLimitType;
 float fFpsLimit;
 float fCutsceneFpsLimit;
 float fMinigamesFpsLimit;
 std::vector<std::string> minigamesNames;
 
+// Sleeps on a high resolution timer until shortly before each frame's time slot, then spins the rest, so the wait is
+// exact without keeping a CPU core busy. Each slot follows the one before, so the pace doesn't drift; a frame that comes
+// later than a whole slot starts the count anew instead of rushing the next ones.
 class FrameLimiter
 {
+    std::atomic<LONGLONG> period{ 0 };
+    std::atomic<bool> restart{ true };
+    LONGLONG next = 0;
+
+    static LONGLONG Frequency()
+    {
+        static const LONGLONG frequency = []
+        {
+            LARGE_INTEGER value{};
+            QueryPerformanceFrequency(&value);
+            return value.QuadPart;
+        }();
+        return frequency;
+    }
+
+    static LONGLONG Now()
+    {
+        LARGE_INTEGER now{};
+        QueryPerformanceCounter(&now);
+        return now.QuadPart;
+    }
+
+    static void WaitUntil(LONGLONG target)
+    {
+        static const HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        constexpr double SpinTime = 0.0015;
+        const double seconds = double(target - Now()) / double(Frequency());
+        if (seconds > SpinTime)
+        {
+            LARGE_INTEGER due{};
+            due.QuadPart = -static_cast<LONGLONG>((seconds - SpinTime) * 10000000.0);
+            if (timer && SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE))
+                WaitForSingleObject(timer, INFINITE);
+            else
+                Sleep(static_cast<DWORD>((seconds - SpinTime) * 1000.0));
+        }
+        while (Now() < target)
+            YieldProcessor();
+    }
+
 public:
-    enum FPSLimitMode { FPS_NONE, FPS_REALTIME, FPS_ACCURATE };
-    FPSLimitMode mFPSLimitMode = FPS_NONE;
-private:
-    double TIME_Frequency = 0.0;
-    double TIME_Ticks = 0.0;
-    float  fFPSLimit = 0.0f;
-    bool   bFpsLimitWasUpdated = false;
-    LONGLONG nFrequency = 1;
-    LONGLONG nPeriod = 0;
-    LONGLONG nLastRelease = 0;
-    HANDLE hTimer = nullptr;
-    bool   bTimerTried = false;
-public:
-    void Init(FPSLimitMode mode, float fps_limit)
+    void Init(float fps_limit)
     {
-        bFpsLimitWasUpdated = true;
-        mFPSLimitMode = mode;
-        fFPSLimit = fps_limit;
-
-        LARGE_INTEGER frequency;
-        QueryPerformanceFrequency(&frequency);
-        static constexpr auto TICKS_PER_FRAME = 1;
-        auto TICKS_PER_SECOND = (TICKS_PER_FRAME * fFPSLimit);
-        nFrequency = frequency.QuadPart;
-        nPeriod = fFPSLimit > 0.0f ? LONGLONG((double)frequency.QuadPart / (double)fFPSLimit) : 0;
-        if (mFPSLimitMode == FPS_REALTIME)
-        {
-            TIME_Frequency = (double)frequency.QuadPart / (double)TICKS_PER_SECOND; // ticks are 1/n frames (n = fFPSLimit)
-            Ticks();
-        }
+        period = fps_limit > 0.0f ? static_cast<LONGLONG>(double(Frequency()) / double(fps_limit)) : 0;
+        restart = true;
     }
-    DWORD Sync_RT()
-    {
-        if (bFpsLimitWasUpdated)
-        {
-            bFpsLimitWasUpdated = false;
-            return 1;
-        }
 
-        DWORD lastTicks, currentTicks;
-        LARGE_INTEGER counter;
-
-        QueryPerformanceCounter(&counter);
-        lastTicks = (DWORD)TIME_Ticks;
-        TIME_Ticks = (double)counter.QuadPart / TIME_Frequency;
-        currentTicks = (DWORD)TIME_Ticks;
-
-        return (currentTicks > lastTicks) ? currentTicks - lastTicks : 0;
-    }
-    // FPS_ACCURATE: frames are released on a fixed schedule, one period after the last release while on time, so a
-    // wait that overshoots doesn't lengthen every frame after it; a late frame starts the schedule afresh. A high
-    // resolution waitable timer carries the wait and a spin only the last half millisecond, so the CPU (and on an
-    // iGPU the power it shares with the GPU) isn't kept busy; Sleep(1) where the timer can't be made.
-    void Sync_Schedule()
-    {
-        LARGE_INTEGER counter;
-        QueryPerformanceCounter(&counter);
-        auto now = counter.QuadPart;
-        if (bFpsLimitWasUpdated || !nLastRelease)
-        {
-            bFpsLimitWasUpdated = false;
-            nLastRelease = now;
-            return;
-        }
-
-        auto due = nLastRelease + nPeriod;
-        if (now < due)
-        {
-            if (!bTimerTried)
-            {
-                bTimerTried = true;
-                hTimer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
-            }
-
-            auto spin = nFrequency / 2000;
-            auto wait = due - now - spin;
-            if (wait > 0)
-            {
-                LARGE_INTEGER rel;
-                rel.QuadPart = -(wait * 10000000 / nFrequency); // 100 ns units, relative
-                if (hTimer && SetWaitableTimerEx(hTimer, &rel, 0, nullptr, nullptr, nullptr, 0))
-                    WaitForSingleObject(hTimer, INFINITE);
-                else
-                {
-                    while (due - counter.QuadPart > nFrequency / 500) // > 2ms
-                    {
-                        Sleep(1);
-                        QueryPerformanceCounter(&counter);
-                    }
-                }
-            }
-
-            do
-            {
-                YieldProcessor();
-                QueryPerformanceCounter(&counter);
-            } while (counter.QuadPart < due);
-            now = due;
-        }
-
-        nLastRelease = (now - due < nPeriod) ? due : now;
-    }
     void Sync()
     {
-        if (fFPSLimit <= 0.0f)
+        const LONGLONG slot = period;
+        if (slot <= 0)
             return;
 
-        if (mFPSLimitMode == FPS_REALTIME)
-            while (!Sync_RT());
-        else if (mFPSLimitMode == FPS_ACCURATE)
-            Sync_Schedule();
-    }
-private:
-    void Ticks()
-    {
-        LARGE_INTEGER counter;
-        QueryPerformanceCounter(&counter);
-        TIME_Ticks = (double)counter.QuadPart / TIME_Frequency;
+        const LONGLONG now = Now();
+        if (restart.exchange(false) || now > next + slot)
+        {
+            next = now + slot;
+            return;
+        }
+        WaitUntil(next);
+        next += slot;
     }
 };
 
@@ -233,7 +176,6 @@ public:
             SettingsReader reader;
 
             //[FRAMELIMIT]
-            nFrameLimitType = reader.ReadInteger("FRAMELIMIT", "FrameLimitType", 2);
             fFpsLimit = static_cast<float>(reader.ReadInteger("FRAMELIMIT", "FpsLimit", -1));
             fCutsceneFpsLimit = static_cast<float>(reader.ReadInteger("FRAMELIMIT", "CutsceneFpsLimit", 0));
             fMinigamesFpsLimit = static_cast<float>(reader.ReadInteger("FRAMELIMIT", "MinigamesFpsLimit", 30));
@@ -259,58 +201,52 @@ public:
 
             //if (fFpsLimit || fCutsceneFpsLimit)
             {
-                auto mode = (nFrameLimitType == 2) ? FrameLimiter::FPSLimitMode::FPS_ACCURATE : FrameLimiter::FPSLimitMode::FPS_REALTIME;
-                if (mode == FrameLimiter::FPSLimitMode::FPS_ACCURATE)
-                    timeBeginPeriod(1);
-
                 if (fMinigamesFpsLimit)
                     fMinigamesFpsLimit = std::clamp(fMinigamesFpsLimit, 30.0f, FLT_MAX);
 
-                CutsceneFpsLimiter.Init(mode, fCutsceneFpsLimit);
-                MinigamesFpsLimiter.Init(mode, fMinigamesFpsLimit);
+                CutsceneFpsLimiter.Init(fCutsceneFpsLimit);
+                MinigamesFpsLimiter.Init(fMinigamesFpsLimit);
 
                 auto pattern = find_pattern("A3 ? ? ? ? E8 ? ? ? ? A1 ? ? ? ? 50 8B 08");
-                if (!pattern.empty())
+                if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
                 {
                     static auto SetRefreshRateHook = safetyhook::create_mid(pattern.get_first(), [](SafetyHookContext& regs)
                     {
-                        auto mode = (nFrameLimitType == 2) ? FrameLimiter::FPSLimitMode::FPS_ACCURATE : FrameLimiter::FPSLimitMode::FPS_REALTIME;
                         auto preset = FusionFixSettings("PREF_FPS_LIMIT_PRESET");
                         if (preset > FusionFixSettings.FpsCaps.eCustom && preset < int32_t(FusionFixSettings.FpsCaps.data.size()))
-                            FpsLimiter.Init(mode, (float)FusionFixSettings.FpsCaps.data[preset]);
+                            FpsLimiter.Init((float)FusionFixSettings.FpsCaps.data[preset]);
                         else
                         {
                             if (fFpsLimit > 0.0f)
-                                FpsLimiter.Init(mode, fFpsLimit);
+                                FpsLimiter.Init(fFpsLimit);
                             else
                             {
                                 if (regs.eax)
-                                    FpsLimiter.Init(mode, float(regs.eax) + fFpsLimit);
+                                    FpsLimiter.Init(float(regs.eax) + fFpsLimit);
                                 else
-                                    FpsLimiter.Init(mode, 0.0f);
+                                    FpsLimiter.Init(0.0f);
                             }
                         }
                     });
                 }
-                else
+                else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
                 {
                     pattern = find_pattern("89 0D ? ? ? ? F6 05", "89 0D ? ? ? ? E8 ? ? ? ? A1 ? ? ? ? 8B 08");
                     static auto SetRefreshRateHook = safetyhook::create_mid(pattern.get_first(), [](SafetyHookContext& regs)
                     {
-                        auto mode = (nFrameLimitType == 2) ? FrameLimiter::FPSLimitMode::FPS_ACCURATE : FrameLimiter::FPSLimitMode::FPS_REALTIME;
                         auto preset = FusionFixSettings("PREF_FPS_LIMIT_PRESET");
                         if (preset > FusionFixSettings.FpsCaps.eCustom && preset < int32_t(FusionFixSettings.FpsCaps.data.size()))
-                            FpsLimiter.Init(mode, (float)FusionFixSettings.FpsCaps.data[preset]);
+                            FpsLimiter.Init((float)FusionFixSettings.FpsCaps.data[preset]);
                         else
                         {
                             if (fFpsLimit > 0.0f)
-                                FpsLimiter.Init(mode, fFpsLimit);
+                                FpsLimiter.Init(fFpsLimit);
                             else
                             {
                                 if (regs.ecx)
-                                    FpsLimiter.Init(mode, float(regs.ecx) + fFpsLimit);
+                                    FpsLimiter.Init(float(regs.ecx) + fFpsLimit);
                                 else
-                                    FpsLimiter.Init(mode, 0.0f);
+                                    FpsLimiter.Init(0.0f);
                             }
                         }
                     });
@@ -322,37 +258,36 @@ public:
 
                 FusionFixSettings.SetCallback("PREF_FPS_LIMIT_PRESET", [](int32_t value)
                 {
-                    auto mode = (nFrameLimitType == 2) ? FrameLimiter::FPSLimitMode::FPS_ACCURATE : FrameLimiter::FPSLimitMode::FPS_REALTIME;
                     if (value > FusionFixSettings.FpsCaps.eCustom && value < int32_t(FusionFixSettings.FpsCaps.data.size()))
-                        FpsLimiter.Init(mode, (float)FusionFixSettings.FpsCaps.data[value]);
+                        FpsLimiter.Init((float)FusionFixSettings.FpsCaps.data[value]);
                     else
                     {
                         if (fFpsLimit > 0.0f)
-                            FpsLimiter.Init(mode, fFpsLimit);
+                            FpsLimiter.Init(fFpsLimit);
                         else
                         {
                             if (*rage::grcWindow::ms_nActiveRefreshrate)
-                                FpsLimiter.Init(mode, float(*rage::grcWindow::ms_nActiveRefreshrate) + fFpsLimit);
+                                FpsLimiter.Init(float(*rage::grcWindow::ms_nActiveRefreshrate) + fFpsLimit);
                             else
-                                FpsLimiter.Init(mode, 0.0f);
+                                FpsLimiter.Init(0.0f);
                         }
                     }
                 });
 
                 // Unlimit in-game loading screens' FPS
                 pattern = find_pattern("8B 4C 24 04 8B 54 24 08 8B 41 08", "8B 54 24 04 8B 42 08 85 C0 8B 4C 24 08 75 12");
-                if (!pattern.empty())
-                    injector::MakeJMP(pattern.get_first(0), sub_411F50, true);
+                injector::MakeJMP(pattern.get_first(0), sub_411F50, true);
 
                 // Unlimit initial loading screens' FPS
                 static float f0 = 0.0f;
                 pattern = hook::pattern("F3 0F 10 05 ? ? ? ? 2B C1 1B D6 89 44 24 18 89 54 24 1C DF 6C 24 18 D9 5C 24 18 F3 0F 10 4C 24 ? F3 0F 59 0D ? ? ? ? 0F 2F C1");
-                if (!pattern.empty())
+                if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
                     injector::WriteMemory(pattern.get_first(4), &f0, true);
-                else
+                else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
                 {
-                    pattern = hook::pattern("8B 35 ? ? ? ? 2B C1 1B D6 89 44 24 18 89 54 24 1C DF 6C 24 18 D8 0D ? ? ? ? D9 05 ? ? ? ? DF F1");
-                    if (!pattern.empty())
+                    // 1.0.7.0 and 1.1.2.0 don't cap the initial loading screens
+                    pattern = hook::pattern("8B 35 ? ? ? ? 2B C1 1B D6 89 44 24 18 89 54 24 1C DF 6C 24 18 D8 0D ? ? ? ? D9 05 ? ? ? ? DF F1"); // 1.0.8.0, 1.1.3.0
+                    if (!pattern.empty()) // 1.0.8.0, 1.1.3.0
                         injector::WriteMemory(pattern.get_first(2), &f0, true);
                 }
             }
@@ -363,29 +298,20 @@ public:
             // The infinite loading before/after some cutscenes (Off Route, Momma's Boy) used to be avoided by limiting the frame
             // rate around them; the cause (CTimer's millisecond clocks running slow) is fixed in frameratevigilante.ixx
             auto pattern = find_pattern("FF 05 ? ? ? ? C3 E8", "83 05 ? ? ? ? ? C3 E8 ? ? ? ? 8B C8");
-            if (!pattern.empty())
+            static auto SET_MINIGAME_IN_PROGRESS_HOOK = safetyhook::create_mid(pattern.get_first(), [](SafetyHookContext& regs)
             {
-                static auto SET_MINIGAME_IN_PROGRESS_HOOK = safetyhook::create_mid(pattern.get_first(), [](SafetyHookContext& regs)
+                auto curThread = (rage::scrThread*)regs.eax;
+                if (curThread)
                 {
-                    auto curThread = (rage::scrThread*)regs.eax;
-                    if (curThread)
-                    {
-                        std::string curScript = curThread->m_szProgramName;
-                        std::transform(curScript.begin(), curScript.end(), curScript.begin(), [](unsigned char c) { return std::tolower(c); });
+                    std::string curScript = curThread->m_szProgramName;
+                    std::transform(curScript.begin(), curScript.end(), curScript.begin(), [](unsigned char c) { return std::tolower(c); });
 
-                        if (std::any_of(std::begin(minigamesNames), std::end(minigamesNames), [&curScript](const auto& i) { return i == curScript; }))
-                            bNeedsToLimitFpsForThisMinigame = true;
-                        else
-                            bNeedsToLimitFpsForThisMinigame = false;
-                    }
-                });
-            }
-        };
-
-        FusionFix::onShutdownEvent() += []()
-        {
-            if (nFrameLimitType == FrameLimiter::FPSLimitMode::FPS_ACCURATE)
-                timeEndPeriod(1);
+                    if (std::any_of(std::begin(minigamesNames), std::end(minigamesNames), [&curScript](const auto& i) { return i == curScript; }))
+                        bNeedsToLimitFpsForThisMinigame = true;
+                    else
+                        bNeedsToLimitFpsForThisMinigame = false;
+                }
+            });
         };
     }
 } Framelimit;

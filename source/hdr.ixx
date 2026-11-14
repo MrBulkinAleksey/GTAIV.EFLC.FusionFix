@@ -35,7 +35,7 @@ import windowed;
 //   space and the HDR metadata are set with DXVK's swap chain extension.
 // - DirectX 12: the system's D3D9 runtime refuses float back buffers, so the back buffer keeps its 8-bit format for the
 //   runtime and the game, and the driver stores it as 16-bit float and presents it in scRGB with the HDR metadata
-//   (D3D9On12SetHdrOutput, FusionFixUtils upscaler/D3D9On12Extensions.h). Only a window's swap chain has a color
+//   (D3D9On12SetHdrOutput, source/upscaler/D3D9On12Extensions.h). Only a window's swap chain has a color
 //   space: with HDR on, fullscreen is a window over the monitor instead of exclusive (graphics_api.h
 //   SetWindowedOnDriver, ApplyResetWindowMode; windowed.ixx places it). Keep this presentation path for the
 //   session, including SDR, so focus recovery never transfers the window between runtime-owned exclusive
@@ -289,11 +289,15 @@ public:
             return CheckDisplay();
 
         // Vulkan: DXVK's instance of this run must have been made for HDR output (graphics_api.h SetVulkanHdr)
-        if (!FusionFixGraphicsApi::VulkanHdrPresentable())
+        if (!FusionFixGraphicsApi::VulkanHdrPresentable() || !bFormatsUnlocked)
             return false;
-        auto device = bFormatsUnlocked ? rage::grcDevice::GetD3DDevice() : nullptr;
+        // Before the game's device exists (OnDirect3DCreated) that's all there is to ask: the choice has to be in
+        // effect at CreateDevice for the float back buffer
+        auto device = rage::grcDevice::GetD3DDevice();
+        if (!device)
+            return true;
         IDirect3DSwapChain9* swapChain = nullptr;
-        if (!device || FAILED(device->GetSwapChain(0, &swapChain)) || !swapChain)
+        if (FAILED(device->GetSwapChain(0, &swapChain)) || !swapChain)
             return false;
 
         bool supported = false;
@@ -379,17 +383,18 @@ public:
 
     static void InstallModeChangeGate()
     {
-        // The update thread's frame start: the render thread has finished the last frame, the mode change is called
-        // if requested
-        auto frameStart = hook::pattern("80 3D ? ? ? ? 00 57 BF 01 00 00 00 74 ? A1 ? ? ? ? 66 39 78 0A 76 04 66 89 78 0A A1 ? ? ? ? 66 39 78 0A 76 04 66 89 78 0A E8");
-        auto modeChange = find_pattern("51 80 3D ? ? ? ? 00 56 57 BF 01 00 00 00 0F 84", "53 56 33 DB 38 1D ? ? ? ? 57 BF 01 00 00 00 0F 84");
-        if (frameStart.empty() || modeChange.empty())
-            return;
+        // This frame boundary follows the render wait and precedes any requested mode change.
+        // Ignore the six bytes used by the water commit hook so either hook can install first.
+        auto frameStart = hook::pattern("80 3D ? ? ? ? 00 ? ? ? ? ? ? 74 ? A1 ? ? ? ? 66 39 78 0A 76 04 66 89 78 0A A1 ? ? ? ? 66 39 78 0A 76 04 66 89 78 0A E8");
+        // The function the frame start calls, its device-lost flag at +3, +6 or +7
+        auto modeChange = find_pattern(
+            "51 80 3D ? ? ? ? 00 56 57 BF 01 00 00 00 0F 84",               // 1.2.0.32, 1.2.0.43, 1.2.0.59
+            "53 56 33 DB 38 1D ? ? ? ? 57 BF 01 00 00 00 0F 84",            // 1.0.8.0, 1.1.3.0
+            "51 53 55 33 DB 38 1D ? ? ? ? 56 57 BD 01 00 00 00 0F 84");     // 1.0.7.0, 1.1.2.0
+        auto pModeChange = modeChange.get_first<uint8_t>();
         auto call = frameStart.get_first<uint8_t>(45);
-        if (injector::GetBranchDestination(call).as_int() != reinterpret_cast<uintptr_t>(modeChange.get_first()))
-            return;
         pModeChangeRequested = *frameStart.get_first<uint8_t*>(2);
-        pDeviceLost = *modeChange.get_first<uint8_t*>(*modeChange.get_first<uint8_t>(0) == 0x51 ? 3 : 6);
+        pDeviceLost = *reinterpret_cast<uint8_t**>(pModeChange + (pModeChange[1] == 0x80 ? 3 : (pModeChange[0] == 0x53 ? 6 : 7)));
         pFrameStartReturn = call + 5;
         static auto FrameStart = safetyhook::create_mid(frameStart.get_first(), [](SafetyHookContext&)
         {
@@ -468,6 +473,8 @@ public:
             ext->UnlockAdditionalFormats();
             ext->Release();
             bFormatsUnlocked = true;
+            // DXVK's instance exists now: the saved choice is in effect before the device is created with it
+            FusionFixSettings.RefreshAvailability(PreferenceName);
         }
 
         auto vtable = *reinterpret_cast<void***>(d3d);
@@ -745,19 +752,19 @@ public:
         // DirectX 12, HDR off with float buffers until the next Reset: SDR white at scRGB 1.0, no highlights above
         if (OnDriver() && !DriverWanted())
             paperWhite = peak = 80.0f;
-        float constants[4] =
+        // The Tone Mapping setting chooses how highlights look: the game's (off) or rolled off (on)
+        static auto toneMapping = FusionFixSettings.GetRef("PREF_TONEMAPPING");
+        float constants[2][4] =
         {
-            paperWhite / 80.0f,
-            peak / paperWhite,
-            fRollOffStart,
-            1.0f,
+            { paperWhite / 80.0f, peak / paperWhite, fRollOffStart, 1.0f },
+            { toneMapping->get() ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f },
         };
 
         D3DVIEWPORT9 viewport = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
         device->SetViewport(&viewport);
         RageDirect3DDevice9::SetTextureBoth(device, 0, CompositeRT->mD3DTexture);
         device->SetPixelShader(OutputPS);
-        device->SetPixelShaderConstantF(0, constants, 1);
+        device->SetPixelShaderConstantF(0, &constants[0][0], 2);
         device->SetVertexShader(nullptr);
         device->SetFVF(kScreenVertexFVF);
 
@@ -849,11 +856,12 @@ public:
                 // succeeds, preventing the driver from creating the HDR flip swap chain.
                 FusionFixGraphicsApi::SetWindowedOnDriver([] { return true; });
                 // The game's present parameters, pushed for its Reset call (dllmain.cpp's reset hooks are next to it)
-                auto resetCall = find_pattern("A1 ? ? ? ? 68 ? ? ? ? 8B 08 50 FF 51 40", "8B 08 8B 51 40 68 ? ? ? ? 50 FF D2 8B");
-                if (!resetCall.empty())
-                    pResetParams = *resetCall.get_first<D3DPRESENT_PARAMETERS*>(6);
+                // A Reset call that dllmain.cpp doesn't hook (its hooks change the bytes of the others)
+                auto resetCall = find_pattern("A1 ? ? ? ? 68 ? ? ? ? 8B 08 50 FF 51 40 85 C0", "8B 08 8B 51 40 68 ? ? ? ? 50 FF D2 3B C3");
+                pResetParams = *resetCall.get_first<D3DPRESENT_PARAMETERS*>(6);
             }
-            // The saved choice comes back once it's available, checked when the menu opens.
+            // The saved choice comes back once it's available, checked when the game has its Direct3D object and when
+            // the menu opens.
             FusionFixSettings.SetAvailability(PreferenceName, [](int32_t value) -> bool
             {
                 return value == 0 || IsSupported();
@@ -874,36 +882,36 @@ public:
 
             // Requested display mode: width, height and refresh rate, and the refresh rate of the current mode
             auto pattern = find_pattern("8B 15 ? ? ? ? 85 D2 74 ? A1 ? ? ? ? 8B 0D ? ? ? ? A3 ? ? ? ? A3 ? ? ? ? A1 ? ? ? ? 85 C9 0F 45 C1",
-                "A1 ? ? ? ? 3B C3 74 ? 8B 0D ? ? ? ? 3B CB 8B 15 ? ? ? ? A3 ? ? ? ? 89 15 ? ? ? ? 89 0D ? ? ? ? A3 ? ? ? ? 89 15 ? ? ? ? 74 ? 89 0D");
-            if (!pattern.empty())
-            {
-                bool legacy = *pattern.get_first<uint8_t>(0) == 0xA1;
-                pRequestedWidth = *pattern.get_first<int32_t*>(legacy ? 1 : 2);
-                pRequestedHeight = *pattern.get_first<int32_t*>(legacy ? 19 : 11);
-                pRequestedRefreshRate = *pattern.get_first<int32_t*>(legacy ? 11 : 17);
-                pRefreshRate = *pattern.get_first<int32_t*>(legacy ? 55 : 32);
-            }
+                "A1 ? ? ? ? 3B C3 74 ? 8B 0D ? ? ? ? 3B CB 8B 15 ? ? ? ? A3 ? ? ? ? 89 15 ? ? ? ? 89 0D ? ? ? ? A3 ? ? ? ? 89 15");
+            bool legacy = *pattern.get_first<uint8_t>(0) == 0xA1;
+            pRequestedWidth = *pattern.get_first<int32_t*>(legacy ? 1 : 2);
+            pRequestedHeight = *pattern.get_first<int32_t*>(legacy ? 19 : 11);
+            pRequestedRefreshRate = *pattern.get_first<int32_t*>(legacy ? 11 : 17);
+            // The refresh rate of the current mode; framelimit.ixx hooks its store in 1.0.7.0 - 1.1.3.0
+            pRefreshRate = rage::grcWindow::ms_nActiveRefreshrate;
 
             // Unlock the float back buffer in DXVK as soon as the game has its IDirect3D9
             pattern = hook::pattern("C6 05 ? ? ? ? 00 FF 15 ? ? ? ? 8B C8 89 0D");
-            if (!pattern.empty())
+            if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
             {
                 static auto Direct3DCreated = safetyhook::create_mid(pattern.get_first(13), [](SafetyHookContext& regs)
                 {
                     OnDirect3DCreated(reinterpret_cast<IDirect3D9*>(regs.eax));
                 });
             }
-            else
+            else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
             {
                 pattern = hook::pattern("C6 05 ? ? ? ? 00 E8 ? ? ? ? 3B C6 A3");
-                if (!pattern.empty())
+                static auto Direct3DCreated = safetyhook::create_mid(pattern.get_first(12), [](SafetyHookContext& regs)
                 {
-                    static auto Direct3DCreated = safetyhook::create_mid(pattern.get_first(12), [](SafetyHookContext& regs)
-                    {
-                        OnDirect3DCreated(reinterpret_cast<IDirect3D9*>(regs.eax));
-                    });
-                }
+                    OnDirect3DCreated(reinterpret_cast<IDirect3D9*>(regs.eax));
+                });
             }
+
+            FusionFix::onBeforeRenderTargetReset() += []()
+            {
+                ReleaseResources();
+            };
 
             FusionFix::onBeforeReset() += []()
             {

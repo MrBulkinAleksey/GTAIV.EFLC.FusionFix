@@ -109,8 +109,8 @@ workspace "GTAIV.EFLC.FusionFix"
 
    includedirs { "source" }
    includedirs { "source/includes" }
-   -- Shared headers, ASI Settings, overlay, automation and the upscaler bridge's client: FusionFixUtils, a submodule
-   -- (change them there)
+   -- Shared headers, ASI Settings, overlay, automation and the upscaler bridge's protocol and client (upscaler/, shared
+   -- with FusionFixHub): FusionFixUtils, a submodule (change them there)
    includedirs { "external/FusionFixUtils/include", "external/FusionFixUtils" }
    includedirs { "source/ledsdk" }
    includedirs { "source/dxsdk" }
@@ -128,6 +128,8 @@ workspace "GTAIV.EFLC.FusionFix"
    files { "source/resources/Shaders.rc" }
    files { "source/resources/snow/*.rc" }
    files { "source/resources/temporal/*.rc" }
+   -- The graphics API, DXVK and D3D9On12 interop (source/upscaler)
+   files { "source/upscaler/*.h", "source/upscaler/*.hpp" }
    files { "source/resources/hdr/*.rc" }
    -- ASI Settings: the description and translations of the settings, embedded by source/resources/Settings.rc
    files { "source/resources/Settings.rc" }
@@ -154,8 +156,8 @@ workspace "GTAIV.EFLC.FusionFix"
    -- Compile hlsl shaders to .fxo (Output to "../source/resources/shaders/win32_30"). Assembly variants are still output for convenience to "../shaders/external/%shadername%/asm".
    prebuildcommands {
       -- ConsoleGamma
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T fx_2_0 /nologo /Fo \"../source/resources/shaders/win32_30/ConsoleGamma.fxo\" /Fc \"../shaders/external/gamma/asm/ConsoleGamma.asm\" \"../shaders/external/gamma/fx/ConsoleGamma.fx\"",
-      "\"../source/dxsdk/lib/x86/fxc.exe\" /T fx_2_0 /nologo /Fo \"../source/resources/shaders/win32_30/ConsoleGamma_Dither.fxo\" /Fc \"../shaders/external/gamma/asm/ConsoleGamma_Dither.asm\" \"../shaders/external/gamma/fx/ConsoleGamma_Dither.fx\"",
+      "\"../source/dxsdk/lib/x86/fxc.exe\" /T fx_2_0 /nologo /Fo \"../source/resources/shaders/win32_30/ConsoleGamma.fxo\" /Fc \"../shaders/external/gamma/asm/ConsoleGamma.asm\" \"../source/resources/gamma/ConsoleGamma.fx\"",
+      "\"../source/dxsdk/lib/x86/fxc.exe\" /T fx_2_0 /nologo /Fo \"../source/resources/shaders/win32_30/ConsoleGamma_Dither.fxo\" /Fc \"../shaders/external/gamma/asm/ConsoleGamma_Dither.asm\" \"../source/resources/gamma/ConsoleGamma_Dither.fx\"",
     }
 
    prebuildcommands {
@@ -271,7 +273,7 @@ project "GTAIV.EFLC.FusionFix.Tests"
 
 
 -- d3d9.dll: a pass-through to the system's d3d9.dll, shipped only so that unpacking a release over an old one replaces
--- the old graphics-API proxy (the plugin applies the graphics API itself, FusionFixUtils upscaler/graphics_api.h)
+-- the old graphics-API proxy (the plugin applies the graphics API itself, source/upscaler/graphics_api.h)
 project "d3d9"
    language "C++"
    targetdir "bin"

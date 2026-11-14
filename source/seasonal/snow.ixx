@@ -26,7 +26,7 @@ public:
 
         // Disables rain-related audio (e.g. Surface impacts)
         auto pattern = hook::pattern("F3 0F 10 05 ? ? ? ? F3 0F 11 04 24 E8 ? ? ? ? 51");
-        if (!pattern.empty())
+        if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
         {
             static auto SetRainAudioHook = safetyhook::create_mid(pattern.get_first(8), [](SafetyHookContext& regs)
             {
@@ -36,7 +36,7 @@ public:
                 }
             });
         }
-        else
+        else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
         {
             pattern = hook::pattern("D9 1C 24 E8 ? ? ? ? 51 D9 1C 24 E8 ? ? ? ? D8 44 24 08 83 C4 04 5E 59 C3 CC");
             static auto SetRainAudioHook = safetyhook::create_mid(pattern.get_first(3), [](SafetyHookContext& regs)
@@ -50,7 +50,7 @@ public:
 
         // Disables wetness-related effects (e.g. Reflections, footstep/vehicle interaction sounds, particles)
         pattern = hook::pattern("C7 05 ? ? ? ? 00 00 80 3F F3 0F 10 25 ? ? ? ? F3 0F 10 04");
-        if (!pattern.empty())
+        if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
         {
             pWetness = *pattern.get_first<float*>(2);
             static auto SetRainWetnessHook = safetyhook::create_mid(pattern.get_first(10), [](SafetyHookContext& regs)
@@ -61,7 +61,7 @@ public:
                 }
             });
         }
-        else
+        else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
         {
             pattern = hook::pattern("F3 0F 11 05 ? ? ? ? EB 67");
             pWetness = *pattern.get_first<float*>(4);
@@ -181,6 +181,15 @@ private:
 
     static inline float* dwViewDistance = nullptr;
 
+    static void ReleaseRenderTarget()
+    {
+        if (mNormalRtCopy)
+        {
+            mNormalRtCopy->Destroy();
+            mNormalRtCopy = nullptr;
+        }
+    }
+
     static auto __fastcall OnDeviceLost() -> void
     {
         mDiffuseRT = nullptr;
@@ -201,11 +210,13 @@ private:
             mQuadVertexDecl = nullptr;
         }
 
-        if (mNormalRtCopy)
+        if (mSnowTexture)
         {
-            mNormalRtCopy->Destroy();
-            mNormalRtCopy = nullptr;
+            mSnowTexture->Release();
+            mSnowTexture = nullptr;
         }
+
+        ReleaseRenderTarget();
     }
 
     static auto __fastcall OnDeviceReset() -> void
@@ -305,6 +316,11 @@ private:
         auto onLostCB = rage::grcDevice::Functor0(NULL, OnDeviceLost, NULL, 0);
         auto onResetCB = rage::grcDevice::Functor0(NULL, OnDeviceReset, NULL, 0);
         rage::grcDevice::RegisterDeviceCallbacks(onLostCB, onResetCB);
+
+        FusionFix::onBeforeRenderTargetReset() += []()
+        {
+            ReleaseRenderTarget();
+        };
 
         HMODULE hm = NULL;
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&OnBuildRenderListInit, &hm);
@@ -496,10 +512,11 @@ private:
         {
             // Include spotlights with a radius between 8 and 20 (Most light models in lamppost.img are within that range)
             // and exclude lights previously volumetric, vehicle lights, traffic lights, fill lights and cutscene lights
-            if (light->mType == rage::LT_SPOT && light->mRadius >= 8.0f && light->mRadius <= 20.0f && !(light->mFlags & 0x398))
+            constexpr uint32_t ExcludedFlags = rage::LIGHTFLAG_DRAW_VOLUME | rage::LIGHTFLAG_NO_SPECULAR | rage::LIGHTFLAG_CUTSCENE | rage::LIGHTFLAG_VEHICLE | rage::LIGHTFLAG_TRAFFIC_LIGHT;
+            if (light->mType == rage::LT_SPOT && light->mRadius >= 8.0f && light->mRadius <= 20.0f && !(light->mFlags & ExcludedFlags))
             {
                 // Append the light shaft flag
-                light->mFlags |= 8;
+                light->mFlags |= rage::LIGHTFLAG_DRAW_VOLUME;
 
                 // Distance fading setup
                 float DeltaX = CameraPosition.x - light->mPosition.x;

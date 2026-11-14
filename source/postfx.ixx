@@ -676,6 +676,13 @@ private:
         auto onResetCB = rage::grcDevice::Functor0(NULL, OnDeviceReset, NULL, 0);
         rage::grcDevice::RegisterDeviceCallbacks(onLostCB, onResetCB);
 
+        // 1.0.7.0, 1.1.2.0: before the game's own render targets lose their textures (ambient occlusion's are its own module's)
+        FusionFix::onBeforeRenderTargetReset() += []()
+        {
+            PostFxResources.ReleaseTextures();
+            TemporalAA::ReleaseResources();
+        };
+
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&Init, &hm);
 
         PostFxResources.loadShaders(rage::grcDevice::GetD3DDevice(), hm);
@@ -3229,13 +3236,12 @@ public:
 
                 // Downsampling of the scene for bloom and exposure, the first pass of the game's post processing
                 pattern = hook::pattern("6A 00 FF B7 ? ? ? ? FF 77 18 E8 ? ? ? ? FF 77 18 8B 4F 60");
-                if (!pattern.empty())
+                if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
                     hbDrawCallDownsample.fun = injector::MakeCALL(pattern.get_first(11), DrawCallDownsample).get();
-                else
+                else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
                 {
                     pattern = hook::pattern("8B 46 18 6A 00 52 50 8B CE E8 ? ? ? ? 8B 4E 18 8B 46 60");
-                    if (!pattern.empty())
-                        hbDrawCallDownsample.fun = injector::MakeCALL(pattern.get_first(9), DrawCallDownsample).get();
+                    hbDrawCallDownsample.fun = injector::MakeCALL(pattern.get_first(9), DrawCallDownsample).get();
                 }
 
                 pattern = find_pattern("55 8B EC 83 E4 F0 81 EC D8 00 00 00 56 57 E8 ? ? ? ?");

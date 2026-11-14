@@ -22,7 +22,7 @@
 
 This projects aims to fix some issues in Grand Theft Auto IV: The Complete Edition, as well as add various new features for modern systems.
 
-Also available for [Max Payne 3](https://github.com/ThirteenAG/MaxPayne3.FusionFix#readme) and [other games](https://thirteenag.github.io/wfp).
+Also available for [Max Payne 3](https://github.com/ThirteenAG/MaxPayne3.FusionFix#readme) and [other games](https://fusionfix.io).
 
 ## Installation:
 
@@ -99,9 +99,12 @@ Also available for [Max Payne 3](https://github.com/ThirteenAG/MaxPayne3.FusionF
 - **Volumetric Fog**, a more advanced fog shader that hides the edges of the world
 - **Sun Shafts**, a godrays implementation faithful to the original art style
 - **Extended Sunlight Reach**, allows sunlight to reach surfaces that it couldn't before, and increases cloud shading
-- **Tone Mapping**, prevents highlights from being blown out, more operators can be found [here](https://github.com/Parallellines0451/GTAIV.EFLC.FusionShaders/tree/main/assets/luts/samples)
+- **Tone Mapping**, prevents highlights from being blown out (in HDR with Tone Mapping off, highlights wash out to white like in the original game, only brighter), more operators can be found [here](https://github.com/Parallellines0451/GTAIV.EFLC.FusionShaders/tree/main/assets/luts/samples)
 - **Ambient Occlusion**, a toggle for scalable ambient obscurance
 - **Shadow Filter**, toggles between sharp, soft, or contact hardening shadows
+- **Streetlight Shadows**, what streetlights cast shadows of at night: off like on consoles, scenery, scenery and people, or scenery, people and vehicles
+- **Headlight Shadows**, the headlights of the player's vehicle cast shadows
+- **Vehicle Night Shadows**, vehicles receive shadows from streetlights and other lights at night
 - **Graphics API**, selects between DirectX 9, Vulkan (through [DXVK](https://github.com/doitsujin/dxvk/releases)) and DirectX 12 (through D3D9On12, a custom build); FusionFixHub installs DXVK and D3D9On12 on its Graphics enhancements page. The plugin applies it itself (no `d3d9.cfg`); a start that fails on Vulkan or DirectX 12 falls back to DirectX 9. A ReShade, ENB or dxwrapper `d3d9.dll` stays on top of the chosen API. Requires a restart
 
 #### Game
@@ -115,7 +118,7 @@ Also available for [Max Payne 3](https://github.com/ThirteenAG/MaxPayne3.FusionF
 - **Windowed**, toggle windowed mode
 - **Windowed Borderless**, toggle borderless mode
 - **Pause Game On Focus Loss**, pauses the game when it's minimized
-- **Extra Night Shadows**, forces every lamppost and player headlights to cast shadows (*original PC-only "feature"; extremely broken, not recommended*)
+- **Distant Lights**, offers "PC" and "Console" distant streetlights and traffic, the console ones with denser streetlights and moving traffic lights
 - **LightSyncRGB**, custom ambient lighting for IV, TLAD and TBOGT, health indication on G-Keys, police lights, ammo counter, only Logitech hardware is supported, requires Logitech G HUB app, [**watch full clip on YouTube**](https://www.youtube.com/watch?v=oLxn3q-NnZ0&hd=1)
 
 ![LightSyncRGB](https://github.com/ThirteenAG/GTAIV.EFLC.FusionFix/assets/4904157/f925ad27-19ce-4dde-8801-0cec1578ade7)
@@ -133,9 +136,12 @@ Also available for [Max Payne 3](https://github.com/ThirteenAG/MaxPayne3.FusionF
 - **Allow Movement When Zoomed**, allows movement when aiming with a sniper rifle
 - **Extended Sniper Controls**, allows aiming with sniper rifles without using the scope, press Jump button to toggle between third-person aim and the scope
 - **Auto Climb Ladders**, makes player climb ladder automatically when getting close to ladder
+- **Jump Ragdoll Control**, allows pressing Reload during a jump to enter ragdoll, with an option to also allow it while climbing or vaulting
 - **Camera Shake**, shake effect has been fixed to work consistently at any frame rate and can be disabled with this option
 - **Stunt Jump Camera**, can be disabled to skip the cinematic camera and slow motion during unique stunt jumps
 - **Fence Climb & Car Jack Camera**, can be disabled to skip the cinematic camera when climbing fences and stealing cars
+- **Ladder Camera Tilt**, can be disabled to keep the camera from tilting down while climbing ladders
+- **Automatic Camera Centering**, can be disabled to stop the controller camera from leveling itself on foot and turning behind vehicles
 - **Centered Vehicle Camera**, makes vehicle camera centered, for more options install the [original mod](https://github.com/gennariarmando/iv-centered-vehicle-cam) separately
 - **Centered On Foot Camera**, makes on foot camera centered, also for more options install the [original mod](https://github.com/gennariarmando/iv-centered-onfoot-cam)
 - **Turn Indicators**, allows the player to use vehicle turn indicators and hazard lights
@@ -167,14 +173,20 @@ Also available for [Max Payne 3](https://github.com/ThirteenAG/MaxPayne3.FusionF
 - [Fixed aiming zoom in TBoGT](https://github.com/GTAmodding/GTAIV-Issues-List/issues/19)
 - [Fixed possible crash when manually dialing a phone number using the keypad in TLAD](https://github.com/GTAmodding/GTAIV-Issues-List/issues/232)
 - [Fixed possible crash in TLAD mission "Marta Full of Grace"](https://github.com/GTAmodding/GTAIV-Issues-List/issues/235)
-- [Added an option to fix a bug that only make taxis spawn](https://github.com/ThirteenAG/GTAIV.EFLC.FusionFix/issues/85)
+- [Fixed only taxis spawning when car mods with bigger models fill the car budget: the car and ped budgets follow the size of the models](https://github.com/ThirteenAG/GTAIV.EFLC.FusionFix/issues/85)
 - [Added a file overload solution that allows to replace game files without actually replacing them](https://github.com/ThirteenAG/Ultimate-ASI-Loader?tab=readme-ov-file#update-folder-overload-from-folder)
 - Added IMG Loader (from update folder)
 - Added GXT Overloading, allow game to load additional gxt files to overwrite vanilla lines or add new lines, without editing vanilla gxt files
 - Added a solution to add entries to shader preload list dynamically
 - Increased corona limit to avoid heavy flickering of game's lights
+- Power lines and cables are drawn opaque, so they stay visible along their whole length and cast shadows
 - Improved ultrawide support
 - Fixed improper VRAM detection on some setups
+- About 500 MB more memory for streaming: the game's system-memory copies of its textures are kept outside its address space until needed
+- Fewer stutters while driving: the game no longer pins its main thread to the first CPU core
+- Shorter hitches when the game has to load the area at once (after a teleport, mission start or fast travel): it continues as soon as the data is read instead of sleeping between checks
+- The streaming memory follows the game's free address space: more detail and more varied traffic when there is room, less before the game would run out of memory
+- Fixed a freeze when the game ran out of room for the models of objects around the player, and a crash when very many textures were unloaded at once (big texture mods)
 - Fixed draw distance sliders not being applied on startup
 - Fixed mouse cursor scale, and hidden mouse cursor when using controller
 - Significantly sped up loading screens
@@ -194,7 +206,12 @@ Also available for [Max Payne 3](https://github.com/ThirteenAG/MaxPayne3.FusionF
 - Added dynamic shadows for trees
 - Restored night shadow for vehicles
 - Made night shadows resolution be adjusted by night shadows option
-- Reduced water flickering issue (only when **Extra Night Shadows** is off)
+- Reworked night shadows: sharper, the most visible lights get them first and keep them, and they fade with distance instead of popping in and out
+- Streetlights keep the shadows of buildings, trees and props from frame to frame, so every nearby streetlight casts them at almost no cost; people and vehicles are added for the nearest ones
+- Vehicles and the people in them keep their night shadows while the player's headlights cast theirs; lampposts no longer shadow their own light
+- The player's headlights cast shadows: the game never passed their shadow to the lighting, so nothing ever showed it. Their shadows are aimed along the beam, much sharper, and fade out 35 metres ahead
+- Interiors seen through doorways and windows now block the sun, so their shadows no longer go missing
+- Streetlights and other lamps just behind the camera keep lighting the ground in view, instead of switching off when the camera turns slightly
 - Added several cheat code to enable seasonal events, restore some unused player assets for Niko and Johnny, speed up game physics, and spawn some vehicles in TLAD and TBoGT, they can be found hidden in relevant locations, or finding them [here](https://github.com/ThirteenAG/GTAIV.EFLC.FusionFix/blob/master/source/cheats.ixx)
 
 ### Scripts
@@ -319,11 +336,14 @@ Also available for [Max Payne 3](https://github.com/ThirteenAG/MaxPayne3.FusionF
 - Pressed radar zoom out button now will make it stay zoomed out for a few seconds
 - Fixed date won't advance after dying, being busted or respraying at certain time
 - Fixed helicopter searchlights flickering violently when more than one helicopter is present
+- Restored dynamic console pause-menu music in IV, TLAD and TBoGT
 - Fixed radio reset after cutscene
 - Fixed incorrect TBoGT bullet tracer position
 - Fixed NPC lanes swerving suddenly on the Algonquin Bridge when there is a train under it
 - Partially fixed P90 being selectable in vehicles on keyboard
-- Workaround for lights & motion blur flickering intermittently when player is drunk
+- Fixed lights and motion blur flickering around the player while the camera shakes (drunk, explosions, impacts)
+- Fixed the player's vehicle losing its engine sound in heavy traffic: it always gets an engine sound slot first
+- Fixed a crash at start with audio mods that add wave slots (more engine sound slots): the audio memory grows to fit them
 - Made stunt jump camera speed be controlled by mouse wheel when using keyboard and mouse
 - Added an option to restore unused death music in IV
 - Fixed not being able to give money to beggars normally on PC
@@ -345,8 +365,6 @@ Also available for [Max Payne 3](https://github.com/ThirteenAG/MaxPayne3.FusionF
 - **DefaultCameraAngleInTLAD** - TLAD uses a different camera angle on bikes, this option can force the original IV camera angle. [Enabled](https://i.imgur.com/PqFHJfU.jpg) / [Disabled](https://i.imgur.com/5kM5Sgn.jpg)
 - **PedDeathAnimFixFromTBoGT** - when you perform a counter attack after a dodge in IV & TLAD, the ped after falling and dying performs an additional death animation, which doesn't happen in TBoGT. [Enabled](https://imgur.com/EYsiGPe) / [Disabled](https://imgur.com/CR3LEdR)
 - **DisableCameraCenteringInCover** - [see issue 20](https://github.com/GTAmodding/GTAIV-Issues-List/issues/20).
-- **VehicleBudget** - allows to increase the budget of vehicles, used to avoid only taxi will spawn. For more information about TaxiBug and VehicleBudget, please watch [TJGM's video](https://www.youtube.com/watch?v=wr8m9kL3U20&t=237s).
-- **PedBudget** - allows to increase the budget of pedestrians.
 
 ## Shaders Changelog
 
@@ -452,32 +470,6 @@ GTAIV_DIR=C:\Program Files (x86)\Steam\steamapps\common\Grand Theft Auto IV\GTAI
 ```
 
 The build then copies the built `GTAIV.EFLC.FusionFix.asi` into the `plugins` folder of that game folder, replacing the plugin that is already installed there, and debugging launches `GTAIV.exe` from there. The `.env` file is ignored by git. Without it, nothing is copied.
-
-### Release packages and secrets
-
-The release contains only zips: `GTAIV.EFLC.FusionFix.zip` with `FusionFixHub.exe` at the game's root, and
-`GTAIV.EFLC.FusionFixLegacyAddon.zip`. The installer is made on fusionfix.io for each download (the signed hub with a
-tag the site signs), never by this workflow. The zip never contains `vulkan.dll`, `nvngx_dlss.dll`, `amd_fidelityfx_*.dll` or the
-settings file; `release.bat` fails if one gets in. Its `d3d9.dll` is only a pass-through to the system's d3d9.dll
-(`source/d3d9`), so that unpacking a release over an old one replaces the old graphics-API proxy; `release.bat` checks it is
-that file (`tools/check-d3d9.ps1`) and that no `d3d9.cfg` is in the package.
-
-- **Locally**, `release.bat` takes the hub from `HUB_EXE` (default `..\FusionFixHub-App\bin\Release\FusionFixHub.exe`, next to this repository)
-  and stops with a message when it's missing: `set HUB_EXE=D:\path\to\FusionFixHub.exe` before running it.
-- **In the workflow**, the hub comes from the latest release of the private repository `ThirteenAG/FusionFixHub-App`,
-  read with the secret `HUB_RELEASE_TOKEN`; the download is checked for an Authenticode signature (a warning when the
-  signer isn't `CN=FusionFix`). Without the secret (forks, pull requests) the zip is built without the hub, with a warning.
-
-Setting up `HUB_RELEASE_TOKEN` (once):
-
-1. GitHub, Settings > Developer settings > Personal access tokens > **Fine-grained tokens** > Generate new token.
-2. Resource owner: `ThirteenAG`. Repository access: **Only select repositories** > `ThirteenAG/FusionFixHub-App`.
-3. Repository permissions: **Contents: Read-only** (Metadata: Read-only is added automatically). Nothing else.
-4. Pick an expiration (and a reminder to renew it), generate, copy the token.
-5. In this repository: Settings > Secrets and variables > Actions > **New repository secret**, name
-   `HUB_RELEASE_TOKEN`, paste the token.
-6. Check: run the workflow (Actions > GitHub Actions Build > Run workflow); the "Download FusionFixHub" step prints
-   the hub's signature and the zip contains `FusionFixHub.exe`.
 
 # Reporting more issues
 

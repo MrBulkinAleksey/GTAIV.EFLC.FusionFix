@@ -2,6 +2,8 @@ module;
 
 #include <common.hxx>
 #include <array>
+#include <fstream>
+#include <regex>
 
 export module limits;
 
@@ -139,12 +141,11 @@ public:
         {
             SettingsReader reader;
 
-            // Increasing all pools is not safe, leads to crashing
-            static std::vector<std::string> poolNames = { "Task" };
+            // Increasing all pools is not safe, leads to crashing. VehicleStruct: one per car model in memory; the car budget grows
+            // with bigger models and with room in the address space (memory.ixx), and a full pool crashes the game.
+            static std::vector<std::string> poolNames = { "Task", "VehicleStruct" };
 
             // [BudgetedIV]
-            uint32_t nVehicleBudget = reader.ReadInteger("BudgetedIV", "VehicleBudget", 0);
-            uint32_t nPedBudget = reader.ReadInteger("BudgetedIV", "PedBudget", 0);
             auto bExtendedLimits = reader.ReadInteger("BudgetedIV", "ExtendedLimits", 1);
             auto nLiveriesLimit = std::clamp(reader.ReadInteger("BudgetedIV", "LiveriesLimit", CHAR_MAX), 0, CHAR_MAX);
 
@@ -168,23 +169,8 @@ public:
                 poolNames.push_back("phInstGta");
             }
 
-            if (nVehicleBudget)
-            {
-                auto pattern = find_pattern("F7 2D ? ? ? ? 8B CA C1 E9 1F 03 CA B8 ? ? ? ? F7 2D ? ? ? ? 8B C2 C1 E8 1F 03 C2 89 0D ? ? ? ? A3 ? ? ? ? 83 C4 10 C3", "8B 0D ? ? ? ? B8 ? ? ? ? F7 E9 8B 0D");
-                injector::WriteMemory(*pattern.get_first<void*>(2), nVehicleBudget, true);
-
-                // Needed to avoid a predictable crash with high vehicle budgets (It usually happens in very specific places in the game world)
-                poolNames.push_back("VehicleStruct");
-            }
-
-            if (nPedBudget)
-            {
-                auto pattern = find_pattern("F7 2D ? ? ? ? 8B C2 C1 E8 1F 03 C2 89 0D ? ? ? ? A3 ? ? ? ? 83 C4 10 C3", "8B 0D ? ? ? ? 8B C2 C1 E8 1F");
-                injector::WriteMemory(*pattern.get_first<void*>(2), nPedBudget, true);
-            }
-
             auto pattern = hook::pattern("8B C7 0F AF C2 8B F1");
-            if (!pattern.empty())
+            if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
             {
                 struct atPool
                 {
@@ -192,14 +178,14 @@ public:
                     {
                         auto name = std::string_view(*(const char**)(regs.esp + 16));
 
-                        if (std::any_of(poolNames.begin(), poolNames.end(), [&name](auto& i) { return i == name; }) || (name == "VehicleStruct" && CText::hasViceCityStrings()))
+                        if (std::any_of(poolNames.begin(), poolNames.end(), [&name](auto& i) { return i == name; }))
                             regs.edi *= 2;
 
                         regs.eax = regs.edi * regs.edx;
                     }
                 }; injector::MakeInline<atPool>(pattern.get_first(0));
             }
-            else
+            else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
             {
                 auto pattern = hook::pattern("8B CF 0F AF C8 51");
                 struct atPool
@@ -208,7 +194,7 @@ public:
                     {
                         auto name = std::string_view(*(const char**)(regs.esp + 16));
 
-                        if (std::any_of(poolNames.begin(), poolNames.end(), [&name](auto& i) { return i == name; }) || (name == "VehicleStruct" && CText::hasViceCityStrings()))
+                        if (std::any_of(poolNames.begin(), poolNames.end(), [&name](auto& i) { return i == name; }))
                             regs.edi *= 2;
 
                         regs.ecx = regs.edi * regs.eax;
@@ -219,10 +205,7 @@ public:
             // Drawable reference list limit, fixes In the Crosshairs mission crash with maxed out draw distance
             {
                 auto pattern = hook::pattern("68 C8 32 00 00 E8 ? FF FF FF C3");
-                if (!pattern.empty())
-                {
-                    injector::WriteMemory(pattern.get_first(1), 20000, true);
-                }
+                injector::WriteMemory(pattern.get_first(1), 20000, true);
             }
 
             // Liveries
@@ -232,145 +215,139 @@ public:
 
                 auto pattern = find_pattern("89 86 ? ? ? ? 89 86 ? ? ? ? 89 86 ? ? ? ? 89 86 ? ? ? ? C7 86 ? ? ? ? ? ? ? ? C7 86 ? ? ? ? ? ? ? ? C7 86 ? ? ? ? ? ? ? ? C7 86 ? ? ? ? ? ? ? ? C7 86",
                                             "89 86 ? ? ? ? 89 86 ? ? ? ? 89 86 ? ? ? ? 89 86 ? ? ? ? F3 0F 11 86 ? ? ? ? F3 0F 11 86 ? ? ? ? F3 0F 11 86 ? ? ? ? F3 0F 11 86 ? ? ? ? F3 0F 11 86 ? ? ? ? F3 0F 11 86 ? ? ? ? 80 A6 ? ? ? ? ? 88 8E ? ? ? ? 66 89 86 ? ? ? ? F3 0F 11 86 ? ? ? ? 89 86 ? ? ? ? 5E");
-                if (!pattern.empty())
+                struct CVehicleModelInfoInitializeHook
                 {
-                    struct CVehicleModelInfoInitializeHook
+                    void operator()(injector::reg_pack& regs)
+                    {
+                        *(uintptr_t**)(regs.esi + 0x13C) = &liveries[regs.esi][0];
+                    }
+                }; injector::MakeInline<CVehicleModelInfoInitializeHook>(pattern.get_first(0), pattern.get_first(6));
+
+                pattern = hook::pattern("66 89 46 48 66 89 46 52 5E C3");
+                struct CBaseModelInfoTerminateHook
+                {
+                    void operator()(injector::reg_pack& regs)
+                    {
+                        *(uint16_t*)(regs.esi + 0x48) = -1;
+                        *(uint16_t*)(regs.esi + 0x52) = -1;
+
+                        auto it = liveries.find(regs.esi);
+                        if (it != liveries.end())
+                        {
+                            liveries.erase(it);
+                            *(uintptr_t**)(regs.esi + 0x13C) = 0;
+                        }
+                    }
+                }; injector::MakeInline<CBaseModelInfoTerminateHook>(pattern.get_first(0), pattern.get_first(8));
+
+                pattern = hook::pattern("8D B3 ? ? ? ? 33 DB 8D 9B");
+                if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
+                {
+                    struct CVehicleModelInfoSetVehicleDrawableHook
                     {
                         void operator()(injector::reg_pack& regs)
                         {
-                            *(uintptr_t**)(regs.esi + 0x13C) = &liveries[regs.esi][0];
+                            regs.esi = *(uintptr_t*)(regs.ebx + 0x13C);
                         }
-                    }; injector::MakeInline<CVehicleModelInfoInitializeHook>(pattern.get_first(0), pattern.get_first(6));
-
-                    pattern = hook::pattern("66 89 46 48 66 89 46 52 5E C3");
-                    struct CBaseModelInfoTerminateHook
+                    }; injector::MakeInline<CVehicleModelInfoSetVehicleDrawableHook>(pattern.get_first(0), pattern.get_first(6));
+                }
+                else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
+                {
+                    pattern = hook::pattern("8D B5 ? ? ? ? 83 FB 04");
+                    struct CVehicleModelInfoSetVehicleDrawableHook
                     {
                         void operator()(injector::reg_pack& regs)
                         {
-                            *(uint16_t*)(regs.esi + 0x48) = -1;
-                            *(uint16_t*)(regs.esi + 0x52) = -1;
-
-                            auto it = liveries.find(regs.esi);
-                            if (it != liveries.end())
-                            {
-                                liveries.erase(it);
-                                *(uintptr_t**)(regs.esi + 0x13C) = 0;
-                            }
+                            regs.esi = *(uintptr_t*)(regs.ebp + 0x13C);
                         }
-                    }; injector::MakeInline<CBaseModelInfoTerminateHook>(pattern.get_first(0), pattern.get_first(8));
+                    }; injector::MakeInline<CVehicleModelInfoSetVehicleDrawableHook>(pattern.get_first(0), pattern.get_first(6));
+                }
 
-                    pattern = hook::pattern("8D B3 ? ? ? ? 33 DB 8D 9B");
-                    if (!pattern.empty())
+                pattern = hook::pattern("FF B4 81 ? ? ? ? 0F BF 41 48");
+                if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
+                {
+                    struct LiveryAccessHook
                     {
-                        struct CVehicleModelInfoSetVehicleDrawableHook
+                        void operator()(injector::reg_pack& regs)
                         {
-                            void operator()(injector::reg_pack& regs)
+                            auto arr = (uintptr_t**)(regs.ecx + 0x13C);
+                            if (arr)
                             {
-                                regs.esi = *(uintptr_t*)(regs.ebx + 0x13C);
+                                auto ptr = *arr;
+                                if (ptr && (int)ptr != -1)
+                                {
+                                    regs.eax = ptr[regs.eax];
+                                    return;
+                                }
                             }
-                        }; injector::MakeInline<CVehicleModelInfoSetVehicleDrawableHook>(pattern.get_first(0), pattern.get_first(6));
-                    }
-                    else
+                            regs.eax = 0;
+                        }
+                    }; injector::MakeInline<LiveryAccessHook>(pattern.get_first(0), pattern.get_first(7));
+
+                    injector::WriteMemory<uint8_t>(pattern.get_first(6), 0x50, true); // push eax
+                }
+                else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
+                {
+                    pattern = hook::pattern("8B 94 8B ? ? ? ? 0F BF 43");
+                    struct LiveryAccessHook
                     {
-                        pattern = hook::pattern("8D B5 ? ? ? ? 83 FB 04");
-                        struct CVehicleModelInfoSetVehicleDrawableHook
+                        void operator()(injector::reg_pack& regs)
                         {
-                            void operator()(injector::reg_pack& regs)
+                            auto arr = (uintptr_t**)(regs.ebx + 0x13C);
+                            if (arr)
                             {
-                                regs.esi = *(uintptr_t*)(regs.ebp + 0x13C);
+                                auto ptr = *arr;
+                                if (ptr && (int)ptr != -1)
+                                {
+                                    regs.edx = ptr[regs.ecx];
+                                    return;
+                                }
                             }
-                        }; injector::MakeInline<CVehicleModelInfoSetVehicleDrawableHook>(pattern.get_first(0), pattern.get_first(6));
-                    }
+                            regs.edx = 0;
+                        }
+                    }; injector::MakeInline<LiveryAccessHook>(pattern.get_first(0), pattern.get_first(7));
 
-                    pattern = hook::pattern("FF B4 81 ? ? ? ? 0F BF 41 48");
-                    if (!pattern.empty())
+                    pattern = hook::pattern("8B 94 83 ? ? ? ? 0F BF 43");
+                    struct LiveryAccessHook2
                     {
-                        struct LiveryAccessHook
+                        void operator()(injector::reg_pack& regs)
                         {
-                            void operator()(injector::reg_pack& regs)
+                            auto arr = (uintptr_t**)(regs.ebx + 0x13C);
+                            if (arr)
                             {
-                                auto arr = (uintptr_t**)(regs.ecx + 0x13C);
-                                if (arr)
+                                auto ptr = *arr;
+                                if (ptr && (int)ptr != -1)
                                 {
-                                    auto ptr = *arr;
-                                    if (ptr && (int)ptr != -1)
-                                    {
-                                        regs.eax = ptr[regs.eax];
-                                        return;
-                                    }
+                                    regs.edx = ptr[regs.eax];
+                                    return;
                                 }
-                                regs.eax = 0;
                             }
-                        }; injector::MakeInline<LiveryAccessHook>(pattern.get_first(0), pattern.get_first(7));
+                            regs.edx = 0;
+                        }
+                    }; injector::MakeInline<LiveryAccessHook2>(pattern.get_first(0), pattern.get_first(7));
 
-                        injector::WriteMemory<uint8_t>(pattern.get_first(6), 0x50, true); // push eax
-                    }
-                    else
+                    pattern = hook::pattern("8B 8C 83 ? ? ? ? 0F BF 53");
+                    struct LiveryAccessHook3
                     {
-                        pattern = hook::pattern("8B 94 8B ? ? ? ? 0F BF 43");
-                        struct LiveryAccessHook
+                        void operator()(injector::reg_pack& regs)
                         {
-                            void operator()(injector::reg_pack& regs)
+                            auto arr = (uintptr_t**)(regs.ebx + 0x13C);
+                            if (arr)
                             {
-                                auto arr = (uintptr_t**)(regs.ebx + 0x13C);
-                                if (arr)
+                                auto ptr = *arr;
+                                if (ptr && (int)ptr != -1)
                                 {
-                                    auto ptr = *arr;
-                                    if (ptr && (int)ptr != -1)
-                                    {
-                                        regs.edx = ptr[regs.ecx];
-                                        return;
-                                    }
+                                    regs.ecx = ptr[regs.eax];
+                                    return;
                                 }
-                                regs.edx = 0;
                             }
-                        }; injector::MakeInline<LiveryAccessHook>(pattern.get_first(0), pattern.get_first(7));
-
-                        pattern = hook::pattern("8B 94 83 ? ? ? ? 0F BF 43");
-                        struct LiveryAccessHook2
-                        {
-                            void operator()(injector::reg_pack& regs)
-                            {
-                                auto arr = (uintptr_t**)(regs.ebx + 0x13C);
-                                if (arr)
-                                {
-                                    auto ptr = *arr;
-                                    if (ptr && (int)ptr != -1)
-                                    {
-                                        regs.edx = ptr[regs.eax];
-                                        return;
-                                    }
-                                }
-                                regs.edx = 0;
-                            }
-                        }; injector::MakeInline<LiveryAccessHook2>(pattern.get_first(0), pattern.get_first(7));
-
-                        pattern = hook::pattern("8B 8C 83 ? ? ? ? 0F BF 53");
-                        struct LiveryAccessHook3
-                        {
-                            void operator()(injector::reg_pack& regs)
-                            {
-                                auto arr = (uintptr_t**)(regs.ebx + 0x13C);
-                                if (arr)
-                                {
-                                    auto ptr = *arr;
-                                    if (ptr && (int)ptr != -1)
-                                    {
-                                        regs.ecx = ptr[regs.eax];
-                                        return;
-                                    }
-                                }
-                                regs.ecx = 0;
-                            }
-                        }; injector::MakeInline<LiveryAccessHook3>(pattern.get_first(0), pattern.get_first(7));
-                    }
+                            regs.ecx = 0;
+                        }
+                    }; injector::MakeInline<LiveryAccessHook3>(pattern.get_first(0), pattern.get_first(7));
                 }
 
                 pattern = find_pattern("83 FB 04 7D 45 8D 44 24 24 6A 00", "83 FB 04 7D 47 8D 54 24 20 6A 00");
-                if (!pattern.empty())
-                {
-                    injector::WriteMemory<uint8_t>(pattern.get_first(2), nLiveriesLimit, true);
-                }
+                injector::WriteMemory<uint8_t>(pattern.get_first(2), nLiveriesLimit, true);
             }
         };
     }
@@ -405,11 +382,176 @@ int __cdecl getWeaponInfoIdByHash(int hash, int defaultId)
     return newWeaponId;
 }
 
+// Wave slots: the slots of waveslots.xml are made in the audio heap, which only has room for the game's own file. The heap
+// grows by what the file needs beyond that (mods with more slots), and with Extended Limits by the engine slots added: the
+// game looks up STREAM_ENGINE_1 to STREAM_ENGINE_25, the file has 15, the missing ones are added to the parsed file.
+namespace EngineWaveSlots
+{
+    constexpr uint32_t MaxEngineSlots = 25;
+    constexpr uint32_t EngineSlotSize = 794624; // The size of every STREAM_ENGINE slot in the file
+    constexpr uint32_t EngineSlotHeaderSize = 2048;
+    constexpr uint32_t StockWaveSlotBytes = 120633344; // The slots of the game's waveslots.xml
+
+    constexpr uint32_t SlotBytes(uint32_t size)
+    {
+        return (size + 127) & ~127u;
+    }
+
+    // The memory the slots of waveslots.xml take, as the game counts it, and which engine slots the file has
+    uint32_t ReadWaveSlots(std::array<bool, MaxEngineSlots + 1>& present)
+    {
+        std::ifstream file(GetExeModulePath() / "pc" / "audio" / "config" / "waveslots.xml", std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+        uint32_t bytes = 0;
+        static const std::regex slotPattern(R"re(<Slot>[\s\S]*?<Name[^>]*>([^<]*)</Name>[\s\S]*?<Size value="(\d+)")re");
+        for (auto it = std::sregex_iterator(text.begin(), text.end(), slotPattern); it != std::sregex_iterator(); ++it)
+        {
+            auto name = (*it)[1].str();
+            if (name == "TEST")
+                continue;
+            bytes += SlotBytes(static_cast<uint32_t>(std::stoul((*it)[2].str())));
+            int32_t n = 0;
+            if (sscanf_s(name.c_str(), "STREAM_ENGINE_%d", &n) == 1 && n >= 1 && n <= (int32_t)MaxEngineSlots)
+                present[n] = true;
+        }
+        return bytes;
+    }
+
+    void* (__fastcall* LoadTree_path)(void* parManager, void* edx, const char* path, const char* ext) = nullptr;
+    void* (__fastcall* LoadTree)(void* parManager, void* edx, void* stream) = nullptr;
+    void* (__cdecl* OpenMemoryStream)(const void* data, int32_t size, const char* name, bool owner) = nullptr;
+    void (__fastcall* CloseStream)(void* stream) = nullptr;
+    void (__fastcall* DestroyTree)(void* tree) = nullptr;
+    void (__cdecl* Delete)(void* ptr) = nullptr;
+
+    // parTreeNode
+    const char* GetName(uintptr_t node)
+    {
+        return *(const char**)node;
+    }
+    uintptr_t GetNext(uintptr_t node)
+    {
+        return *(uintptr_t*)(node + 0x18);
+    }
+    uintptr_t GetFirstChild(uintptr_t node)
+    {
+        return *(uintptr_t*)(node + 0x1C);
+    }
+    const char* GetData(uintptr_t node)
+    {
+        return *(uint32_t*)(node + 0x24) ? *(const char**)(node + 0x20) : nullptr;
+    }
+
+    void* __fastcall LoadWaveSlots(void* parManager, void* edx, const char* path, const char* ext)
+    {
+        auto tree = LoadTree_path(parManager, edx, path, ext);
+        if (!tree)
+            return tree;
+
+        auto root = *(uintptr_t*)tree;
+        std::array<bool, MaxEngineSlots + 1> present{};
+        for (auto slot = GetFirstChild(root); slot; slot = GetNext(slot))
+        {
+            for (auto child = GetFirstChild(slot); child; child = GetNext(child))
+            {
+                if (std::string_view(GetName(child)) != "Name")
+                    continue;
+                int32_t n = 0;
+                if (auto name = GetData(child); name && sscanf_s(name, "STREAM_ENGINE_%d", &n) == 1 && n >= 1 && n <= (int32_t)MaxEngineSlots)
+                    present[n] = true;
+            }
+        }
+
+        std::string xml = "<WaveSlots>";
+        for (uint32_t n = 1; n <= MaxEngineSlots; n++)
+        {
+            if (!present[n])
+                xml += std::format("<Slot><Name content=\"ascii\">STREAM_ENGINE_{}</Name><MaxHeaderSize value=\"{}\" />"
+                    "<LoadType content=\"ascii\">BANK</LoadType><Size value=\"{}\" /></Slot>", n, EngineSlotHeaderSize, EngineSlotSize);
+        }
+        xml += "</WaveSlots>";
+
+        auto stream = OpenMemoryStream(xml.data(), (int32_t)xml.size(), "waveslots", false);
+        auto extra = LoadTree(parManager, edx, stream);
+        CloseStream(stream);
+        if (!extra)
+            return tree;
+
+        // Move the new slots to the end of the file's slots (parTreeNode: parent, next sibling, first child)
+        auto extraRoot = *(uintptr_t*)extra;
+        auto last = (uintptr_t*)(root + 0x1C);
+        while (*last)
+            last = (uintptr_t*)(*last + 0x18);
+        *last = GetFirstChild(extraRoot);
+        *(uintptr_t*)(extraRoot + 0x1C) = 0;
+        for (auto slot = *last; slot; slot = GetNext(slot))
+            *(uintptr_t*)(slot + 0x14) = root;
+
+        DestroyTree(extra);
+        Delete(extra);
+        return tree;
+    }
+}
+
 class ExtendedLimits
 {
 public:
     ExtendedLimits()
     {
+        FusionFix::onInitEvent() += []()
+        {
+            SettingsReader reader;
+
+            using namespace EngineWaveSlots;
+
+            // [BudgetedIV]
+            auto bExtendedLimits = reader.ReadInteger("BudgetedIV", "ExtendedLimits", 1) != 0;
+
+            std::array<bool, MaxEngineSlots + 1> present{};
+            auto bytes = ReadWaveSlots(present);
+            if (bExtendedLimits)
+            {
+                for (uint32_t n = 1; n <= MaxEngineSlots; n++)
+                {
+                    if (!present[n])
+                        bytes += SlotBytes(EngineSlotSize);
+                }
+            }
+
+            // audGtaAudioEngine::InitClass, the audio heap (smaller on PCs with less than 1.5 GB of RAM): room for the slots,
+            // and some for their headers
+            uint32_t grow = bytes > StockWaveSlotBytes ? ((bytes - StockWaveSlotBytes) + 0x1FFFF) & ~0xFFFFu : 0;
+            auto pattern = hook::pattern("BE 00 00 E0 07 E8");
+            injector::WriteMemory<uint32_t>(pattern.get_first(1), 0x7E00000 + grow, true);
+            pattern = hook::pattern("BE 00 00 30 07");
+            injector::WriteMemory<uint32_t>(pattern.get_first(1), 0x7300000 + grow, true);
+
+            if (!bExtendedLimits)
+                return;
+
+            // audWaveSlot::InitClass, reading waveslots.xml
+            pattern = hook::pattern("FF 35 ? ? ? ? E8 ? ? ? ? 8B F8 89 7C 24 24 85 FF");
+            if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
+            {
+                LoadTree_path = (decltype(LoadTree_path))injector::MakeCALL(pattern.get_first(6), LoadWaveSlots, true).get();
+                LoadTree = (decltype(LoadTree))injector::GetBranchDestination(hook::pattern("51 56 57 6A 01 6A 00 FF 74 24 1C 8B F9 FF 74 24 1C B9 ? ? ? ? E8 ? ? ? ? 8B F0 85 F6 74 3C 56 8B CF E8").get_first(36)).as_int();
+                OpenMemoryStream = (decltype(OpenMemoryStream))hook::pattern("8B 4C 24 04 81 EC 00 02 00 00 85 C9 74 ? 8B 94 24 08 02 00 00 85 D2 74").get_first(0);
+                pattern = hook::pattern("8B CF E8 ? ? ? ? 57 E8 ? ? ? ? 8B 0D ? ? ? ? 83 C4 04 85 C9");
+            }
+            else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
+            {
+                pattern = hook::pattern("8B 15 ? ? ? ? 8B 0D ? ? ? ? 68 ? ? ? ? 52 E8 ? ? ? ? 8B F0");
+                LoadTree_path = (decltype(LoadTree_path))injector::MakeCALL(pattern.get_first(18), LoadWaveSlots, true).get();
+                LoadTree = (decltype(LoadTree))injector::GetBranchDestination(hook::pattern("51 8B 44 24 0C 56 57 6A 01 6A 00 8B F9 8B 4C 24 18 50 51 B9 ? ? ? ? E8 ? ? ? ? 8B F0 85 F6 74 3F 56 8B CF E8").get_first(38)).as_int();
+                OpenMemoryStream = (decltype(OpenMemoryStream))hook::pattern("8B 4C 24 04 81 EC 00 02 00 00 85 C9 74 ? 8B 84 24 08 02 00 00 85 C0 74").get_first(0);
+                pattern = hook::pattern("8B CE E8 ? ? ? ? 56 E8 ? ? ? ? 8B 0D ? ? ? ? 83 C4 04 3B CF");
+            }
+            DestroyTree = (decltype(DestroyTree))injector::GetBranchDestination(pattern.get_first(2)).as_int();
+            Delete = (decltype(Delete))injector::GetBranchDestination(pattern.get_first(8)).as_int();
+            CloseStream = (decltype(CloseStream))hook::pattern("56 8B F1 83 7E 14 00 75 0B 83 7E 10 00 74 05 E8").get_first(0);
+        };
+
         FusionFix::onInitEventAsync() += []()
         {
             SettingsReader reader;
@@ -579,22 +721,22 @@ public:
                     ref1 = (intptr_t)pattern.get_first(6);
     
                     pattern = hook::pattern("81 FA ? ? ? ? 0F 8D ? ? ? ? 42");
-                    if (!pattern.empty())
+                    if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
                     {
                         ref2 = (intptr_t)pattern.get_first(2);
                     }
-                    else
+                    else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
                     {
                         pattern = hook::pattern("81 3D ? ? ? ? ? ? ? ? 0F 8D ? ? ? ? 83 05");
                         ref2 = (intptr_t)pattern.get_first(6);
                     }
 
                     pattern = hook::pattern("8B 87 ? ? ? ? 25 ? ? ? ? 0B C8 89 8F");
-                    if (!pattern.empty())
+                    if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
                     {
                         auto adwCarColors = LimitAdjuster(*pattern.get_first<uintptr_t>(2), 4, 196, 23).ReplaceXrefs(0).ReplaceNumericRefs(ref1, ref2);
                     }
-                    else
+                    else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
                     {
                         pattern = hook::pattern("8B 94 36 ? ? ? ? 03 F6 33 C0");
                         auto adwCarColors = LimitAdjuster(*pattern.get_first<uintptr_t>(3), 4, 196, 23).ReplaceXrefs(0).ReplaceNumericRefs(ref1, ref2);
