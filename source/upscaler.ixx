@@ -4,6 +4,7 @@ module;
 #include <cstdarg>
 #include <cstdio>
 #include <d3d12.h>
+#include <dxgi1_4.h>
 #include <d3d9on12.h>
 #include <dxvk_interop.hpp>
 #include <upscaler_protocol.hpp>
@@ -232,6 +233,32 @@ namespace
                 vendor = identifier.VendorId;
             d3d->Release();
         }
+        return vendor;
+    }
+
+    // The vendor of the GPU at the adapter's LUID, as DXGI reports it (D3D9on12's D3D12 device): the D3D9 adapter of a
+    // layer may report another vendor than the GPU's (idea of upstream's bridge). 0 when DXGI can't tell.
+    uint32_t DxgiVendor(LUID luid)
+    {
+        uint32_t vendor = 0;
+        auto dxgi = LoadLibraryExW(L"dxgi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        using CreateFactoryFn = HRESULT(WINAPI*)(REFIID, void**);
+        auto createFactory = dxgi ? reinterpret_cast<CreateFactoryFn>(GetProcAddress(dxgi, "CreateDXGIFactory1")) : nullptr;
+        IDXGIFactory4* factory = nullptr;
+        if (createFactory && SUCCEEDED(createFactory(__uuidof(IDXGIFactory4), reinterpret_cast<void**>(&factory))) && factory)
+        {
+            IDXGIAdapter1* adapter = nullptr;
+            DXGI_ADAPTER_DESC1 desc{};
+            if (SUCCEEDED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter))) && adapter)
+            {
+                if (SUCCEEDED(adapter->GetDesc1(&desc)))
+                    vendor = desc.VendorId;
+                adapter->Release();
+            }
+            factory->Release();
+        }
+        if (dxgi)
+            FreeLibrary(dxgi);
         return vendor;
     }
 
@@ -1018,7 +1045,9 @@ namespace
 
             device9 = realDevice;
             luid = device->GetAdapterLuid();
-            vendorId = AdapterVendor(realDevice);
+            vendorId = DxgiVendor(luid);
+            if (!vendorId)
+                vendorId = AdapterVendor(realDevice);
 
             D3D12_COMMAND_QUEUE_DESC queueDesc{};
             queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -1465,11 +1494,14 @@ namespace
     uint32_t configuredPreset = 0;
     uint32_t configuredFlags = 0;
     bool configureFailed = false;
-    // A request the helper did not answer in time, the helper still running: configured again once this tick count is
-    // reached, a few times, rather than left to temporal AA until the mode or the size changes. The new configuration
-    // also brings new fences, which a late signal of the helper can't take back down past the one signalled from the CPU.
+    // A failed frame with the helper still running (no answer in time, a failed configuration, import, submission or
+    // answer): temporal AA takes those frames, and the upscaler is configured again once this tick count is reached, up
+    // to five times in a row, rather than left to temporal AA until the mode or the size changes (idea of upstream's
+    // bridge). A frame that works again, or another mode or size, starts the count anew. The new configuration also
+    // brings new fences, which a late signal of the helper can't take back down past the one signalled from the CPU.
     uint64_t retryConfigureAt = 0;
     uint32_t configureRetries = 0;
+    uint64_t retrySettings = 0;     // what the count is for: a hash of the backend, sizes, preset and flags
     // Wine without the game's semaphores: the helper answers once its GPU work is done, which it waits up to 2 s for
     constexpr DWORD CpuSyncTimeout = 2500;
     uint64_t fenceValue = 0;
@@ -1605,16 +1637,29 @@ namespace
         startedAt = GetTickCount64();
     }
 
-    // No answer in time from a helper that still runs
-    void ScheduleRetry()
+    // A failed frame with the helper still running: temporal AA until the configuration is tried again
+    void ScheduleRetry(const char* reason)
     {
         configureFailed = true;
         if (configureRetries < 5)
         {
             ++configureRetries;
             retryConfigureAt = GetTickCount64() + 2000;
-            Log("Configured again in 2 s (%u of 5)", configureRetries);
+            Log("%s: temporal AA meanwhile, configured again in 2 s (%u of 5)", reason, configureRetries);
         }
+        else if (configureRetries == 5)
+        {
+            ++configureRetries;
+            Log("%s: 5 attempts in a row failed, temporal AA until the mode or the size changes", reason);
+        }
+    }
+
+    // A frame upscaled: the next failure starts the count anew
+    void Succeeded()
+    {
+        if (configureRetries)
+            Log("Working again after %u failed attempt%s", configureRetries, configureRetries == 1 ? "" : "s");
+        configureRetries = 0;
     }
 
     // The request posted last without waiting is answered before anything else is written. The answer came long
@@ -1646,7 +1691,7 @@ namespace
         }
         if (answer == HelperProcess::Answer::None)
         {
-            ScheduleRetry();
+            ScheduleRetry("No answer in time");
             return false;
         }
         // A failed Generate leaves the upscaler working, a failed Hide too
@@ -1657,7 +1702,7 @@ namespace
         else if (pendingCommand == Protocol::Command::Present)
             presentFailed = true;
         else
-            configureFailed = true;
+            ScheduleRetry("The helper failed the frame");
         return true;
     }
 
@@ -1830,6 +1875,17 @@ export namespace Upscaler
                 (frame.AmdPacing && (flags & Protocol::ConfigureFlags::FrameGeneration) ? Protocol::ConfigureFlags::AmdPacing : 0u);
         auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
         auto outputHeight = frame.OutputHeight ? frame.OutputHeight : frame.Height;
+        // Another mode, size or set of options starts the count of failed attempts anew
+        uint64_t settings = 1469598103934665603ull;
+        for (uint64_t v : { uint64_t(backendId), uint64_t(frame.Width), uint64_t(frame.Height), uint64_t(outputWidth),
+                            uint64_t(outputHeight), uint64_t(frame.DLSSPreset), uint64_t(flags) })
+            settings = (settings ^ v) * 1099511628211ull;
+        if (settings != retrySettings)
+        {
+            retrySettings = settings;
+            configureRetries = 0;
+            retryConfigureAt = 0;
+        }
         if (retryConfigureAt && GetTickCount64() >= retryConfigureAt)
         {
             retryConfigureAt = 0;
@@ -1886,6 +1942,8 @@ export namespace Upscaler
                     GetTickCount64() - configureStart, exited ? ", the helper exited" : "", shared.Message);
                 if (exited)
                     Lost();
+                else
+                    ScheduleRetry("The configuration failed");
                 return false;
             }
             bridge->gameFence = (shared.Flags & Protocol::ConfigureFlags::GameFence) != 0;
@@ -1905,6 +1963,7 @@ export namespace Upscaler
             if (!imported)
             {
                 Log("Configure %ux%u -> %ux%u: the shared resources could not be imported", frame.Width, frame.Height, outputWidth, outputHeight);
+                ScheduleRetry("The import failed");
                 return false;
             }
             if (shared.Flags & Protocol::ConfigureFlags::HelperPresent)
@@ -1920,7 +1979,7 @@ export namespace Upscaler
         }
         else if (configureFailed)
         {
-            // A failed configuration is not retried every frame, only when something changes
+            // Not every frame: when the retry is due (ScheduleRetry) or something changes
             return false;
         }
 
@@ -1930,11 +1989,8 @@ export namespace Upscaler
         Textures inputs{ frame.Color, frame.Depth, frame.Motion, frame.Reactive };
         if (!bridge->SubmitInputs(inputs, inputValue))
         {
-            // Nothing was submitted, the helper was not asked for this frame. Retried when the mode or size changes.
-            static uint32_t reported = 0;
-            if (Report(reported))
-                Log("The inputs could not be submitted");
-            configureFailed = true;
+            // Nothing was submitted, the helper was not asked for this frame
+            ScheduleRetry("The inputs could not be submitted");
             return false;
         }
 
@@ -1996,10 +2052,11 @@ export namespace Upscaler
             if (exited)
                 Lost();
             else
-                ScheduleRetry();
+                ScheduleRetry("Evaluate got no answer");
             return false;
         }
 
+        Succeeded();
         prepare();
         return bridge->SubmitOutput(frame.Output, Protocol::Texture::Output, outputValue, true);
     }
