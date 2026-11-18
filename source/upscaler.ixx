@@ -1458,8 +1458,8 @@ namespace
     std::atomic<uint32_t> generation = 0;
 
     uint32_t configuredBackend = 0;
-    uint32_t configuredWidth = 0;
-    uint32_t configuredHeight = 0;
+    uint32_t configuredMaxWidth = 0;
+    uint32_t configuredMaxHeight = 0;
     uint32_t configuredOutputWidth = 0;
     uint32_t configuredOutputHeight = 0;
     uint32_t configuredPreset = 0;
@@ -1638,6 +1638,11 @@ export namespace Upscaler
         uint32_t Height = 0;
         uint32_t OutputWidth = 0;     // size of Output, 0 for the render size
         uint32_t OutputHeight = 0;
+        // Dynamic resolution (FSR): the inputs are shared at MaxWidth x MaxHeight and this frame renders at
+        // Width x Height (no larger), the helper's context kept across sizes. 0 max = the render size.
+        bool DynamicResolution = false;
+        uint32_t MaxWidth = 0;
+        uint32_t MaxHeight = 0;
         float JitterX = 0.0f;
         float JitterY = 0.0f;
         float CameraNear = 0.1f;
@@ -1763,6 +1768,9 @@ export namespace Upscaler
         auto flags = frame.Reactive ? Protocol::ConfigureFlags::ReactiveMask : 0u;
         if (bridge->wine)
             flags |= Protocol::ConfigureFlags::Wine;
+        // Dynamic resolution is FSR's: the inputs are shared at the max size, the render size varies per frame
+        if (frame.DynamicResolution && backend == Backend::FSR)
+            flags |= Protocol::ConfigureFlags::DynamicResolution;
         // Without HDR the frames are the 8-bit back buffer's: 8-bit textures halve what the frame generation's copies move
         if (frame.FrameGeneration && frameGenerationAvailable)
             flags |= Protocol::ConfigureFlags::FrameGeneration |
@@ -1774,12 +1782,16 @@ export namespace Upscaler
                 (frame.AmdPacing && (flags & Protocol::ConfigureFlags::FrameGeneration) ? Protocol::ConfigureFlags::AmdPacing : 0u);
         auto outputWidth = frame.OutputWidth ? frame.OutputWidth : frame.Width;
         auto outputHeight = frame.OutputHeight ? frame.OutputHeight : frame.Height;
+        // The size the shared inputs are made at: the render size, or the largest one with dynamic resolution. Only a
+        // change of it (or the backend, output, preset, flags) configures again; the render size itself varies per frame.
+        auto maxWidth = frame.DynamicResolution && frame.MaxWidth >= frame.Width ? frame.MaxWidth : frame.Width;
+        auto maxHeight = frame.DynamicResolution && frame.MaxHeight >= frame.Height ? frame.MaxHeight : frame.Height;
         if (retryConfigureAt && GetTickCount64() >= retryConfigureAt)
         {
             retryConfigureAt = 0;
             configuredBackend = 0;
         }
-        bool reconfigure = configuredBackend != backendId || configuredWidth != frame.Width || configuredHeight != frame.Height ||
+        bool reconfigure = configuredBackend != backendId || configuredMaxWidth != maxWidth || configuredMaxHeight != maxHeight ||
             configuredOutputWidth != outputWidth || configuredOutputHeight != outputHeight ||
             configuredPreset != frame.DLSSPreset || configuredFlags != flags;
         if (reconfigure)
@@ -1793,8 +1805,8 @@ export namespace Upscaler
             presentFailed = false;
             presentedValue = 0;
             configuredBackend = backendId;
-            configuredWidth = frame.Width;
-            configuredHeight = frame.Height;
+            configuredMaxWidth = maxWidth;
+            configuredMaxHeight = maxHeight;
             configuredOutputWidth = outputWidth;
             configuredOutputHeight = outputHeight;
             configuredPreset = frame.DLSSPreset;
@@ -1805,6 +1817,8 @@ export namespace Upscaler
             shared.ConfigureBackend = static_cast<Protocol::Backend>(backendId);
             shared.Width = frame.Width;
             shared.Height = frame.Height;
+            shared.MaxWidth = maxWidth;
+            shared.MaxHeight = maxHeight;
             shared.OutputWidth = outputWidth;
             shared.OutputHeight = outputHeight;
             shared.DLSSPreset = frame.DLSSPreset;
@@ -1873,6 +1887,8 @@ export namespace Upscaler
         auto& shared = *helper.shared;
         shared.WaitValue = inputValue;
         shared.SignalValue = outputValue;
+        shared.RenderWidth = frame.Width;
+        shared.RenderHeight = frame.Height;
         shared.JitterX = frame.JitterX;
         shared.JitterY = frame.JitterY;
         shared.MotionScaleX = static_cast<float>(frame.Width);

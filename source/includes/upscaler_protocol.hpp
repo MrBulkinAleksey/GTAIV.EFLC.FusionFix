@@ -40,7 +40,7 @@
 
 namespace UpscalerProtocol
 {
-    constexpr uint32_t Version = 17;
+    constexpr uint32_t Version = 18;
     constexpr uint32_t PathLength = 520;
 
     constexpr const wchar_t* ArgumentName = L"--upscaler";
@@ -70,7 +70,8 @@ namespace UpscalerProtocol
         Failed,
     };
 
-    // Shared textures, the inputs at the render size (Width x Height), the output at OutputWidth x OutputHeight:
+    // Shared textures, the inputs at the render size (Width x Height, or MaxWidth x MaxHeight with dynamic resolution,
+    // of which each frame uses the top-left RenderWidth x RenderHeight), the output at OutputWidth x OutputHeight:
     // Color     DXGI_FORMAT_R16G16B16A16_FLOAT  HDR scene
     // Depth     DXGI_FORMAT_R32_FLOAT           standard [0, 1] depth
     // Motion    DXGI_FORMAT_R16G16_FLOAT        previous - current position in texture coordinates, no jitter
@@ -112,6 +113,7 @@ namespace UpscalerProtocol
         constexpr uint32_t AsyncGeneration = 1 << 6;  // Generate runs on a compute queue of the helper; cleared if it has none
         constexpr uint32_t HelperPresent = 1 << 7;    // the helper presents the frames, with the frame generation too; cleared if it can't
         constexpr uint32_t AmdPacing = 1 << 8;        // with HelperPresent and the frame generation, AMD's swap chain generates and paces the frames; cleared if it can't
+        constexpr uint32_t DynamicResolution = 1 << 9; // FSR: the inputs are made at MaxWidth x MaxHeight and the render size varies per frame (RenderWidth x RenderHeight), the context kept; cleared for DLSS
     }
 
 #pragma pack(push, 8)
@@ -147,6 +149,14 @@ namespace UpscalerProtocol
         uint32_t OutputWidth;         // upscaled size, Width x Height or larger
         uint32_t OutputHeight;
         uint32_t Reserved;
+        // Dynamic resolution (ConfigureFlags::DynamicResolution, FSR): the shared inputs and the upscaler are made at
+        // MaxWidth x MaxHeight, and each frame is rendered at RenderWidth x RenderHeight (no larger), which Evaluate
+        // carries and the upscaler reads as the top-left part of the inputs. Without the flag the render size is
+        // Width x Height and these four are ignored.
+        uint32_t MaxWidth;
+        uint32_t MaxHeight;
+        uint32_t RenderWidth;         // Evaluate: this frame's render size
+        uint32_t RenderHeight;
 
         // Evaluate
         uint64_t WaitValue;           // signalled by the game when the inputs are ready
@@ -201,7 +211,7 @@ namespace UpscalerProtocol
     static_assert(sizeof(wchar_t) == 2);
     static_assert(offsetof(Shared, WaitValue) % 8 == 0);
     static_assert(offsetof(Shared, TextureHandles) % 8 == 0);
-    static_assert(sizeof(Shared) == 4024, "The layout must be identical in the x86 and x64 builds");
+    static_assert(sizeof(Shared) == 4040, "The layout must be identical in the x86 and x64 builds");
 
     inline const wchar_t* MappingSuffix = L".Mapping";
     inline const wchar_t* RequestSuffix = L".Request";

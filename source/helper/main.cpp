@@ -920,7 +920,7 @@ namespace
             return true;
         }
 
-        bool Create(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight)
+        bool Create(uint32_t width, uint32_t height, uint32_t outputWidth, uint32_t outputHeight, bool dynamic)
         {
             Release();
 
@@ -932,6 +932,10 @@ namespace
             create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
             create.header.pNext = &backend.header;
             create.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+            // Dynamic resolution: the context is made for the largest render size and each dispatch reads the
+            // top-left renderSize part of the inputs, so a smaller frame needs no new context (no history reset)
+            if (dynamic)
+                create.flags |= FFX_UPSCALE_ENABLE_DYNAMIC_RESOLUTION;
             create.maxRenderSize = { width, height };
             create.maxUpscaleSize = { outputWidth, outputHeight };
 
@@ -1873,6 +1877,11 @@ namespace
         uint32_t outputWidth = 0;
         uint32_t outputHeight = 0;
         uint32_t flags = 0;
+        // Dynamic resolution: the inputs and the contexts are made at maxWidth x maxHeight, each frame renders at
+        // no more than that (Evaluate carries the size). Without the flag maxWidth == width.
+        uint32_t maxWidth = 0;
+        uint32_t maxHeight = 0;
+        bool dynamicResolution = false;
 
         bool Duplicate(HANDLE source, uint64_t& target)
         {
@@ -1940,19 +1949,29 @@ namespace
             flags = shared.Flags;
             outputWidth = shared.OutputWidth ? shared.OutputWidth : width;
             outputHeight = shared.OutputHeight ? shared.OutputHeight : height;
-            Log("Configure %s at %ux%u -> %ux%u%s", shared.ConfigureBackend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height,
-                outputWidth, outputHeight, (flags & Protocol::ConfigureFlags::Wine) ? ", Wine" : "");
-            if (width == 0 || height == 0 || outputWidth > 16384 || outputHeight > 16384 || outputWidth < width || outputHeight < height)
+            // Dynamic resolution is FSR's: the inputs and the contexts are made for the largest render size and each
+            // frame reads its top-left part. DLSS is created for one render size, so the flag is cleared for it.
+            dynamicResolution = (flags & Protocol::ConfigureFlags::DynamicResolution) != 0 && shared.ConfigureBackend == Protocol::Backend::FSR;
+            if (!dynamicResolution)
+                flags &= ~Protocol::ConfigureFlags::DynamicResolution;
+            maxWidth = dynamicResolution && shared.MaxWidth >= width ? shared.MaxWidth : width;
+            maxHeight = dynamicResolution && shared.MaxHeight >= height ? shared.MaxHeight : height;
+            shared.Flags = flags;
+            Log("Configure %s at %ux%u -> %ux%u%s%s", shared.ConfigureBackend == Protocol::Backend::DLSS ? "DLSS" : "FSR", width, height,
+                outputWidth, outputHeight, (flags & Protocol::ConfigureFlags::Wine) ? ", Wine" : "",
+                dynamicResolution ? ", dynamic resolution" : "");
+            if (width == 0 || height == 0 || outputWidth > 16384 || outputHeight > 16384 || outputWidth < maxWidth || outputHeight < maxHeight ||
+                maxWidth > 16384 || maxHeight > 16384)
                 return false;
             device.wine = (flags & Protocol::ConfigureFlags::Wine) != 0;
             OpenGameFence();
             device.cpuSync = device.wine && !(flags & Protocol::ConfigureFlags::GameFence);
 
             using T = Protocol::Texture;
-            if (!device.CreateTexture(T::Color, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, false) ||
-                !device.CreateTexture(T::Depth, width, height, DXGI_FORMAT_R32_FLOAT, false) ||
-                !device.CreateTexture(T::Motion, width, height, DXGI_FORMAT_R16G16_FLOAT, false) ||
-                !device.CreateTexture(T::Reactive, width, height, DXGI_FORMAT_R16_FLOAT, false) ||
+            if (!device.CreateTexture(T::Color, maxWidth, maxHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, false) ||
+                !device.CreateTexture(T::Depth, maxWidth, maxHeight, DXGI_FORMAT_R32_FLOAT, false) ||
+                !device.CreateTexture(T::Motion, maxWidth, maxHeight, DXGI_FORMAT_R16G16_FLOAT, false) ||
+                !device.CreateTexture(T::Reactive, maxWidth, maxHeight, DXGI_FORMAT_R16_FLOAT, false) ||
                 !device.CreateTexture(T::Output, outputWidth, outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, true) ||
                 (!device.wine && !device.CreateSharedFences()))
             {
@@ -1969,7 +1988,7 @@ namespace
             }
             else if (shared.ConfigureBackend == Protocol::Backend::FSR && fsr.available)
             {
-                created = fsr.Create(width, height, outputWidth, outputHeight);
+                created = fsr.Create(maxWidth, maxHeight, outputWidth, outputHeight, dynamicResolution);
             }
 
             if (!created)
@@ -1996,7 +2015,7 @@ namespace
                     shared.Flags = flags;
                 }
                 auto format = eightBit ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R16G16B16A16_FLOAT;
-                bool generation = fsr.CreateFrameGeneration(width, height, outputWidth, outputHeight, hdr, eightBit) &&
+                bool generation = fsr.CreateFrameGeneration(maxWidth, maxHeight, outputWidth, outputHeight, hdr, eightBit) &&
                     device.CreateTexture(T::Present, outputWidth, outputHeight, format, false) &&
                     device.CreateTexture(T::Generated, outputWidth, outputHeight, format, true) &&
                     device.CreateTexture(T::HudLess, outputWidth, outputHeight, format, false);
@@ -2097,8 +2116,16 @@ namespace
                 return false;
 
             FrameParams frame;
+            // Dynamic resolution: this frame's render size, the top-left part of the max-size inputs. The configured
+            // size otherwise, and a size out of range falls back to it.
             frame.width = width;
             frame.height = height;
+            if (dynamicResolution && shared.RenderWidth && shared.RenderHeight &&
+                shared.RenderWidth <= maxWidth && shared.RenderHeight <= maxHeight)
+            {
+                frame.width = shared.RenderWidth;
+                frame.height = shared.RenderHeight;
+            }
             frame.outputWidth = outputWidth;
             frame.outputHeight = outputHeight;
             frame.jitterX = shared.JitterX;
