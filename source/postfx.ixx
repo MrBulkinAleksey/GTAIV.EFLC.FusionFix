@@ -1401,7 +1401,13 @@ private:
                             TemporalAA::KeepStipple(PostFxResources.textureRead);
                     }
 
-                    if (PostFxResources.useStippleFilter && PostFxResources.stipple_filter_ps && !TemporalAA::IsStippleFiltered())
+                    // Definition On limits the filter to stippled pixels (G-buffer mask), which a temporal resolve has
+                    // already integrated; the jittered mask would only bring flicker back. Definition Off softens
+                    // the whole image without the mask, which stays on after the resolve. IsStippleFiltered: the
+                    // pre-resolve filter already went into the resolve, a second pass would filter twice.
+                    static auto definition = FusionFixSettings.GetRef("PREF_DEFINITION");
+                    if (PostFxResources.useStippleFilter && PostFxResources.stipple_filter_ps && !TemporalAA::IsStippleFiltered() &&
+                        (!TemporalAA::IsSceneResolved() || !definition->get()))
                     {
                         ProfilerScope timed(pDevice, kProfPostStipple);
                         pDevice->SetPixelShader(PostFxResources.stipple_filter_ps);

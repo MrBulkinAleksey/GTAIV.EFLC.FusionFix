@@ -2096,7 +2096,8 @@ private:
             setFontDropShadow = reinterpret_cast<decltype(setFontDropShadow)>(branch(info.get_first<uint8_t>(0x7E)));
             getInfoLabelWidth = reinterpret_cast<decltype(getInfoLabelWidth)>(branch(infoWidth.get_first<uint8_t>(1)));
             infoTextRow = safetyhook::create_mid(infoRow.get_first(), InfoTextRow);
-            infoTextTop = safetyhook::create_mid(info.get_first(0x34), [](SafetyHookContext& regs)
+            // The row's info text: its height (the info position plus a margin) is in xmm0
+            infoTextTop = safetyhook::create_mid(hook::pattern("F3 0F 10 40 04 F3 0F 58 05 ? ? ? ? 83 C4 0C 8D 44 24 ? 6A 3B 50").get_first(13), [](SafetyHookContext& regs)
             {
                 if (IsGraphicsList() && rowHeight)
                     regs.xmm0.f32[0] += *rowHeight;
@@ -2580,7 +2581,9 @@ public:
             { "PREF_CAR_MIRRORS",         "MISC.CarMirrors" },
             { "PREF_JUMPRAGDOLL",            "MISC.PlayerJumpRagdollControl" },
             { "PREF_LADDERCAMTILT",          "MISC.LadderCameraTilt" },
+            { "PREF_GUIDEDLADDERCAMERA",     "MISC.GuidedLadderCamera" },
             { "PREF_AUTOCENTERCAMERA",       "MISC.AutoCenterCamera" },
+            { "PREF_POPULATIONVARIETY",      "MISC.PopulationVariety" },
         };
 
         for (auto& [name, id] : arr)
@@ -2591,7 +2594,7 @@ public:
         // build FusionFixHub installs or the player's own), DirectX 12 Fusion Fix's own D3D9On12 driver next to the exe (FusionFixHub
         // installs it), never Windows' slow one. When the API didn't start, the next start falls back to DirectX 9 and
         // sets this back (the crash guard of graphics_api.h).
-        FusionFixSettings.SetAvailability("PREF_GRAPHICSAPI", [](int32_t value) -> bool
+        SetAvailability("PREF_GRAPHICSAPI", [](int32_t value) -> bool
         {
             return FusionFixGraphicsApi::Available(static_cast<FusionFixGraphicsApi::Api>(std::clamp(value, 0, 2)));
         });
@@ -2639,8 +2642,8 @@ public:
         {
             AddSetting(screen, "MAIN.WindowMode", before);
             auto advanced = AddPage(screen, "@ff.page.advanced", before);
-            for (auto id : { "MAIN.SkipIntro", "MAIN.SkipMenu", "MAIN.BlockOnLostFocus", "MISC.TimedEvents", "FRAMELIMIT.DisplayFpsCounter",
-                             "MISC.ExtraInfo" })
+            for (auto id : { "MAIN.SkipIntro", "MAIN.SkipMenu", "MAIN.BlockOnLostFocus", "MISC.TimedEvents", "MISC.PopulationVariety",
+                             "FRAMELIMIT.DisplayFpsCounter", "MISC.ExtraInfo" })
                 AddSetting(advanced, id);
             pluginsBefore[static_cast<int32_t>(screen)] = before;
             if (auto own = AddCategory(PluginsPage(screen), MenuKey(ownPlugin, ownPlugin.file.description.name)); own != MenuScreen::Invalid)
@@ -2707,7 +2710,7 @@ public:
         {
             AddSetting(screen, "MISC.FieldOfView", "MO_SUB");
             auto camera = AddPage(screen, "@ff.page.camera", "MO_DEF", true);
-            for (auto id : { "MAIN.CameraShake", "MISC.CenteredVehCam", "MISC.CenteredFootCam", "MISC.StuntJumpCamera", "MISC.ActionCamera", "MISC.LadderCameraTilt" }) AddSetting(camera, id);
+            for (auto id : { "MAIN.CameraShake", "MISC.CenteredVehCam", "MISC.CenteredFootCam", "MISC.StuntJumpCamera", "MISC.ActionCamera", "MISC.LadderCameraTilt", "MISC.GuidedLadderCamera" }) AddSetting(camera, id);
             auto advanced = AddPage(screen, "@ff.page.advanced", "MO_DEF", true);
             for (auto id : { "MISC.ConsoleGamma", "MISC.ToneMapping", "MISC.ScreenFilter", "MISC.ConsoleAutoExposure", "MISC.TreeLighting", "MISC.TreeAlpha" }) AddSetting(advanced, id);
             // Grass and procedural props go further by a quarter of the game's distance a step (procedural.ixx)

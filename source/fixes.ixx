@@ -291,23 +291,6 @@ namespace CWater
     }
 }
 
-namespace CTaskManager
-{
-    uintptr_t (__thiscall* FindActiveTaskByType)(uintptr_t taskManager, int type);
-
-    void Init()
-    {
-        auto pattern = hook::pattern("68 19 04 00 00 83 C1 44 E8 ? ? ? ? 80");
-        if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
-            FindActiveTaskByType = (decltype(FindActiveTaskByType))injector::GetBranchDestination(pattern.get_first(8)).as_int();
-        else // 1.0.7.0, 1.0.8.0, 1.1.2.0, 1.1.3.0
-        {
-            pattern = hook::pattern("55 56 57 33 FF 8B E9 33 C0 8D A4 24 00 00 00 00 39 7C 85 00");
-            FindActiveTaskByType = (decltype(FindActiveTaskByType))pattern.get_first(0);
-        }
-    }
-}
-
 // Mounting a ladder from the top moves the player with the animation's mover. The physics instance and its bounds
 // stay at the old place until the next physics update, and the player isn't drawn for a moment: update them right away.
 namespace LadderTopMount
@@ -548,19 +531,7 @@ namespace FixtureLights
     std::vector<Fixture> fixtures; // Sorted by entity
     uint32_t lastSearch = 0;
 
-    rage::fwPool<void*>** pDummyObjectPool = nullptr;
-    rage::fwPool<void*>** pBuildingPool = nullptr;
-    uintptr_t* pModelInfos = nullptr;
     float* pCameraPosition = nullptr;
-
-    int32_t(__fastcall* CountLightAttrs)(uintptr_t modelInfo, void* edx) = nullptr;
-    bool(__cdecl* IsExteriorHidden)() = nullptr;
-    void(__fastcall* ProcessLights)(uintptr_t entity, void* edx, float fade) = nullptr;
-
-    uintptr_t ModelInfo(uintptr_t entity)
-    {
-        return pModelInfos[*(int16_t*)(entity + 0x2E)];
-    }
 
     bool IsNear(uintptr_t entity)
     {
@@ -574,15 +545,15 @@ namespace FixtureLights
     void Search()
     {
         fixtures.clear();
-        for (auto pool : { CObject::GetObjectsPool(), *pDummyObjectPool, *pBuildingPool })
+        for (auto pool : { CObject::GetObjectsPool(), *EntityLights::pDummyPool, *EntityLights::pBuildingPool })
         {
             for (int32_t i = 0; pool && i < pool->GetSize(); i++)
             {
                 auto entity = (uintptr_t)pool->GetSlot(i);
                 if (entity && IsNear(entity))
                 {
-                    auto modelInfo = ModelInfo(entity);
-                    if (modelInfo && CountLightAttrs(modelInfo, nullptr) > 0)
+                    auto modelInfo = EntityLights::ModelInfo(entity);
+                    if (modelInfo && EntityLights::CBaseModelInfo__GetNum2dEffects((void*)modelInfo) > 0)
                         fixtures.push_back({ pool, i, entity, false });
                 }
             }
@@ -601,12 +572,9 @@ namespace FixtureLights
     // through their rooms), and the camera's room shows exterior lights
     void Process(uintptr_t entity)
     {
-        auto flags = *(uint32_t*)(entity + 0x24);
-        if (!(*(uint32_t*)(entity + 0x28) & 0x10) || !(flags & 0x800000) || (flags & 0x8000000) || IsExteriorHidden())
-            return;
-
-        auto fade = std::min(*(uint8_t*)(entity + 0x63) / 255.0f, float(*(uint32_t*)(ModelInfo(entity) + 0x5C)) * 999.99994f);
-        ProcessLights(entity, nullptr, fade);
+        float fade;
+        if (EntityLights::GetLightFade((uint8_t*)entity, false, fade))
+            EntityLights::CEntity__ProcessLightsForEntity((void*)entity, fade);
     }
 
     void ProcessSkipped()
@@ -623,6 +591,34 @@ namespace FixtureLights
             lastSearch = *CTimer::m_frameCount;
             Search();
         }
+    }
+}
+
+// The audio engine's submixes each have a lock. The mixing thread takes a submix's lock and then those of its inputs;
+// connecting an input takes the input's lock and then the lock of the submix it goes into. When an effect chain is
+// made while the mixing thread is at the same two submixes, each thread holds the lock the other waits for: the game
+// stays on its loading screen forever (seen at start, in the audio engine's init). Both paths take one common lock
+// first, so one of them finishes before the other starts.
+namespace AudioSubmixLocks
+{
+    CRITICAL_SECTION Lock;
+
+    SafetyHookInline shConnect = {};
+    int __fastcall Connect(void* submix, void* edx, void* input)
+    {
+        EnterCriticalSection(&Lock);
+        auto ret = shConnect.unsafe_fastcall<int>(submix, edx, input);
+        LeaveCriticalSection(&Lock);
+        return ret;
+    }
+
+    SafetyHookInline shMix = {};
+    int __fastcall Mix(void* submix, void* edx, void* out, int32_t samples, void* buffer)
+    {
+        EnterCriticalSection(&Lock);
+        auto ret = shMix.unsafe_fastcall<int>(submix, edx, out, samples, buffer);
+        LeaveCriticalSection(&Lock);
+        return ret;
     }
 }
 
@@ -713,6 +709,18 @@ public:
                     regs.xmm0.f32[0] = Range;
             });
             FusionLog::Write("Fixes", "FloodlightRange", "CJ_IND_LIGHT_1 point lights reach 32 m, hook at %p\n", pattern.get_first(5));
+        };
+
+        FusionFix::onInitEvent() += []()
+        {
+            auto pattern = hook::pattern("83 EC 08 53 55 8B D9 56 57 8D 83 5C 04 00 00 50 8D 4C 24 14 E8 ? ? ? ? 83 BB 48 04 00 00 08");
+            if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
+            {
+                InitializeCriticalSection(&AudioSubmixLocks::Lock);
+                AudioSubmixLocks::shConnect = safetyhook::create_inline(pattern.get_first(0), AudioSubmixLocks::Connect);
+                pattern = hook::pattern("83 EC 08 53 8B 5C 24 14 55 56 8B F1 57 80 BE 59 04 00 00 00");
+                AudioSubmixLocks::shMix = safetyhook::create_inline(pattern.get_first(0), AudioSubmixLocks::Mix);
+            }
         };
 
         FusionFix::onInitEventAsync() += []()
@@ -922,7 +930,6 @@ public:
                 }
             }
 
-            CTaskManager::Init();
             LadderTopMount::Init();
 
             // Camera centering delay/turn speed
@@ -1651,22 +1658,18 @@ public:
                 auto pattern = hook::pattern("55 8B EC 83 E4 F0 81 EC 08 01 00 00 56 8B F1 57 8B 4E 24 F7 C1 00 01 00 00 0F 85");
                 if (!pattern.empty()) // 1.2.0.32, 1.2.0.43, 1.2.0.59
                 {
-                    FixtureLights::ProcessLights = pattern.get_first<void(__fastcall)(uintptr_t, void*, float)>(0);
                     FixtureLights::pCameraPosition = *pattern.get_first<float*>(0x75);
-                    FixtureLights::CountLightAttrs = hook::get_pattern<int32_t(__fastcall)(uintptr_t, void*)>("8B 41 08 85 C0 74 0E 0F B7 80 ? ? 00 00 0F B6 49 5A 03 C1 C3");
-                    FixtureLights::IsExteriorHidden = hook::get_pattern<bool(__cdecl)()>("56 8B 35 ? ? ? ? 57 8B 3D ? ? ? ? 3B 3D ? ? ? ? 75 10 3B 35");
-                    FixtureLights::pDummyObjectPool = *hook::pattern("68 B0 36 00 00 8B C8 E8 ? ? ? ? A3").get_first<rage::fwPool<void*>**>(13);
-                    FixtureLights::pBuildingPool = *hook::pattern("68 00 7D 00 00 8B C8 E8 ? ? ? ? A3").get_first<rage::fwPool<void*>**>(13);
-                    FixtureLights::pModelInfos = *hook::get_pattern<uintptr_t*>("0F BF 46 2E 8B 04 85", 7);
 
                     static auto ProcessLightsHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& regs)
                     {
-                        FixtureLights::NoteProcessed(regs.ecx);
+                        if (!EntityLights::gatheringShadows)
+                            FixtureLights::NoteProcessed(regs.ecx);
                     });
 
-                    // The end of the render list's pre-render pass
-                    pattern = hook::pattern("8B 15 ? ? ? ? 53 8B 0C 95 ? ? ? ? 39 0D ? ? ? ? 56 0F 4F 0D");
-                    static auto PreRenderEndHook = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext&)
+                    // CVisualEffects::UpdateAfterPreRender: submit skipped fixtures before Coronas::Push publishes
+                    // and clears the list, so their coronas do not carry into the next frame.
+                    pattern = hook::pattern("84 C0 74 0D F3 0F 10 05 ? ? ? ? F3 0F 11 04 24 E8 ? ? ? ? 83 3D");
+                    static auto BeforeCoronaPushHook = safetyhook::create_mid(pattern.get_first(17), [](SafetyHookContext&)
                     {
                         FixtureLights::ProcessSkipped();
                     });

@@ -141,6 +141,7 @@ Also available for [Max Payne 3](https://github.com/ThirteenAG/MaxPayne3.FusionF
 - **Stunt Jump Camera**, can be disabled to skip the cinematic camera and slow motion during unique stunt jumps
 - **Fence Climb & Car Jack Camera**, can be disabled to skip the cinematic camera when climbing fences and stealing cars
 - **Ladder Camera Tilt**, can be disabled to keep the camera from tilting down while climbing ladders
+- **Guided Ladder Camera**, the camera follows the player's height on ladders, limits how far it orbits sideways and keeps the player framed around obstructions
 - **Automatic Camera Centering**, can be disabled to stop the controller camera from leveling itself on foot and turning behind vehicles
 - **Centered Vehicle Camera**, makes vehicle camera centered, for more options install the [original mod](https://github.com/gennariarmando/iv-centered-vehicle-cam) separately
 - **Centered On Foot Camera**, makes on foot camera centered, also for more options install the [original mod](https://github.com/gennariarmando/iv-centered-onfoot-cam)
@@ -167,6 +168,8 @@ Also available for [Max Payne 3](https://github.com/ThirteenAG/MaxPayne3.FusionF
 - [Fixed forced "definition off" setting in cutscenes, now cutscenes will respect the menu setting](https://github.com/GTAmodding/GTAIV-Issues-List/issues/5)
 - [Fixed DLC car lights in TBoGT](https://github.com/GTAmodding/GTAIV-Issues-List/issues/3)
 - [Fixed various issues related to frame rate](https://github.com/GTAmodding/GTAIV-Issues-List/issues/112)
+- Restored the console stick response and smoothing when free aiming with a controller
+- Fixed crouching and standing camera transitions speeding up at higher frame rates, including while aiming
 - Cutscene animations follow their audio smoothly at any frame rate, without trembling and without drifting out of sync
 - Fixed the game, script and screen fade timers running slow at high frame rates, which caused the infinite loading screen around some cutscenes (Off Route)
 - Fixed cops and other peds staying in cover and doing nothing at frame rates above 30
@@ -203,10 +206,12 @@ Also available for [Max Payne 3](https://github.com/ThirteenAG/MaxPayne3.FusionF
 - Added an option to apply MSAA for various reflection maps
 - Restored higher shadow render distance from old versions of the game
 - Improved cascaded shadows performance, and added an option to double their resolution
+- Fixed sun shadows appearing a frame late when turning the camera
 - Added dynamic shadows for trees
 - Restored night shadow for vehicles
 - Made night shadows resolution be adjusted by night shadows option
 - Reworked night shadows: sharper, the most visible lights get them first and keep them, and they fade with distance instead of popping in and out
+- Camera cuts and look-behind refresh world and cutscene night shadows immediately
 - Streetlights keep the shadows of buildings, trees and props from frame to frame, so every nearby streetlight casts them at almost no cost; people and vehicles are added for the nearest ones
 - Vehicles and the people in them keep their night shadows while the player's headlights cast theirs; lampposts no longer shadow their own light
 - The player's headlights cast shadows: the game never passed their shadow to the lighting, so nothing ever showed it. Their shadows are aimed along the beam, much sharper, and fade out 35 metres ahead
