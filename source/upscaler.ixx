@@ -259,8 +259,9 @@ namespace
         virtual void ReleaseImports() = 0;
         // Game textures -> shared textures, then the input fence reaches signalValue. Null inputs are skipped, a texture
         // given twice is copied from once into both. waitValue: of the present fence, the helper done with the textures
-        // before (the frame it presented); 0 for none.
-        virtual bool SubmitInputs(const Textures& inputs, uint64_t signalValue, uint64_t waitValue = 0) = 0;
+        // before (the frame it presented); 0 for none. activeW/activeH: the render size of this frame's inputs, copied
+        // into the top-left of the (possibly larger) shared textures; 0 keeps the configured size.
+        virtual bool SubmitInputs(const Textures& inputs, uint64_t signalValue, uint64_t waitValue = 0, uint32_t activeW = 0, uint32_t activeH = 0) = 0;
         // Once the output fence reaches waitValue: shared texture (Output or Generated) -> game texture. afterInputs: right after
         // SubmitInputs, with no D3D9 call in between, so the game's work has reached the queue already.
         virtual bool SubmitOutput(IDirect3DTexture9* target, Protocol::Texture index, uint64_t waitValue, bool afterInputs) = 0;
@@ -788,8 +789,15 @@ namespace
             return result == VK_SUCCESS;
         }
 
-        bool SubmitInputs(const Textures& inputs, uint64_t signalValue, uint64_t waitValue) override
+        bool SubmitInputs(const Textures& inputs, uint64_t signalValue, uint64_t waitValue, uint32_t activeW, uint32_t activeH) override
         {
+            // This frame's render size: the inputs are copied into the top-left of the shared textures, which dynamic
+            // resolution makes larger. The size of the copies and the check of the game's textures below.
+            if (activeW && activeH)
+            {
+                width = activeW;
+                height = activeH;
+            }
             // Everything the game rendered so far must reach the queue first. Before the images are asked for, too: DXVK
             // can give a texture new storage (relocation), which only its command thread knows about.
             {
@@ -1082,6 +1090,15 @@ namespace
                 TypelessFormat(a.Format) == TypelessFormat(b.Format);
         }
 
+        // A game resource of the given size and format: the inputs are checked against this frame's render size, the
+        // shared texture they copy into being possibly larger (dynamic resolution)
+        bool MatchesSize(ID3D12Resource* resource, uint32_t w, uint32_t h, DXGI_FORMAT format)
+        {
+            auto d = resource->GetDesc();
+            return d.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && d.Width == w && d.Height == h &&
+                TypelessFormat(d.Format) == TypelessFormat(format);
+        }
+
         void Copy(ID3D12GraphicsCommandList* list, ID3D12Resource* destination, ID3D12Resource* source)
         {
             D3D12_TEXTURE_COPY_LOCATION to{};
@@ -1159,8 +1176,14 @@ namespace
             return true;
         }
 
-        bool SubmitInputs(const Textures& inputs, uint64_t signalValue, uint64_t waitValue) override
+        bool SubmitInputs(const Textures& inputs, uint64_t signalValue, uint64_t waitValue, uint32_t activeW, uint32_t activeH) override
         {
+            // This frame's render size, copied into the top-left of the (possibly larger) shared textures
+            if (activeW && activeH)
+            {
+                width = activeW;
+                height = activeH;
+            }
             // D3D9on12 records into command lists of its own, which have to reach the GPU before this queue can
             // wait for them. An event query is the D3D9 way to submit them.
             {
@@ -1191,7 +1214,7 @@ namespace
                     ok = SUCCEEDED(on12->UnwrapUnderlyingResource(inputs[i], queue, IID_PPV_ARGS(&sources[i]))) && sources[i];
                     unwrapped[i] = ok;
                 }
-                ok = ok && images[i] && Matches(sources[i], images[i]);
+                ok = ok && images[i] && MatchesSize(sources[i], Width(i), Height(i), images[i]->GetDesc().Format);
             }
             Timing::Add(Upscaler::TimingPart::Images, imagesStart);
 
@@ -1848,7 +1871,7 @@ export namespace Upscaler
                 Log("The helper could not set up its presentation, the game presents");
             else if ((flags & Protocol::ConfigureFlags::AmdPacing) && !(shared.Flags & Protocol::ConfigureFlags::AmdPacing))
                 Log("AMD's frame generation swap chain could not be set up: the helper paces the frames itself");
-            if (!bridge->Import(shared, frame.Width, frame.Height, outputWidth, outputHeight))
+            if (!bridge->Import(shared, maxWidth, maxHeight, outputWidth, outputHeight))
             {
                 Log("Configure %ux%u -> %ux%u: the shared resources could not be imported", frame.Width, frame.Height, outputWidth, outputHeight);
                 return false;
@@ -1874,7 +1897,7 @@ export namespace Upscaler
         auto outputValue = ++fenceValue;
 
         Textures inputs{ frame.Color, frame.Depth, frame.Motion, frame.Reactive };
-        if (!bridge->SubmitInputs(inputs, inputValue))
+        if (!bridge->SubmitInputs(inputs, inputValue, 0, frame.Width, frame.Height))
         {
             // Nothing was submitted, the helper was not asked for this frame. Retried when the mode or size changes.
             static uint32_t reported = 0;
