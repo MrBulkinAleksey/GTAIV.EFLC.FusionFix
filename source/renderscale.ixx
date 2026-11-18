@@ -7,6 +7,7 @@ module;
 #include <cstdio>
 #include <mutex>
 #include <string_view>
+#include <vector>
 
 #include "FusionLog.hpp"
 
@@ -15,6 +16,7 @@ export module renderscale;
 import common;
 import comvars;
 import hdr;
+import inireload;
 import settings;
 import upscaler;
 import vtablepatch;
@@ -43,6 +45,10 @@ export namespace RenderScale
     // For a trace (PostFX's SSR trace sets it): every depth buffer the hooks put in the game's place and every clear
     // of a depth buffer, with the depth buffer, the bound target 0 and the clear flags (0 for a swap).
     inline void (*TraceDepth)(const char* what, IDirect3DSurface9* depth, IDirect3DSurface9* target, DWORD flags) = nullptr;
+
+    // Dynamic resolution: called on the render thread after the scene's targets were resized, to recreate the temporal
+    // resources at the new size (set by the post processing, which owns them)
+    inline void (*OnDynamicResize)(uint32_t width, uint32_t height) = nullptr;
 }
 
 namespace
@@ -57,6 +63,18 @@ namespace
     uint32_t DisplayHeight = 0;
     uint32_t RenderWidth = 0;
     uint32_t RenderHeight = 0;
+
+    // Dynamic resolution (FSR): the scene's targets are made at the quality's render size (the max) and resized to a
+    // smaller one at runtime without a device reset, the upscaler keeping its context. The max stays for the whole
+    // session; RenderWidth/RenderHeight are the size of the moment.
+    bool bDynamic = false;             // [ANTIALIASING] DynamicResolution
+    uint32_t MaxRenderWidth = 0;
+    uint32_t MaxRenderHeight = 0;
+    float fDynamicScale = 1.0f;        // of the max, [ANTIALIASING] DynamicResolutionScale (1 = the max)
+    // The targets' textures replaced by a resize, kept alive until the device reset releases them: the game may still
+    // hold one a moment after the swap, and a released one it reads would be the DD3D80 of old
+    std::vector<IDirect3DTexture9*> RetiredTextures;
+    std::vector<IDirect3DSurface9*> RetiredSurfaces;
 
     // FullScreenCopy at the screen size, and the targets FullScreenCopy had at the render size. The game
     // leaves mD3DSurface of its targets empty at times, the scene's surface is taken from its texture.
@@ -156,6 +174,9 @@ namespace
         DisplayHeight = screenHeight;
         RenderWidth = Scaled(screenWidth);
         RenderHeight = Scaled(screenHeight);
+        // The largest render size of the session: dynamic resolution only goes below it
+        MaxRenderWidth = RenderWidth;
+        MaxRenderHeight = RenderHeight;
         width = RenderWidth;
         height = RenderHeight;
         if (!bActive || std::string_view(name) == "FullScreenCopy")
@@ -446,6 +467,78 @@ namespace
 
     // ---------------------------------------------------------------------------------------------
 
+    // [ANTIALIASING] DynamicResolution gates it; DynamicResolutionScale is the fraction of the max render size the
+    // scene renders at (1 = the max). Read at startup and on Ctrl+Shift+F10; the size itself is applied between frames.
+    void ReadSettings(CIniReader& iniReader)
+    {
+        bDynamic = iniReader.ReadInteger("ANTIALIASING", "DynamicResolution", 0) != 0;
+        fDynamicScale = std::clamp(iniReader.ReadFloat("ANTIALIASING", "DynamicResolutionScale", 1.0f), 0.1f, 1.0f);
+    }
+
+    // Replaces a target's texture with one of the new size, the old retired until the reset releases it. The game reads
+    // the target through its grcRenderTarget each frame (as the FullScreenCopy swap of the post processing shows), so
+    // the new texture is picked up. A target already of the size is untouched.
+    void ResizeTarget(rage::grcRenderTargetPC* rt, uint32_t w, uint32_t h)
+    {
+        if (!rt || (rt->mWidth == w && rt->mHeight == h))
+            return;
+        auto device = RageDirect3DDevice9::GetRuntimeDevice();
+        if (!device || rage::grcDevice::IsDeviceLost())
+            return;
+        if (rt->mD3DTexture)
+        {
+            D3DSURFACE_DESC desc{};
+            rt->mD3DTexture->GetLevelDesc(0, &desc);
+            IDirect3DTexture9* tex = nullptr;
+            if (FAILED(device->CreateTexture(w, h, 1, desc.Usage, desc.Format, D3DPOOL_DEFAULT, &tex, nullptr)) || !tex)
+            {
+                LogOnce(10, "dynamic: a scene texture could not be resized");
+                return;
+            }
+            IDirect3DSurface9* surf = nullptr;
+            tex->GetSurfaceLevel(0, &surf);
+            RetiredTextures.push_back(rt->mD3DTexture);
+            rt->mD3DTexture = tex;
+            if (rt->mD3DSurface)
+                rt->mD3DSurface = surf;
+            if (surf)
+                surf->Release();    // the texture owns its level 0; the target borrows it
+            rt->mWidth = static_cast<uint16_t>(w);
+            rt->mHeight = static_cast<uint16_t>(h);
+        }
+        else if (rt->mD3DSurface)
+        {
+            D3DSURFACE_DESC desc{};
+            rt->mD3DSurface->GetDesc(&desc);
+            IDirect3DSurface9* surf = nullptr;
+            if (FAILED(device->CreateDepthStencilSurface(w, h, desc.Format, desc.MultiSampleType, desc.MultiSampleQuality, FALSE, &surf, nullptr)) || !surf)
+            {
+                LogOnce(11, "dynamic: the scene depth could not be resized");
+                return;
+            }
+            RetiredSurfaces.push_back(rt->mD3DSurface);
+            rt->mD3DSurface = surf;
+            rt->mWidth = static_cast<uint16_t>(w);
+            rt->mHeight = static_cast<uint16_t>(h);
+        }
+    }
+
+    // The scene's targets to the new render size, the temporal resources after them. Render thread, between frames.
+    void ResizeSceneTargets(uint32_t w, uint32_t h)
+    {
+        for (auto name : ScaledTargets)
+            ResizeTarget(rage::grcTextureFactoryPC::GetRTByName(name), w, h);
+        RenderWidth = w;
+        RenderHeight = h;
+        // The depth pairing derives the scene's depth again from the new sizes
+        SceneDepth = nullptr;
+        BoundDepth = {};
+        ApplyGlobalScreenSize(bInScene);
+        if (OnDynamicResize)
+            OnDynamicResize(w, h);
+        Log("dynamic: render size %ux%u (max %ux%u)", w, h, MaxRenderWidth, MaxRenderHeight);
+    }
+
     void RestoreScene()
     {
         if (SwappedRT)
@@ -468,6 +561,14 @@ namespace
             OutputSurface->Release();
         if (OutputTexture)
             OutputTexture->Release();
+        for (auto tex : RetiredTextures)
+            if (tex)
+                tex->Release();
+        RetiredTextures.clear();
+        for (auto surf : RetiredSurfaces)
+            if (surf)
+                surf->Release();
+        RetiredSurfaces.clear();
         {
             std::lock_guard lock(FullDepthMutex);
             if (FullDepth)
@@ -533,6 +634,32 @@ export namespace RenderScale
     uint32_t GetRenderHeight() { return bActive ? RenderHeight : 0; }
     uint32_t GetDisplayWidth() { return bActive ? DisplayWidth : 0; }
     uint32_t GetDisplayHeight() { return bActive ? DisplayHeight : 0; }
+
+    // Dynamic resolution: on, and the largest render size of the session (the quality's), which the upscaler's inputs
+    // are shared at while the frame renders at GetRenderWidth/Height
+    bool IsDynamic() { return bActive && bDynamic; }
+    uint32_t GetMaxRenderWidth() { return bActive ? MaxRenderWidth : 0; }
+    uint32_t GetMaxRenderHeight() { return bActive ? MaxRenderHeight : 0; }
+
+    // Render thread, between frames: the scene's targets to the dynamic render size when it changed. Only with FSR
+    // (DLSS is created for one size); without it, or turned off, the targets go back to the max.
+    void UpdateDynamic()
+    {
+        if (!bActive || bInPost || rage::grcDevice::IsDeviceLost())
+            return;
+        static auto antialiasing = FusionFixSettings.GetRef("PREF_ANTIALIASING");
+        bool fsr = antialiasing && antialiasing->get() == FusionFixSettings.AntialiasingText.eFSR &&
+            Upscaler::MayBeAvailable(Upscaler::Backend::FSR);
+        uint32_t w = MaxRenderWidth, h = MaxRenderHeight;
+        if (bDynamic && fsr)
+        {
+            w = std::max(1u, static_cast<uint32_t>(std::lround(static_cast<double>(MaxRenderWidth) * fDynamicScale)));
+            h = std::max(1u, static_cast<uint32_t>(std::lround(static_cast<double>(MaxRenderHeight) * fDynamicScale)));
+        }
+        if (w == RenderWidth && h == RenderHeight)
+            return;
+        ResizeSceneTargets(w, h);
+    }
 
     // Render thread, at the G-buffer pass of the main scene
     void BeginScene()
@@ -645,6 +772,10 @@ public:
 
         FusionFix::onInitEventAsync() += []()
         {
+            CIniReader iniReader("");
+            ReadSettings(iniReader);
+            IniReload::Add(ReadSettings);
+
             // globalScreenSize = (w, h, 1/w, 1/h) from the screen size, once a frame
             auto pattern = hook::pattern("8B 4C 24 04 F3 0F 10 05 ? ? ? ? F3 0F 10 09 0F 2E C1 9F F6 C4 44 7A 12 F3 0F 10 05 ? ? ? ? 0F 2E 41 04 9F F6 C4 44 7B ? F3 0F 11 0D");
             if (!pattern.empty())
@@ -672,6 +803,7 @@ public:
             {
                 InstallHooks();
                 EndFrame();
+                RenderScale::UpdateDynamic();
 
                 // The menu or the upscaler's availability changed the scale: once for each scale asked for
                 if (bScaleDecided)

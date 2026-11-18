@@ -1941,6 +1941,10 @@ public:
         frame.Height = static_cast<uint32_t>(HistoryHeight);
         frame.OutputWidth = RenderScale::GetDisplayWidth();
         frame.OutputHeight = RenderScale::GetDisplayHeight();
+        // Dynamic resolution: the inputs are shared at the max render size, this frame at HistoryWidth/Height
+        frame.DynamicResolution = RenderScale::IsDynamic();
+        frame.MaxWidth = RenderScale::GetMaxRenderWidth();
+        frame.MaxHeight = RenderScale::GetMaxRenderHeight();
         frame.JitterX = CurrentCamera.JitterPixels[0];
         frame.JitterY = CurrentCamera.JitterPixels[1];
         frame.CameraNear = CurrentCamera.Near;
@@ -2549,6 +2553,13 @@ export namespace TemporalAA
 
     void CreateResources(uint32_t width, uint32_t height)
     {
+        Temporal::CreateResources(width, height);
+    }
+
+    // Dynamic resolution: the motion vectors, depth and history at the new render size, between frames
+    void ResizeResources(uint32_t width, uint32_t height)
+    {
+        Temporal::ReleaseResources();
         Temporal::CreateResources(width, height);
     }
 

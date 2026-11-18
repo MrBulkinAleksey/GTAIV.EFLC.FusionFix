@@ -711,6 +711,13 @@ private:
                 SSRTrace::Line("render scale: %s %s, target %s%s", what, SSRTrace::SurfaceName(depth).c_str(), SSRTrace::SurfaceName(target).c_str(),
                                flags ? (std::string(", flags ") + std::to_string(flags)).c_str() : "");
         };
+        // Dynamic resolution: the scene's targets were resized between frames; the temporal resources follow them, and
+        // the G-buffer pointers are looked up again (the screen-space effects size themselves from the viewport)
+        RenderScale::OnDynamicResize = [](uint32_t width, uint32_t height)
+        {
+            TemporalAA::ResizeResources(width, height);
+            RefreshGBufferTargets();
+        };
 
         initialized = true;
     }
